@@ -51,6 +51,7 @@
 
 #include <bspline_opt/bspline_optimizer.h>
 #include <plan_env/grid_map.h>
+#include <plan_env/replan_failure.h>
 #include <scan_planner_msgs/msg/bspline.hpp>
 #include <scan_planner_msgs/msg/data_disp.hpp>
 #include <plan_manage/planner_manager.h>
@@ -174,6 +175,11 @@ namespace scan_planner
     // 持续失败/急停的起始时刻（用于 error 去抖）
     rclcpp::Time status_problem_since_{0, 0, RCL_ROS_TIME};
 
+    // 最近的失败原因（供 error 的 reason 字段）
+    ReplanFailure status_reason_{ReplanFailure::NONE};
+    // getLocalTarget 失败的具体原因（no_free_target / tf_unavailable）
+    ReplanFailure last_target_failure_{ReplanFailure::NONE};
+
     // 外部任务控制：/mission/control 是否处于 pause（停止）
     bool externally_stopped_{false};
     // 最近一条可用的全局路径（/global_path）；resume 时用它重建
@@ -238,6 +244,8 @@ namespace scan_planner
     void updatePlannerStatus();
     // 向 /local_planner/status 发布状态（空串不发布）
     void publishPlannerStatus(const std::string &state);
+    // 把状态拼成 JSON（含 reason / fail_count / dist_to_goal）
+    std::string buildStatusJson(const std::string &state);
     // 任务控制回调：pause / resume
     void missionControlCallback(const std_msgs::msg::String::ConstSharedPtr &msg);
     // 外部停止：清全局+局部轨迹，状态置 stopped

@@ -138,6 +138,7 @@ namespace scan_planner
   {
 
     // 下面几行只是调试打印：每次调用打一条分隔线并显示起终点
+    last_failure_ = ReplanFailure::NONE;
     static int count = 0;
     std::cout << endl
               << "[rebo replan]: -------------------------------------" << count++ << std::endl;
@@ -149,6 +150,7 @@ namespace scan_planner
     if ((start_pt - local_target_pt).norm() < 0.2)
     {
       cout << "Close to goal" << endl;
+      last_failure_ = ReplanFailure::CLOSE_TO_GOAL;
       // 记一次“连续失败”，用于触发退避策略
       continuous_failures_count_++;
       return false;
@@ -361,6 +363,12 @@ namespace scan_planner
     // STEP 3：把上面那串点拟合（参数化）成一条 B 样条，得到“控制点” ctrl_pts。
     // B 样条是后续优化的载体：优化器只调整这些控制点。
     UniformBspline::parameterizeToBspline(ts, point_set, start_end_derivatives, ctrl_pts);
+    if (ctrl_pts.size() == 0)
+    {
+      continuous_failures_count_++;
+      last_failure_ = ReplanFailure::PARAMETERIZE_FAILED;
+      return false;
+    }
 
     // a_star_paths：每个碰撞段对应的 A* 绕行路线（只用来确定“往哪边推”）
     vector<vector<Eigen::Vector3d>> a_star_paths;
@@ -388,6 +396,9 @@ namespace scan_planner
     {
       // visualization_->displayOptimalList( ctrl_pts, vis_id );
       continuous_failures_count_++;
+      last_failure_ = bspline_optimizer_rebound_->lastFailureReason();
+      if (last_failure_ == ReplanFailure::NONE)
+        last_failure_ = ReplanFailure::OPTIMIZE_FAILED;
       return false;
     }
     //visualization_->displayOptimalList( ctrl_pts, vis_id );
@@ -423,6 +434,7 @@ namespace scan_planner
     if (!flag_step_2_success || !checkDynamicFeasibility(pos))
     {
       // 打印蓝色警告并放弃（绝不把不安全的轨迹发出去）
+    last_failure_ = flag_step_2_success ? ReplanFailure::DYNAMIC_INFEASIBLE : ReplanFailure::REFINE_UNSAFE;
       printf("\033[34mThis refined trajectory is unsafe or dynamically infeasible. Skip publishing it.\n\033[0m");
       continuous_failures_count_++;
       return false;

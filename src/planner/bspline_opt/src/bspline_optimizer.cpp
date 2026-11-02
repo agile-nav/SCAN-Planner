@@ -213,6 +213,7 @@ namespace scan_planner
       {
         // A* 都失败了 → 放弃这次优化
         RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"), "A-star failed; aborting optimization");
+        last_failure_ = (ret == ASTAR_RET::INIT_ERR) ? ReplanFailure::ASTAR_INIT_ERR : ReplanFailure::ASTAR_NO_PATH;
         return a_star_paths;
       }
     }
@@ -1270,6 +1271,7 @@ namespace scan_planner
                    << cps_.points.col(4).transpose() << endl;
               RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
                           "First three control points are in obstacles; t=%f", t);
+              if (last_failure_ == ReplanFailure::NONE) last_failure_ = ReplanFailure::START_IN_OBSTACLE;
               return false;
             }
 
@@ -1309,12 +1311,16 @@ namespace scan_planner
         // 其它求解错误 → 打警告并放弃本次规划
         RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
                     "Solver error. Return=%d, %s; skip this plan", result, lbfgs::lbfgs_strerror(result));
+        if (last_failure_ == ReplanFailure::NONE) last_failure_ = ReplanFailure::OPTIMIZE_FAILED;
         // while (ros::ok());
       }
 
     // 继续循环的条件：还在碰撞且重启次数没用完，或还有新障碍待处理
     } while ((flag_occ && restart_nums < MAX_RESART_NUMS_SET) ||
              (flag_force_return && force_stop_type_ == STOP_FOR_REBOUND && rebound_times <= 20));
+
+    if (!success && last_failure_ == ReplanFailure::NONE)
+      last_failure_ = ReplanFailure::OPTIMIZE_FAILED;
 
     return success;
   }
@@ -1388,6 +1394,7 @@ namespace scan_planner
 
           // 标记不安全（下面会把贴合权重加倍，再试一轮）
           flag_safe = false;
+          last_failure_ = ReplanFailure::REFINE_UNSAFE;
           break;
         }
       }

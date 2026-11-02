@@ -26,6 +26,7 @@
 #include <path_searching/dyn_a_star.h>
 #include <bspline_opt/uniform_bspline.h>
 #include <plan_env/grid_map.h>
+#include <plan_env/replan_failure.h>
 #include <rclcpp/rclcpp.hpp>
 #include "bspline_opt/lbfgs.hpp"
 
@@ -160,6 +161,9 @@ namespace scan_planner
 
     ControlPoints cps_;
 
+    // 最近一次失败的原因（供上层读取）
+    ReplanFailure last_failure_{ReplanFailure::NONE};
+
     /* cost function */
     /* calculate each part of cost function with control points q as input */
 
@@ -194,6 +198,12 @@ namespace scan_planner
     bool refine_optimize();
     void combineCostRebound(const double *x, double *grad, double &f_combine, const int n);
     void combineCostRefine(const double *x, double *grad, double &f_combine, const int n);
+
+  public:  // __public_marker_for_getter__
+    // 最近一次失败的原因（read-only）
+    ReplanFailure lastFailureReason() const { return last_failure_; }
+    void clearLastFailure() { last_failure_ = ReplanFailure::NONE; }
+  private:
 
     /* for benchmark evaluation only */
   public:
