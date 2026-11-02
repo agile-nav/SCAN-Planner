@@ -125,6 +125,8 @@ namespace scan_planner
     double status_heartbeat_hz_{1.0};
     // 判定"目标变了"的位置阈值(米)：新目标点与上一次相差超过它才算新目标
     double status_goal_change_eps_{0.05};
+    // 持续规划失败/急停多久判为 error(秒)
+    double status_error_time_{1.0};
 
     // ---------- 运行时数据（程序自己维护的状态） ----------
     /* planning data */
@@ -169,6 +171,8 @@ namespace scan_planner
     rclcpp::Time status_hold_since_{0, 0, RCL_ROS_TIME};
     // 上一次发布状态的时刻，用于心跳
     rclcpp::Time status_last_pub_time_{0, 0, RCL_ROS_TIME};
+    // 持续失败/急停的起始时刻（用于 error 去抖）
+    rclcpp::Time status_problem_since_{0, 0, RCL_ROS_TIME};
 
     // 外部任务控制：/mission/control 是否处于 pause（停止）
     bool externally_stopped_{false};

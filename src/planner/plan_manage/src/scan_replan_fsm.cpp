@@ -114,6 +114,7 @@ namespace scan_planner
     status_stop_debounce_ = load_parameter<double>(node_, "fsm.status_stop_debounce", 1.0);
     status_heartbeat_hz_ = load_parameter<double>(node_, "fsm.status_heartbeat_hz", 1.0);
     status_goal_change_eps_ = load_parameter<double>(node_, "fsm.status_goal_change_eps", 0.05);
+    status_error_time_ = load_parameter<double>(node_, "fsm.status_error_time", 3.0);
 
     // ---------- 第3步：预设航点模式下，解析航点数组 ----------
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
@@ -692,62 +693,93 @@ namespace scan_planner
     status_have_goal_ = true;
     status_is_stop_ = false;
     status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+    status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     // 外部停止期间不发 running（状态话题保持 stopped）
     if (!externally_stopped_)
       publishPlannerStatus("running");
   }
 
-  // 每个 tick 判断"到达目标且停稳"：到达(2D 距离 < 容差)且速度≈0，持续去抖后发一次 goal_reached；
-  // running 期间按心跳周期重发。idle（从未收到目标）不发消息。
+  // 每个 tick 判定运行状态，按优先级发到 /local_planner/status：
+  //   stopped(pause) > idle(未收到目标) > goal_reached(到达,仅一次) > error(持续解不出来) > running
   void SCANReplanFSM::updatePlannerStatus()
   {
     const rclcpp::Time now = node_->now();
+    const bool heartbeat_due =
+        status_heartbeat_hz_ > 1e-6 &&
+        (now - status_last_pub_time_).seconds() >= 1.0 / status_heartbeat_hz_;
 
-    // 外部停止（/mission/control = pause）：状态话题为 stopped，1Hz 重发
+    // 1) 外部停止（/mission/control = pause）最高优先级
     if (externally_stopped_)
     {
-      if (status_heartbeat_hz_ > 1e-6 &&
-          (now - status_last_pub_time_).seconds() >= 1.0 / status_heartbeat_hz_)
-      {
+      if (heartbeat_due)
         publishPlannerStatus("stopped");
-      }
       return;
     }
 
+    // 2) idle：从未收到过目标
     if (!status_have_goal_)
+    {
+      if (heartbeat_due)
+        publishPlannerStatus("idle");
+      return;
+    }
+
+    // 3) goal_reached：到达且停稳，只发一次（锁存，直到新目标/恢复）
+    if (status_is_stop_)
       return;
 
-    if (!status_is_stop_)
+    const bool arrived =
+        (end_pt_.head<2>() - odom_pos_.head<2>()).norm() < status_goal_tol_;
+    const bool velocity_zero = odom_vel_.norm() < status_speed_tol_;
+    if (arrived && velocity_zero)
     {
-      // 2D 水平距离（end_pt_ 与 odom_pos_ 都在 world 系），口径与控制器 finish_dist 一致
-      const bool arrived =
-          (end_pt_.head<2>() - odom_pos_.head<2>()).norm() < status_goal_tol_;
-      // 实际速度范数（与坐标系无关）
-      const bool stopped = odom_vel_.norm() < status_speed_tol_;
-      if (arrived && stopped)
+      if (status_hold_since_.nanoseconds() == 0)
       {
-        if (status_hold_since_.nanoseconds() == 0)
-        {
-          status_hold_since_ = now;
-        }
-        else if ((now - status_hold_since_).seconds() >= status_stop_debounce_)
-        {
-          status_is_stop_ = true;
-          publishPlannerStatus("goal_reached");
-        }
+        status_hold_since_ = now;
+      }
+      else if ((now - status_hold_since_).seconds() >= status_stop_debounce_)
+      {
+        status_is_stop_ = true;
+        publishPlannerStatus("goal_reached");
+        return;
+      }
+    }
+    else
+    {
+      status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+    }
+
+    // 4) error：未到达，且（持续规划失败 或 处于急停：碰撞 SAFETY / TF 超时·跳变）
+    //    持续 >= status_error_time_ 才报，避免抖动
+    if (!arrived)
+    {
+      const bool problem = (replan_fail_count_ != 0) || (exec_state_ == EMERGENCY_STOP);
+      if (problem)
+      {
+        if (status_problem_since_.nanoseconds() == 0)
+          status_problem_since_ = now;
       }
       else
       {
-        status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+        status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+      }
+      if (status_problem_since_.nanoseconds() != 0 &&
+          (now - status_problem_since_).seconds() >= status_error_time_)
+      {
+        if (heartbeat_due)
+          publishPlannerStatus("error");
+        return;
       }
     }
-
-    // 低频心跳：只在 running 期间周期重发；goal_reached 只在到达时发一次
-    if (!status_is_stop_ && status_heartbeat_hz_ > 1e-6 &&
-        (now - status_last_pub_time_).seconds() >= 1.0 / status_heartbeat_hz_)
+    else
     {
-      publishPlannerStatus("running");
+      // 已到达（去抖中）→ 不算 error
+      status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     }
+
+    // 5) running（含"到达去抖中"）
+    if (heartbeat_due)
+      publishPlannerStatus("running");
   }
 
   // 把状态发到 /local_planner/status（std_msgs/String）；空串不发布。
