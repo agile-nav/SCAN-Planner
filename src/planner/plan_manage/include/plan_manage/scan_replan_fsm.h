@@ -174,6 +174,8 @@ namespace scan_planner
     rclcpp::Time status_last_pub_time_{0, 0, RCL_ROS_TIME};
     // 持续失败/急停的起始时刻（用于 error 去抖）
     rclcpp::Time status_problem_since_{0, 0, RCL_ROS_TIME};
+    // 上一次发布的状态（用于状态切换时立即上报）
+    std::string status_last_state_;
 
     // 最近的失败原因（供 error 的 reason 字段）
     ReplanFailure status_reason_{ReplanFailure::NONE};
