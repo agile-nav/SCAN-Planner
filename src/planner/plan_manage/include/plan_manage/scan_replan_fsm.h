@@ -244,7 +244,7 @@ namespace scan_planner
     void updatePlannerStatus();
     // 向 /local_planner/status 发布状态（空串不发布）
     void publishPlannerStatus(const std::string &state);
-    // 把状态拼成 JSON（含 reason / fail_count / dist_to_goal）
+    // 把状态拼成 JSON（state / msgs）
     std::string buildStatusJson(const std::string &state);
     // 任务控制回调：pause / resume
     void missionControlCallback(const std_msgs::msg::String::ConstSharedPtr &msg);

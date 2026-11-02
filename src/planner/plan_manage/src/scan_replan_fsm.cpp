@@ -796,17 +796,12 @@ namespace scan_planner
     status_last_pub_time_ = node_->now();
   }
 
-  // 拼 JSON：{"state":..,"reason":..,"fail_count":..,"dist_to_goal":..}
+  // 拼 JSON：{"state":..,"msgs":..}
   std::string SCANReplanFSM::buildStatusJson(const std::string &state)
   {
-    const std::string reason =
+    const std::string msgs =
         (state == "error") ? std::string(replanFailureToString(status_reason_)) : std::string("");
-    double dist = 0.0;
-    if (have_target_)
-      dist = (end_pt_.head<2>() - odom_pos_.head<2>()).norm();
-    return "{\"state\":\"" + state + "\",\"reason\":\"" + reason +
-           "\",\"fail_count\":" + std::to_string(replan_fail_count_) +
-           ",\"dist_to_goal\":" + std::to_string(dist) + "}";
+    return "{\"state\":\"" + state + "\",\"msgs\":\"" + msgs + "\"}";
   }
 
   // 任务控制回调：/mission/control → "pause"（清轨迹停住）/ "resume"（重建并继续）
