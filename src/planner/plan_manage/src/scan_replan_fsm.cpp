@@ -832,7 +832,7 @@ namespace scan_planner
   void SCANReplanFSM::setStatusReason(ReplanFailure r)
   {
     status_reason_ = r;
-    if (r == ReplanFailure::NONE)
+    if (r == ReplanFailure::NONE || replanFailureIsBenign(r))
       return;
     if (std::find(status_reasons_.begin(), status_reasons_.end(), r) == status_reasons_.end())
       status_reasons_.push_back(r);
@@ -859,6 +859,9 @@ namespace scan_planner
   void SCANReplanFSM::applyExternalStop()
   {
     externally_stopped_ = true;
+    // 立即刹车：给控制器发一条“停在原地”的轨迹。
+    // 不这样做的话，控制器手上还握着上一条局部轨迹，会【走完那一小段】才停。
+    callEmergencyStop(odom_pos_);
     status_reasons_.clear();
     // 清全局参考轨迹
     planner_manager_->global_data_.global_duration_ = 0.0;
@@ -1145,7 +1148,7 @@ namespace scan_planner
         }
         else
       {
-        replan_fail_count_++;
+        if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
         changeFSMExecState(GEN_NEW_TRAJ, "FSM");
       }
       }
@@ -1191,7 +1194,7 @@ namespace scan_planner
         else
       {
         // 失败 → 计数 +1，保持重规划状态继续尝试
-        replan_fail_count_++;
+        if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
         changeFSMExecState(REPLAN_TRAJ, "FSM");
       }
       }
@@ -1231,7 +1234,7 @@ namespace scan_planner
           return;
         }
         // 规划失败 → 计数 +1，仍然要求重新生成新轨迹
-        replan_fail_count_++;
+        if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
         changeFSMExecState(GEN_NEW_TRAJ, "FSM");
         return;
       }
@@ -1249,7 +1252,7 @@ namespace scan_planner
             changeFSMExecState(GEN_NEW_TRAJ, "FSM");
             return;
           }
-          replan_fail_count_++;
+          if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
           changeFSMExecState(GEN_NEW_TRAJ, "FSM");
           return;
         }

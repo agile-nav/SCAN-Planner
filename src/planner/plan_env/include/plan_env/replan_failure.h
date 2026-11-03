@@ -32,6 +32,12 @@ enum class ReplanFailure
   UNKNOWN
 };
 
+// 不影响机器狗正常运动的“非错误”原因：不计入 error 状态、也不算重规划失败次数。
+//   CLOSE_TO_GOAL —— 起点到局部目标 <0.2 m，是“到点”而不是故障。
+inline bool replanFailureIsBenign(ReplanFailure f)
+{
+  return f == ReplanFailure::CLOSE_TO_GOAL;
+}
 inline const char *replanFailureToString(ReplanFailure f)
 {
   switch (f)
