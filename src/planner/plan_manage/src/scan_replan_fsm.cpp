@@ -422,6 +422,8 @@ namespace scan_planner
     {
       RCLCPP_ERROR(node_->get_logger(), "[navi_mode=%d] Unable to generate trajectory to waypoint %d",
                    navi_mode_, current_wp_ + 1);
+      // 必须写入本次失败原因，否则上层守卫会读到上一次遗留的原因（可能被判成“非错误”而漏计）
+      setStatusReason(ReplanFailure::GLOBAL_TRAJ_FAILED);
       return false;
     }
 
@@ -861,7 +863,9 @@ namespace scan_planner
     externally_stopped_ = true;
     // 立即刹车：给控制器发一条“停在原地”的轨迹。
     // 不这样做的话，控制器手上还握着上一条局部轨迹，会【走完那一小段】才停。
-    callEmergencyStop(odom_pos_);
+    // 还没有里程计时不发（此时 odom_pos_ 未初始化）；控制器没里程计本来就会发 0 速度。
+    if (have_odom_)
+      callEmergencyStop(odom_pos_);
     status_reasons_.clear();
     // 清全局参考轨迹
     planner_manager_->global_data_.global_duration_ = 0.0;
@@ -1550,7 +1554,8 @@ namespace scan_planner
         // 撞了！先尝试“从当前轨迹出发重新规划”（也许还来得及绕开）
         if (planFromCurrentTraj()) // Make a chance
         {
-          // 重规划成功 → 回到执行状态，本轮结束
+          // 重规划成功 → 清失败计数（否则残留的计数会让状态一直报 error），回到执行状态
+          replan_fail_count_ = 0;
           changeFSMExecState(EXEC_TRAJ, "SAFETY");
           return;
         }

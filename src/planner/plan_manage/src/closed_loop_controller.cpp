@@ -68,9 +68,9 @@ public:
     cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 20);
     // 发布“冻结”信号：告诉规划器先别推进轨迹
     execution_frozen_pub_ = create_publisher<std_msgs::msg::Bool>("planning/go2_execution_frozen", 10);
-    // 任务控制：/mission/control（"pause" 停 / "resume" 继续）；锁存，只认这两个词
+    // 任务控制：/mission/control（"pause" 停 / "resume" 继续）；命令类话题，不锁存
     mission_control_sub_ = create_subscription<std_msgs::msg::String>(
-        "/mission/control", rclcpp::QoS(1).reliable().transient_local(),
+        "/mission/control", rclcpp::QoS(10).reliable(),
         [this](const std_msgs::msg::String::ConstSharedPtr msg) {
           if (msg->data == "pause")
             paused_ = true;
