@@ -160,9 +160,9 @@ namespace scan_planner
     go2_execution_frozen_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
         "planning/go2_execution_frozen", 10,
         std::bind(&SCANReplanFSM::go2ExecutionFrozenCallback, this, std::placeholders::_1));
-    // 任务控制：/mission/control（"pause" 清轨迹停住 / "resume" 重建并继续）；锁存
+    // 任务控制：/mission/control（"pause" 清轨迹停住 / "resume" 重建并继续）；命令类话题，不锁存
     mission_control_sub_ = node_->create_subscription<std_msgs::msg::String>(
-        "/mission/control", rclcpp::QoS(1).reliable().transient_local(),
+        "/mission/control", rclcpp::QoS(10).reliable(),
         std::bind(&SCANReplanFSM::missionControlCallback, this, std::placeholders::_1));
 
     // ---------- 第7步：创建发布器 ----------
