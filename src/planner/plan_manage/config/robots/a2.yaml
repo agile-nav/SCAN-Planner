@@ -38,19 +38,14 @@ scan_planner_node:
     grid_map.sliding_map_size_z: 4.0
     grid_map.local_update_range_x: 4.0
     grid_map.local_update_range_y: 4.0
-    # 机器人形态（按宇树官方 A2 站立尺寸换算，https://www.unitree.com/mobile/A2/）
-    #   官方站立 L×W×H = 0.82 × 0.44 × 0.57 m，最大台阶 0.30 m。
-    #   前后偏移 = L/4 = 0.205
-    #   半径     = hypot(L/4, W/2) = hypot(0.205, 0.22) ≈ 0.301
+    # 机器人形态（实机调试后定稿，取代原先“按官方站立尺寸换算”的取值）
     grid_map.body_height: 0.0
-    grid_map.double_cylinder_radius: 0.301
-    grid_map.double_cylinder_offset: 0.205
+    grid_map.double_cylinder_radius: 0.25
+    grid_map.double_cylinder_offset: 0.18
     # 竖直膨胀（注意：参数名与论文的 d_up/d_down 相反，按代码口径填）：
-    #   保护区间 = [h_c − z_up, h_c + z_down]，h_c ≈ 0.46（正下方点云实测 0.44~0.46）
-    #   z_up   = h_c − 台阶 = 0.16    （管下边界）
-    #   z_down = 机身顶 − h_c + 0.05 = 0.24（管上边界）
-    grid_map.obstacles_inflation_z_up: 0.16
-    grid_map.obstacles_inflation_z_down: 0.24
+    #   保护区间 = [h_c − z_up, h_c + z_down]，h_c 为机身中心离地高度
+    grid_map.obstacles_inflation_z_up: 0.15
+    grid_map.obstacles_inflation_z_down: 0.1
 
 closed_loop_controller:
   ros__parameters:
