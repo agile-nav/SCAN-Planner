@@ -175,6 +175,13 @@ namespace scan_planner
     self_inflation_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
         // 发布机器人外形（前后两个圆柱的 Marker）
         "self_inflation", rclcpp::QoS(1).reliable().transient_local());
+    // 双圆柱 marker 改由 20 Hz 定时器发布（原来挂在里程计回调里，约 100 Hz × 2 条 = 200 条/秒）。
+    // RViz 的 Marker 订阅 Depth 只有 5，跟不上；队列按“保留最新”丢样本，每对里先发的
+    // 前圆柱（id=0）几乎总被丢掉 —— 这就是“第一个圆柱隔很久才出现”的原因。
+    self_inflation_timer_ = node_->create_wall_timer(std::chrono::milliseconds(50), [this]() {
+      if (have_odom_)
+        publishSelfInflationMarker();
+    });
     // 运行状态话题：只发 running / goal_reached（idle 不发），用 transient_local 让后订阅者也能拿到当前状态
     status_pub_ = node_->create_publisher<std_msgs::msg::String>(
         "/local_planner/status", rclcpp::QoS(1).reliable().transient_local());
@@ -647,8 +654,6 @@ namespace scan_planner
 
     // 标记“已收到里程计”——这是状态机从 INIT 走出来的前提条件
     have_odom_ = true;
-    // 画出机器人外形（前后两个圆柱）
-    publishSelfInflationMarker();
     // 预设航点模式：第一帧里程计到达后启动航点导航（只做一次）
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET && !preset_started_)
     {

@@ -255,7 +255,7 @@ Visualization Manager:
       Namespaces:
         self_inflation: true
       Topic:
-        Depth: 5
+        Depth: 50
         Durability Policy: Transient Local
         Filter size: 10
         History Policy: Keep Last
