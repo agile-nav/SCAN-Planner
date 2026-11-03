@@ -695,6 +695,7 @@ namespace scan_planner
     status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     status_reason_ = ReplanFailure::NONE;
+    status_reasons_.clear();
     // 外部停止期间不发 running（状态话题保持 stopped）
     if (!externally_stopped_)
       publishPlannerStatus("running");
@@ -762,6 +763,7 @@ namespace scan_planner
           {
             status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
             status_reason_ = ReplanFailure::NONE;
+            status_reasons_.clear();
           }
           if (problem && status_problem_since_.nanoseconds() != 0 &&
               (now - status_problem_since_).seconds() >= status_error_time_)
@@ -772,6 +774,7 @@ namespace scan_planner
           // 已到达（去抖中/仍在滑行）→ 不算 error
           status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
           status_reason_ = ReplanFailure::NONE;
+          status_reasons_.clear();
         }
       }
     }
@@ -799,12 +802,35 @@ namespace scan_planner
     status_last_state_ = state;
   }
 
-  // 拼 JSON：{"state":..,"msgs":..}
+  // 拼 JSON：{"state":..,"msgs":["原因1","原因2",...]}
   std::string SCANReplanFSM::buildStatusJson(const std::string &state)
   {
-    const std::string msgs =
-        (state == "error") ? std::string(replanFailureToString(status_reason_)) : std::string("");
-    return "{\"state\":\"" + state + "\",\"msgs\":\"" + msgs + "\"}";
+    std::string msgs = "[]";
+    if (state == "error")
+    {
+      std::string arr = "[";
+      for (size_t i = 0; i < status_reasons_.size(); ++i)
+      {
+        if (i > 0)
+          arr += ",";
+        arr += "\"";
+        arr += replanFailureToString(status_reasons_[i]);
+        arr += "\"";
+      }
+      arr += "]";
+      msgs = arr;
+    }
+    return "{\"state\":\"" + state + "\",\"msgs\":" + msgs + "}";
+  }
+
+  // 记录一次失败原因：设为当前原因，并把新出现的原因累积到本次 error 的原因列表里
+  void SCANReplanFSM::setStatusReason(ReplanFailure r)
+  {
+    status_reason_ = r;
+    if (r == ReplanFailure::NONE)
+      return;
+    if (std::find(status_reasons_.begin(), status_reasons_.end(), r) == status_reasons_.end())
+      status_reasons_.push_back(r);
   }
 
   // 任务控制回调：/mission/control → "pause"（清轨迹停住）/ "resume"（重建并继续）
@@ -828,6 +854,7 @@ namespace scan_planner
   void SCANReplanFSM::applyExternalStop()
   {
     externally_stopped_ = true;
+    status_reasons_.clear();
     // 清全局参考轨迹
     planner_manager_->global_data_.global_duration_ = 0.0;
     planner_manager_->global_data_.last_progress_time_ = 0.0;
@@ -854,6 +881,7 @@ namespace scan_planner
   {
     externally_stopped_ = false;
     status_is_stop_ = false;  // 恢复后重新判定是否到达
+    status_reasons_.clear();
     if (last_global_path_ && !last_global_path_->poses.empty())
     {
       RCLCPP_INFO(node_->get_logger(), "External RESUME: rebuilding from cached /global_path");
@@ -1105,7 +1133,7 @@ namespace scan_planner
         {
           reference_tf_stop_ = true;
           reference_tf_jump_failed_ = true;
-          status_reason_ = ReplanFailure::EMERGENCY_TF_JUMP_FAIL;
+          setStatusReason(ReplanFailure::EMERGENCY_TF_JUMP_FAIL);
           callEmergencyStop(odom_pos_);
           flag_escape_emergency_ = false;
           changeFSMExecState(EMERGENCY_STOP, "TF_JUMP_FAIL");
@@ -1150,7 +1178,7 @@ namespace scan_planner
         {
           reference_tf_stop_ = true;
           reference_tf_jump_failed_ = true;
-          status_reason_ = ReplanFailure::EMERGENCY_TF_JUMP_FAIL;
+          setStatusReason(ReplanFailure::EMERGENCY_TF_JUMP_FAIL);
           callEmergencyStop(odom_pos_);
           flag_escape_emergency_ = false;
           changeFSMExecState(EMERGENCY_STOP, "TF_JUMP_FAIL");
@@ -1322,7 +1350,7 @@ namespace scan_planner
       replan_fail_count_ = 0;
       need_hover_stop_ = true;
       flag_escape_emergency_ = true;
-      status_reason_ = ReplanFailure::MAX_REPLAN_FAIL;
+      setStatusReason(ReplanFailure::MAX_REPLAN_FAIL);
       changeFSMExecState(EMERGENCY_STOP, "finishProcess");
     }
   }
@@ -1393,14 +1421,14 @@ namespace scan_planner
       // 失败 → 打错误日志并返回
       RCLCPP_ERROR(node_->get_logger(),
                    "[navi_mode=%d] Unable to refresh global trajectory from odom to current target", navi_mode_);
-      status_reason_ = ReplanFailure::GLOBAL_TRAJ_FAILED;
+      setStatusReason(ReplanFailure::GLOBAL_TRAJ_FAILED);
       return false;
     }
 
     // 检查终点是否落在障碍里（若在，会沿轨迹回退找一个能站的点）
     if (!adjustGlobalTargetIfOccupied())
     {
-      status_reason_ = ReplanFailure::TARGET_OCCUPIED;
+      setStatusReason(ReplanFailure::TARGET_OCCUPIED);
       return false;
     }
 
@@ -1507,7 +1535,7 @@ namespace scan_planner
           reference_tf_stop_ = true;
           callEmergencyStop(odom_pos_);
           flag_escape_emergency_ = false;
-          status_reason_ = ReplanFailure::EMERGENCY_TF_MISSING_COLLISION;
+          setStatusReason(ReplanFailure::EMERGENCY_TF_MISSING_COLLISION);
           changeFSMExecState(EMERGENCY_STOP, "TF_MISSING_COLLISION");
           return;
         }
@@ -1525,7 +1553,7 @@ namespace scan_planner
           {
             // 打警告：多少秒后就要撞上了
             RCLCPP_WARN(node_->get_logger(), "Obstacle discovered; emergency stop in %.3fs", t - t_cur);
-            status_reason_ = ReplanFailure::EMERGENCY_SAFETY;
+            setStatusReason(ReplanFailure::EMERGENCY_SAFETY);
             changeFSMExecState(EMERGENCY_STOP, "SAFETY");
           }
           // 还比较远 → 只是要求重新规划
@@ -1552,7 +1580,7 @@ namespace scan_planner
     // 参考路径模式下若拿不到参考系变换会返回 false，本轮规划直接放弃
     if (!getLocalTarget())
     {
-      status_reason_ = last_target_failure_;
+      setStatusReason(last_target_failure_);
       return false;
     }
 
@@ -1562,7 +1590,7 @@ namespace scan_planner
     if (!plan_success)
     {
       const ReplanFailure reason = planner_manager_->lastFailureReason();
-      status_reason_ = (reason == ReplanFailure::NONE) ? ReplanFailure::UNKNOWN : reason;
+      setStatusReason((reason == ReplanFailure::NONE) ? ReplanFailure::UNKNOWN : reason);
     }
     // “新目标”标志用完即清（它只影响第一次规划）
     have_new_target_ = false;
@@ -1746,7 +1774,7 @@ namespace scan_planner
         reference_tf_stop_ = true;
         callEmergencyStop(odom_pos_);
         flag_escape_emergency_ = false;
-        status_reason_ = ReplanFailure::EMERGENCY_TF_TIMEOUT;
+        setStatusReason(ReplanFailure::EMERGENCY_TF_TIMEOUT);
         changeFSMExecState(EMERGENCY_STOP, "TF_TIMEOUT");
       }
       return false;

@@ -176,6 +176,8 @@ namespace scan_planner
     rclcpp::Time status_problem_since_{0, 0, RCL_ROS_TIME};
     // 上一次发布的状态（用于状态切换时立即上报）
     std::string status_last_state_;
+    // 本次 error 期间出现过的所有失败原因（去重、按首次出现顺序）
+    std::vector<ReplanFailure> status_reasons_;
 
     // 最近的失败原因（供 error 的 reason 字段）
     ReplanFailure status_reason_{ReplanFailure::NONE};
@@ -248,6 +250,8 @@ namespace scan_planner
     void publishPlannerStatus(const std::string &state);
     // 把状态拼成 JSON（state / msgs）
     std::string buildStatusJson(const std::string &state);
+    // 记录一次失败原因（设为当前原因，并累积到本次 error 的原因列表）
+    void setStatusReason(ReplanFailure r);
     // 任务控制回调：pause / resume
     void missionControlCallback(const std_msgs::msg::String::ConstSharedPtr &msg);
     // 外部停止：清全局+局部轨迹，状态置 stopped
