@@ -572,9 +572,10 @@ namespace scan_planner
       return;
     }
 
-    // 运行状态：只有"目标点变了"才算新目标；重复的同一条路径不重置状态
+    // 运行状态：目标变了、重复路径、或"已到达(idle)"后又来路径 → 都算新目标
     const bool status_new_goal =
-        !status_goal_valid_ || (waypoints.back() - status_goal_ref_).norm() > status_goal_change_eps_;
+        status_is_stop_ || !status_goal_valid_ ||
+        (waypoints.back() - status_goal_ref_).norm() > status_goal_change_eps_;
     if (status_new_goal)
     {
       status_goal_ref_ = waypoints.back();
@@ -730,7 +731,8 @@ namespace scan_planner
     }
     else if (status_is_stop_)
     {
-      state = "goal_reached";
+      // 已到达目标、且 goal_reached 已发过一次 → 转为 idle，等待新目标
+      state = "idle";
     }
     else
     {
@@ -774,7 +776,10 @@ namespace scan_planner
           }
           if (problem && status_problem_since_.nanoseconds() != 0 &&
               (now - status_problem_since_).seconds() >= status_error_time_)
-            state = "error";
+          {
+            // 仍在运动 → 规划有错误但不影响运行(failed)；已卡住 → 需重启/遥控(error)
+            state = (odom_vel_.norm() > status_speed_tol_) ? "failed" : "error";
+          }
         }
         else
         {
