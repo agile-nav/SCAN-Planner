@@ -178,6 +178,8 @@ namespace scan_planner
     std::string status_last_state_;
     // 本次 error 期间出现过的所有失败原因（去重、按首次出现顺序）
     std::vector<ReplanFailure> status_reasons_;
+    // 硬错误(error)是否已锁存：一旦进入 error 就锁存，只有重启节点才清除
+    bool status_error_latched_{false};
 
     // 最近的失败原因（供 error 的 reason 字段）
     ReplanFailure status_reason_{ReplanFailure::NONE};

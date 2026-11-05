@@ -703,7 +703,8 @@ namespace scan_planner
     status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     status_reason_ = ReplanFailure::NONE;
-    status_reasons_.clear();
+    if (!status_error_latched_)
+      status_reasons_.clear();  // 锁存 error 后保留原因，供上报
     // 外部停止期间不发 running（状态话题保持 stopped）
     if (!externally_stopped_)
       publishPlannerStatus("running");
@@ -733,6 +734,11 @@ namespace scan_planner
     {
       // 已到达目标、且 goal_reached 已发过一次 → 转为 idle，等待新目标
       state = "idle";
+    }
+    else if (status_error_latched_)
+    {
+      // 硬错误已锁存：error 不自动恢复，只有重启节点才清除
+      state = "error";
     }
     else
     {
@@ -777,8 +783,27 @@ namespace scan_planner
           if (problem && status_problem_since_.nanoseconds() != 0 &&
               (now - status_problem_since_).seconds() >= status_error_time_)
           {
-            // 仍在运动 → 规划有错误但不影响运行(failed)；已卡住 → 需重启/遥控(error)
-            state = (odom_vel_.norm() > status_speed_tol_) ? "failed" : "error";
+            // 按“原因是否必须人工干预”分级（不再看速度）：
+            //   硬错误(堵死/目标不可达/碰撞急停/连续失败超限/A* 无路) → error（需重启或遥控移开）
+            //   软错误(优化/拟合/TF 定位类等可自恢复)                → failed（有错但仍能跑）
+            bool needs_intervention = false;
+            for (const auto &r : status_reasons_)
+            {
+              if (replanFailureNeedsIntervention(r))
+              {
+                needs_intervention = true;
+                break;
+              }
+            }
+            if (needs_intervention)
+            {
+              status_error_latched_ = true;  // 锁存：error 不再自动回 running，只有重启节点才清除
+              state = "error";
+            }
+            else
+            {
+              state = "failed";
+            }
           }
         }
         else
@@ -807,18 +832,20 @@ namespace scan_planner
   {
     if (state.empty())
       return;
+    // error 锁存：除 stopped（外部停止优先级最高）外一律上报 error；只有重启节点才清除
+    const std::string out = (status_error_latched_ && state != "stopped") ? "error" : state;
     std_msgs::msg::String msg;
-    msg.data = buildStatusJson(state);
+    msg.data = buildStatusJson(out);
     status_pub_->publish(msg);
     status_last_pub_time_ = node_->now();
-    status_last_state_ = state;
+    status_last_state_ = out;
   }
 
   // 拼 JSON：{"state":..,"msgs":["原因1","原因2",...]}
   std::string SCANReplanFSM::buildStatusJson(const std::string &state)
   {
     std::string msgs = "[]";
-    if (state == "error")
+    if (state == "error" || state == "failed")
     {
       std::string arr = "[";
       for (size_t i = 0; i < status_reasons_.size(); ++i)
@@ -871,7 +898,8 @@ namespace scan_planner
     // 还没有里程计时不发（此时 odom_pos_ 未初始化）；控制器没里程计本来就会发 0 速度。
     if (have_odom_)
       callEmergencyStop(odom_pos_);
-    status_reasons_.clear();
+    if (!status_error_latched_)
+      status_reasons_.clear();  // 锁存 error 后保留原因，供上报
     // 清全局参考轨迹
     planner_manager_->global_data_.global_duration_ = 0.0;
     planner_manager_->global_data_.last_progress_time_ = 0.0;
@@ -898,7 +926,8 @@ namespace scan_planner
   {
     externally_stopped_ = false;
     status_is_stop_ = false;  // 恢复后重新判定是否到达
-    status_reasons_.clear();
+    if (!status_error_latched_)
+      status_reasons_.clear();  // 锁存 error 后保留原因，供上报
     if (last_global_path_ && !last_global_path_->poses.empty())
     {
       RCLCPP_INFO(node_->get_logger(), "External RESUME: rebuilding from cached /global_path");

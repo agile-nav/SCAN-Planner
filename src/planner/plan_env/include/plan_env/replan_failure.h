@@ -38,6 +38,23 @@ inline bool replanFailureIsBenign(ReplanFailure f)
 {
   return f == ReplanFailure::CLOSE_TO_GOAL;
 }
+
+// “必须人工干预”的硬错误（→ error）：被堵死 / 目标不可达 / 碰撞急停 / 连续失败超限 / A* 无路。
+// 其余（优化、拟合、TF/定位类、超限等可自恢复的）归 failed。
+inline bool replanFailureNeedsIntervention(ReplanFailure f)
+{
+  switch (f)
+  {
+  case ReplanFailure::ASTAR_NO_PATH:
+  case ReplanFailure::NO_FREE_TARGET:
+  case ReplanFailure::TARGET_OCCUPIED:
+  case ReplanFailure::EMERGENCY_SAFETY:
+  case ReplanFailure::MAX_REPLAN_FAIL:
+    return true;
+  default:
+    return false;
+  }
+}
 inline const char *replanFailureToString(ReplanFailure f)
 {
   switch (f)
