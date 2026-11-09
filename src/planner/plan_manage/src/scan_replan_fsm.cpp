@@ -109,8 +109,10 @@ namespace scan_planner
       throw std::runtime_error("reference TF limits must be positive");
 
     // ---------- 运行状态(running/goal_reached)判定参数 ----------
-    status_goal_tol_ = load_parameter<double>(node_, "fsm.status_goal_tol", 0.15);
+    status_goal_tol_ = load_parameter<double>(node_, "fsm.status_goal_tol", 0.20);
+    status_goal_tol_exit_ = load_parameter<double>(node_, "fsm.status_goal_tol_exit", 0.30);
     status_speed_tol_ = load_parameter<double>(node_, "fsm.status_speed_tol", 0.05);
+    status_speed_tol_exit_ = load_parameter<double>(node_, "fsm.status_speed_tol_exit", 0.10);
     status_stop_debounce_ = load_parameter<double>(node_, "fsm.status_stop_debounce", 1.0);
     status_heartbeat_hz_ = load_parameter<double>(node_, "fsm.status_heartbeat_hz", 1.0);
     status_goal_change_eps_ = load_parameter<double>(node_, "fsm.status_goal_change_eps", 0.05);
@@ -742,14 +744,21 @@ namespace scan_planner
     }
     else
     {
-      const bool arrived =
-          (end_pt_.head<2>() - odom_pos_.head<2>()).norm() < status_goal_tol_;
-      const bool velocity_zero = odom_vel_.norm() < status_speed_tol_;
-      if (arrived && velocity_zero)
+      // 到达判定：分「进入候选」与「候选保持」两段，加滞回 + 目标点快照。
+      //   - 进入候选：距目标(2D) < status_goal_tol_ 且 速度 < status_speed_tol_
+      //   - 候选期间：目标点锁存进 status_goal_snapshot_（end_pt_ 会随定位刷新而漂移，
+      //               锁存保证判定基准稳定），并用更宽的退出阈值判断是否掉出候选
+      //   - 连续保持 >= status_stop_debounce_ → goal_reached（只发一次）
+      const double speed_now = odom_vel_.norm();
+      const bool candidate_active = status_hold_since_.nanoseconds() != 0;
+
+      if (candidate_active)
       {
-        if (status_hold_since_.nanoseconds() == 0)
+        const double d_snap = (status_goal_snapshot_.head<2>() - odom_pos_.head<2>()).norm();
+        if (d_snap >= status_goal_tol_exit_ || speed_now >= status_speed_tol_exit_)
         {
-          status_hold_since_ = now;
+          // 掉出候选窗口（滞回）→ 计时清零，重新判断
+          status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
           state = "running";
         }
         else if ((now - status_hold_since_).seconds() >= status_stop_debounce_)
@@ -764,54 +773,74 @@ namespace scan_planner
       }
       else
       {
-        status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
-        state = "running";
-        if (!arrived)
+        const bool arrived =
+            (end_pt_.head<2>() - odom_pos_.head<2>()).norm() < status_goal_tol_;
+        const bool velocity_zero = speed_now < status_speed_tol_;
+        const bool problem = (replan_fail_count_ != 0) || (exec_state_ == EMERGENCY_STOP);
+
+        if (arrived && velocity_zero)
         {
-          const bool problem = (replan_fail_count_ != 0) || (exec_state_ == EMERGENCY_STOP);
-          if (problem)
+          // 进入到达候选：锁存目标点 + 开始去抖计时
+          status_hold_since_ = now;
+          status_goal_snapshot_ = end_pt_;
+          state = "running";
+        }
+        else if (!have_target_ && speed_now < status_speed_tol_exit_ &&
+                 !problem && status_problem_since_.nanoseconds() == 0)
+        {
+          // 收口：规划器已无目标（任务结束）、机器人已停、且不在失败中 → 回 idle，
+          //       避免"任务早结束但离目标还差一点"时状态永远停在 running
+          state = "idle";
+        }
+        else
+        {
+          state = "running";
+          if (!arrived)
           {
-            if (status_problem_since_.nanoseconds() == 0)
-              status_problem_since_ = now;
+            if (problem)
+            {
+              if (status_problem_since_.nanoseconds() == 0)
+                status_problem_since_ = now;
+            }
+            else
+            {
+              status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+              status_reason_ = ReplanFailure::NONE;
+              status_reasons_.clear();
+            }
+            if (problem && status_problem_since_.nanoseconds() != 0 &&
+                (now - status_problem_since_).seconds() >= status_error_time_)
+            {
+              // 按"原因是否必须人工干预"分级（不再看速度）：
+              //   硬错误(堵死/目标不可达/碰撞急停/连续失败超限/A* 无路) → error（需重启或遥控移开）
+              //   软错误(优化/拟合/TF 定位类等可自恢复)                → failed（有错但仍能跑）
+              bool needs_intervention = false;
+              for (const auto &r : status_reasons_)
+              {
+                if (replanFailureNeedsIntervention(r))
+                {
+                  needs_intervention = true;
+                  break;
+                }
+              }
+              if (needs_intervention)
+              {
+                status_error_latched_ = true;  // 锁存：error 不再自动回 running，只有重启节点才清除
+                state = "error";
+              }
+              else
+              {
+                state = "failed";
+              }
+            }
           }
           else
           {
+            // 已到达（去抖中/仍在滑行）→ 不算 error
             status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
             status_reason_ = ReplanFailure::NONE;
             status_reasons_.clear();
           }
-          if (problem && status_problem_since_.nanoseconds() != 0 &&
-              (now - status_problem_since_).seconds() >= status_error_time_)
-          {
-            // 按“原因是否必须人工干预”分级（不再看速度）：
-            //   硬错误(堵死/目标不可达/碰撞急停/连续失败超限/A* 无路) → error（需重启或遥控移开）
-            //   软错误(优化/拟合/TF 定位类等可自恢复)                → failed（有错但仍能跑）
-            bool needs_intervention = false;
-            for (const auto &r : status_reasons_)
-            {
-              if (replanFailureNeedsIntervention(r))
-              {
-                needs_intervention = true;
-                break;
-              }
-            }
-            if (needs_intervention)
-            {
-              status_error_latched_ = true;  // 锁存：error 不再自动回 running，只有重启节点才清除
-              state = "error";
-            }
-            else
-            {
-              state = "failed";
-            }
-          }
-        }
-        else
-        {
-          // 已到达（去抖中/仍在滑行）→ 不算 error
-          status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
-          status_reason_ = ReplanFailure::NONE;
-          status_reasons_.clear();
         }
       }
     }

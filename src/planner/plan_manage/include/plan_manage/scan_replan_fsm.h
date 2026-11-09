@@ -117,9 +117,13 @@ namespace scan_planner
 
     // ---------- 运行状态(running/goal_reached)判定参数 ----------
     // 到达目标的 2D 水平距离容差(米)
-    double status_goal_tol_{0.15};
+    double status_goal_tol_{0.20};
+    // 到达判定的退出阈值（滞回）：越小越容易掉出"到达候选"
+    double status_goal_tol_exit_{0.30};
     // "速度为零"阈值(米/秒)
     double status_speed_tol_{0.05};
+    // "已停"判定的退出阈值（滞回）
+    double status_speed_tol_exit_{0.10};
     // 到达且停稳持续多久才判为 goal_reached(秒)
     double status_stop_debounce_{1.0};
     // 心跳频率(Hz)：周期性重发当前状态；0 表示关闭
@@ -168,6 +172,8 @@ namespace scan_planner
     bool status_goal_valid_{false};
     // 上一次用于判定的目标点（参考系/map）
     Eigen::Vector3d status_goal_ref_{Eigen::Vector3d::Zero()};
+    // 到达判定期间锁存的目标点：防止 end_pt_ 随定位漂移导致判定基准变化
+    Eigen::Vector3d status_goal_snapshot_{Eigen::Vector3d::Zero()};
     // "到达且停稳"起始时刻，用于去抖
     rclcpp::Time status_hold_since_{0, 0, RCL_ROS_TIME};
     // 上一次发布状态的时刻，用于心跳

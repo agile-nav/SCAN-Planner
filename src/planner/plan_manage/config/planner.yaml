@@ -33,9 +33,13 @@ scan_planner_node:
 
     # ---- 运行状态(running/goal_reached)判定（发到 /local_planner/status）----
     # 到达目标的 2D 水平距离容差(米)：与控制器 finish_dist 口径一致
-    fsm.status_goal_tol: 0.15
+    fsm.status_goal_tol: 0.20
+    # 到达判定的"退出"阈值(米)：滞回用，大于进入阈值 → 边界抖动不会反复重置去抖
+    fsm.status_goal_tol_exit: 0.30
     # "速度为零"阈值(米/秒)
     fsm.status_speed_tol: 0.05
+    # "已停"判定的"退出"阈值(米/秒)：滞回用
+    fsm.status_speed_tol_exit: 0.10
     # 到达且停稳持续多久才判为 goal_reached(秒)
     fsm.status_stop_debounce: 1.0
     # 心跳频率(Hz)：周期性重发当前状态；0 表示关闭
