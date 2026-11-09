@@ -146,6 +146,8 @@ namespace scan_planner
     bool preset_started_{false};
     bool rviz_height_ready_;
     bool go2_execution_frozen_;
+    // 外部使能（/motion_enabled，遥控器 START/B）：false 时冻结轨迹不规划不下发
+    bool motion_enabled_{false};
     bool enable_fail_safe_, need_hover_stop_;
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};
@@ -221,6 +223,7 @@ namespace scan_planner
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr go2_execution_frozen_sub_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr motion_enabled_sub_;
     // 任务控制：/mission/control（pause 停 / resume 继续）
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mission_control_sub_;
     rclcpp::Publisher<scan_planner_msgs::msg::Bspline>::SharedPtr bspline_pub_;
@@ -266,6 +269,7 @@ namespace scan_planner
     // 每个 tick 评估是否"到达目标且停稳"，并用心跳周期重发
     void updatePlannerStatus();
     void updateExecutionProgress();
+    void motionEnabledCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg);
     // 向 /local_planner/status 发布状态（空串不发布）
     void publishPlannerStatus(const std::string &state);
     // 把状态拼成 JSON（state / msgs）

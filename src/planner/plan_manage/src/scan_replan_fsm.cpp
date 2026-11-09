@@ -166,6 +166,10 @@ namespace scan_planner
         "planning/go2_execution_frozen", 10,
         std::bind(&SCANReplanFSM::go2ExecutionFrozenCallback, this, std::placeholders::_1));
     // 任务控制：/mission/control（"pause" 清轨迹停住 / "resume" 重建并继续）；命令类话题，不锁存
+    // 外部使能：/motion_enabled（遥控器 START/B）；发布端是 RELIABLE+TRANSIENT_LOCAL，这里同 QoS 才能拿到锁存初值
+    motion_enabled_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
+        "motion_enabled", rclcpp::QoS(1).reliable().transient_local(),
+        std::bind(&SCANReplanFSM::motionEnabledCallback, this, std::placeholders::_1));
     mission_control_sub_ = node_->create_subscription<std_msgs::msg::String>(
         "/mission/control", rclcpp::QoS(10).reliable(),
         std::bind(&SCANReplanFSM::missionControlCallback, this, std::placeholders::_1));
@@ -576,6 +580,12 @@ namespace scan_planner
       RCLCPP_INFO(node_->get_logger(), "External STOP active: /global_path cached, not planning");
       return;
     }
+    // 外部未使能期间只缓存、不规划（解冻时由 motionEnabledCallback 重建）
+    if (!motion_enabled_)
+    {
+      RCLCPP_INFO(node_->get_logger(), "motion disabled: /global_path cached, not planning");
+      return;
+    }
 
     // 运行状态：目标变了、重复路径、或"已到达(idle)"后又来路径 → 都算新目标
     const bool status_new_goal =
@@ -695,7 +705,7 @@ namespace scan_planner
     // 取出当前局部轨迹数据
     LocalTrajData *info = &planner_manager_->local_data_;
     // 若底盘冻结且轨迹已经开始 → 把轨迹的“开始时间”往后推 dt
-    if (go2_execution_frozen_ && info->start_time_.seconds() > 1e-5)
+    if ((go2_execution_frozen_ || !motion_enabled_) && info->start_time_.seconds() > 1e-5)
       // 效果：轨迹时钟暂停，机器人原地转向的时间不会“消耗”轨迹
       info->start_time_ += rclcpp::Duration::from_seconds(dt);
   }
@@ -720,6 +730,26 @@ namespace scan_planner
 
   // 统计"执行进展"：只用物理量（到目标的实际距离 + 实际速度），不看时间。
   // 用"距离包络"：只有比历史最近还近 eps 才算有进展，绕路/回摆不算。
+  // 外部使能回调：false → 冻结轨迹时钟、不规划、不发布；true → 从原处继续
+  void SCANReplanFSM::motionEnabledCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg)
+  {
+    if (!msg || msg->data == motion_enabled_)
+      return;
+    motion_enabled_ = msg->data;
+    if (motion_enabled_)
+      RCLCPP_INFO(node_->get_logger(), "motion_enabled=true: resume planning / cmd_vel");
+    else
+      RCLCPP_WARN(node_->get_logger(), "motion_enabled=false: freeze trajectory, stop cmd_vel");
+
+    // 冻结期间缓存了新的全局路径、且当前没有目标 → 解冻时重建并规划
+    if (motion_enabled_ && !have_target_ && last_global_path_ && !last_global_path_->poses.empty())
+    {
+      RCLCPP_INFO(node_->get_logger(), "motion enabled: planning from cached /global_path");
+      pathCallback(last_global_path_);
+      changeFSMExecState(GEN_NEW_TRAJ, "MOTION_ENABLE");
+    }
+  }
+
   void SCANReplanFSM::updateExecutionProgress()
   {
     const rclcpp::Time now = node_->now();
@@ -753,8 +783,9 @@ namespace scan_planner
 
     std::string state;
 
-    if (externally_stopped_)
+    if (externally_stopped_ || !motion_enabled_)
     {
+      // pause 或 外部未使能（/motion_enabled=false）→ 一律 stopped
       state = "stopped";
     }
     else if (!status_have_goal_)
@@ -891,7 +922,11 @@ namespace scan_planner
     if (state.empty())
       return;
     // error 锁存：除 stopped（外部停止优先级最高）外一律上报 error；只有重启节点才清除
-    const std::string out = (status_error_latched_ && state != "stopped") ? "error" : state;
+    std::string out = state;
+    if (!motion_enabled_ && out != "stopped")
+      out = "stopped";                       // 外部未使能：与 pause 同义
+    else if (status_error_latched_ && out != "stopped")
+      out = "error";
     std_msgs::msg::String msg;
     msg.data = buildStatusJson(out);
     status_pub_->publish(msg);
@@ -1141,6 +1176,9 @@ namespace scan_planner
     updatePlannerStatus();
     // 外部停止（/mission/control = pause）：不重规划、不推进，直到 resume
     if (externally_stopped_)
+      return;
+    // 外部未使能（未按 START / 按了 B）：冻结，不重规划、不发布
+    if (!motion_enabled_)
       return;
     if (!monitorReferenceTransform())
       return;
@@ -1608,8 +1646,8 @@ namespace scan_planner
   {
     // 同样先处理“冻结”
     updateLocalTrajTimeFreeze();
-    // 外部停止期间不做碰撞检查
-    if (externally_stopped_)
+    // 外部停止 / 未使能期间不做碰撞检查
+    if (externally_stopped_ || !motion_enabled_)
       return;
 
     // 取出当前局部轨迹和地图
@@ -1758,8 +1796,11 @@ namespace scan_planner
       }
 
       // 发布轨迹 —— 控制器订阅 planning/bspline，会开始跟踪它
-      bspline_pub_->publish(bspline);
-      publishLocalPath(info->position_traj_);
+      if (motion_enabled_)
+      {
+        bspline_pub_->publish(bspline);
+        publishLocalPath(info->position_traj_);
+      }
 
       // 顺便在 RViz 里画出这条最优轨迹
       visualization_->displayOptimalTraj(info->position_traj_, 0);
