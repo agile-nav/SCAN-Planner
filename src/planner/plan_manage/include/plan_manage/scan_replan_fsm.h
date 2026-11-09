@@ -124,6 +124,13 @@ namespace scan_planner
     double status_speed_tol_{0.05};
     // "已停"判定的退出阈值（滞回）
     double status_speed_tol_exit_{0.10};
+    // ---- 执行进展(stuck)检测：只看物理进展，不看时间 ----
+    // 无进展窗口(秒)：这么久没有"更靠近目标"就判为卡住
+    double stuck_window_{3.0};
+    // 窗口内距离至少要比历史最小值再小这么多才算"有进展"(米)
+    double stuck_progress_eps_{0.05};
+    // 绝对上限(秒)：t_cur > 轨迹时长 + 它 才强制收尾，只防死循环
+    double finish_timeout_extra_{30.0};
     // 到达且停稳持续多久才判为 goal_reached(秒)
     double status_stop_debounce_{1.0};
     // 心跳频率(Hz)：周期性重发当前状态；0 表示关闭
@@ -180,6 +187,10 @@ namespace scan_planner
     rclcpp::Time status_last_pub_time_{0, 0, RCL_ROS_TIME};
     // 持续失败/急停的起始时刻（用于 error 去抖）
     rclcpp::Time status_problem_since_{0, 0, RCL_ROS_TIME};
+    // 执行进展：本轮见过的"到目标最小 2D 距离"、最后一次有进展的时刻、本拍是否无进展
+    double exec_best_dist_{1e9};
+    rclcpp::Time exec_progress_time_{0, 0, RCL_ROS_TIME};
+    bool exec_no_progress_{false};
     // 上一次发布的状态（用于状态切换时立即上报）
     std::string status_last_state_;
     // 本次 error 期间出现过的所有失败原因（去重、按首次出现顺序）
@@ -254,6 +265,7 @@ namespace scan_planner
     void armPlannerStatus();
     // 每个 tick 评估是否"到达目标且停稳"，并用心跳周期重发
     void updatePlannerStatus();
+    void updateExecutionProgress();
     // 向 /local_planner/status 发布状态（空串不发布）
     void publishPlannerStatus(const std::string &state);
     // 把状态拼成 JSON（state / msgs）

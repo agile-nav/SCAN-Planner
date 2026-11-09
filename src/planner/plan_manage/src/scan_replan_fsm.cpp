@@ -117,6 +117,9 @@ namespace scan_planner
     status_heartbeat_hz_ = load_parameter<double>(node_, "fsm.status_heartbeat_hz", 1.0);
     status_goal_change_eps_ = load_parameter<double>(node_, "fsm.status_goal_change_eps", 0.05);
     status_error_time_ = load_parameter<double>(node_, "fsm.status_error_time", 3.0);
+    stuck_window_ = load_parameter<double>(node_, "fsm.finish_stuck_window", 3.0);
+    stuck_progress_eps_ = load_parameter<double>(node_, "fsm.finish_progress_eps", 0.05);
+    finish_timeout_extra_ = load_parameter<double>(node_, "fsm.finish_timeout_extra", 30.0);
 
     // ---------- 第3步：预设航点模式下，解析航点数组 ----------
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
@@ -705,11 +708,37 @@ namespace scan_planner
     status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     status_reason_ = ReplanFailure::NONE;
+    exec_progress_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+    exec_best_dist_ = 1e9;
+    exec_no_progress_ = false;
     if (!status_error_latched_)
       status_reasons_.clear();  // 锁存 error 后保留原因，供上报
     // 外部停止期间不发 running（状态话题保持 stopped）
     if (!externally_stopped_)
       publishPlannerStatus("running");
+  }
+
+  // 统计"执行进展"：只用物理量（到目标的实际距离 + 实际速度），不看时间。
+  // 用"距离包络"：只有比历史最近还近 eps 才算有进展，绕路/回摆不算。
+  void SCANReplanFSM::updateExecutionProgress()
+  {
+    const rclcpp::Time now = node_->now();
+    const double d = (end_pt_.head<2>() - odom_pos_.head<2>()).norm();
+
+    if (exec_progress_time_.nanoseconds() == 0)
+    {
+      exec_progress_time_ = now;
+      exec_best_dist_ = d;
+    }
+    if (d < exec_best_dist_ - stuck_progress_eps_)
+    {
+      exec_best_dist_ = d;
+      exec_progress_time_ = now;
+    }
+
+    exec_no_progress_ = (now - exec_progress_time_).seconds() >= stuck_window_ &&
+                        odom_vel_.norm() < status_speed_tol_ &&
+                        !go2_execution_frozen_;
   }
 
   // 每个 tick 判定运行状态，按优先级发到 /local_planner/status：
@@ -1287,6 +1316,9 @@ namespace scan_planner
       // 当前时刻应该到达的位置
       Eigen::Vector3d pos = info->position_traj_.evaluateDeBoorT(t_cur);
 
+      // 统计执行进展（只看物理量：实际距离 + 实际速度）
+      updateExecutionProgress();
+
       // 【航点模式】已到当前航点附近（0.5 米内）→ 前往下一个航点
       if (isWaypointSequenceMode() &&
           current_wp_ + 1 < (int)active_waypoints_.size() &&
@@ -1306,10 +1338,19 @@ namespace scan_planner
         return;
       }
 
-      /* && (end_pt_ - pos).norm() < 0.5 */
-      // 【轨迹已经走完】
-      if (t_cur > info->duration_ - 1e-2)
+      // 【本段是否结束】
+      //   非航点模式：物理到达(与状态话题同源) / 连续无进展 / 很宽的绝对上限（只防死循环）
+      //   航点模式：保持原有"轨迹时长到"判据（本次不改）
+      const bool time_done = t_cur > info->duration_ - 1e-2;
+      const bool hard_cap = t_cur > info->duration_ + finish_timeout_extra_;
+      const bool segment_done =
+          isWaypointSequenceMode() ? time_done : (status_is_stop_ || exec_no_progress_ || hard_cap);
+      if (segment_done)
       {
+        // 复位执行进展统计
+        exec_progress_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+        exec_best_dist_ = 1e9;
+        exec_no_progress_ = false;
         // 还有下一个航点 → 继续前往
         if (isWaypointSequenceMode() && current_wp_ + 1 < (int)active_waypoints_.size())
         {
@@ -1339,7 +1380,7 @@ namespace scan_planner
         return;
       }
       // 离终点已经很近 → 不必重规划，继续走完
-      else if ((end_pt_ - pos).norm() < no_replan_thresh_)
+      else if ((end_pt_ - odom_pos_).norm() < no_replan_thresh_)
       {
         // cout << "near end" << endl;
         return;
