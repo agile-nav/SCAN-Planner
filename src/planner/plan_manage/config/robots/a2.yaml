@@ -44,13 +44,14 @@ scan_planner_node:
     grid_map.double_cylinder_offset: 0.18
     # 竖直膨胀（注意：参数名与论文的 d_up/d_down 相反，按代码口径填）：
     #   保护区间 = [h_c − z_up, h_c + z_down]，h_c 为机身中心离地高度
-    grid_map.obstacles_inflation_z_up: 0.15
+    grid_map.obstacles_inflation_z_up: 0.1
     grid_map.obstacles_inflation_z_down: 0.1
 
 closed_loop_controller:
   ros__parameters:
     # 闭环控制器的前进速度上限(米/秒)
     max_vx: 1.0
+    max_vy: 0.5
 
 go2_kinematic_sim:
   ros__parameters:

@@ -111,7 +111,7 @@ scan_planner_node:
     # 物理限制：最大速度(米/秒)。规划出的轨迹不允许超过它。
     manager.max_vel: 0.75
     # 物理限制：最大加速度(米/秒²)
-    manager.max_acc: 0.5
+    manager.max_acc: 1.5
     manager.max_jerk: 4.0
     # B 样条相邻控制点的间距(米)：越小轨迹越灵活，但计算量越大
     manager.control_points_distance: 0.2
@@ -129,6 +129,6 @@ scan_planner_node:
     # dist0：期望的安全距离(米)——离障碍至少留这么远才开始“不惩罚”
     optimization.dist0: 0.2
     optimization.max_vel: 0.75
-    optimization.max_acc: 0.5
+    optimization.max_acc: 1.5
     # order：B 样条的阶数。3 表示三次 B 样条（常用值，一般不用改）
     optimization.order: 3
