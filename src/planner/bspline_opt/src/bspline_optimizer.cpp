@@ -45,6 +45,10 @@ namespace scan_planner
     // B 样条阶数（默认 3）
     if (!node->has_parameter("optimization.order")) node->declare_parameter<int>("optimization.order", 3);
     order_ = static_cast<int>(node->get_parameter("optimization.order").as_int());
+    // 【P15】A* 失败时是否用障碍法线兜底
+    if (!node->has_parameter("optimization.rebound_fallback_enable"))
+      node->declare_parameter<bool>("optimization.rebound_fallback_enable", true);
+    rebound_fallback_enable_ = node->get_parameter("optimization.rebound_fallback_enable").as_bool();
   }
 
 // 注入地图，供避障查询使用。
@@ -88,6 +92,57 @@ namespace scan_planner
   /* This function is very similar to check_collision_and_rebound(). 
    * It was written separately, just because I did it once and it has been running stably since March 2020.
    * But I will merge then someday.*/
+  // 【P15】A* 拿不到绕行路径时的兜底：直接用“最近的障碍面 + 外法线”给出推出方向。
+  //   对段内每个真的撞着的控制点：沿 8 个水平方向逐步外探（每步 = 地图分辨率），
+  //   取“最先脱离障碍”的方向；障碍面点记进 base_point、外法线记进 direction。
+  //   语义与 A* 版本一致：cost 仍按 (point - base)·direction >= clearance 往外推。
+  void BsplineOptimizer::synthesizeReboundFromObstacle(const std::pair<int, int> &seg)
+  {
+    const double step = grid_map_->getResolution();
+    const int k_max = std::max(1, static_cast<int>(std::ceil(0.8 / step)));
+    const double k_ang[8] = {0, 45, 90, 135, 180, 225, 270, 315};
+    int filled = 0;
+    for (int j = seg.first; j <= seg.second; ++j)
+    {
+      if (j <= 0 || j >= static_cast<int>(cps_.points.cols()))
+        continue;
+      const double yaw_j = estimateControlPointYaw(cps_.points, j);
+      if (grid_map_->getInflateOccupancy(cps_.points.col(j), yaw_j) == 0)
+        continue;
+      Eigen::Vector3d best_dir = Eigen::Vector3d::Zero(), best_base = cps_.points.col(j);
+      int best_k = k_max + 1;
+      for (int a = 0; a < 8; ++a)
+      {
+        const double th = k_ang[a] * M_PI / 180.0;
+        const Eigen::Vector3d d(std::cos(th), std::sin(th), 0.0);
+        for (int k = 1; k <= k_max; ++k)
+        {
+          if (grid_map_->getInflateOccupancy(cps_.points.col(j) + d * (step * k), yaw_j) == 0)
+          {
+            if (k < best_k)
+            {
+              best_k = k;
+              best_dir = d;
+              best_base = cps_.points.col(j) + d * (step * (k - 1));
+            }
+            break;
+          }
+        }
+      }
+      if (best_dir.squaredNorm() < 1e-12)
+        continue;
+      cps_.flag_temp[j] = true;
+      cps_.base_point[j].push_back(best_base);
+      cps_.direction[j].push_back(best_dir);
+      ++filled;
+    }
+    if (filled > 0)
+      RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                  "[P15] no A-star path for seg(%d,%d); synthesized %d obstacle-normal rebound directions",
+                  seg.first, seg.second, filled);
+  }
+
+
 // ==========================================================================
 // 【避障准备】initControlPoints：找出“哪些控制点撞了障碍”，并算出脱困方向。
 //   1. 沿轨迹逐段采样，用带朝向的碰撞检测找出“碰撞段”
@@ -324,6 +379,9 @@ namespace scan_planner
       // A* 路径缺失 → 跳过这一段
       if (i >= a_star_paths.size() || a_star_paths[i].size() < 2)
       {
+        // 【P15】没有 A* 路径 → 用“障碍面 + 外法线”兜底给出推出方向（同一套语义）
+        if (rebound_fallback_enable_)
+          synthesizeReboundFromObstacle(segment_ids[i]);
         RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
                     "Skip invalid A-star path while assigning control point directions");
         continue;
@@ -1003,57 +1061,59 @@ namespace scan_planner
     if (flag_new_obs_valid)
     {
       vector<vector<Eigen::Vector3d>> a_star_paths;
-      for (size_t i = 0; i < segment_ids.size(); ++i)
+      // 【P15】改成“二分重试”：A* 失败时不再把这一段和下一段合并（越并越长、跨的障碍越多，
+      //   实测两段都失败），而是从中间二分，让每半更短、更容易绕过去；
+      //   只有短到 out-first <= 1 仍失败，才保留为“无方向”段（后面由障碍法线兜底）。
       {
-        /*** a star search ***/
-        Eigen::Vector3d in(cps_.points.col(segment_ids[i].first)), out(cps_.points.col(segment_ids[i].second));
-        // 在这一段的起终点之间跑一次 A*
-        ASTAR_RET ret = a_star_->AstarSearch(grid_map_->getResolution(), in, out);
-        if (ret != ASTAR_RET::SUCCESS)
+        vector<std::pair<int, int>> queue(segment_ids.begin(), segment_ids.end());
+        vector<std::pair<int, int>> resolved;
+        a_star_paths.clear();
+        a_star_paths.reserve(queue.size());
+        size_t head = 0;
+        int guard = 0, split_cnt = 0;
+        while (head < queue.size() && guard++ < 400)
         {
-          // 【诊断】A* 失败一次打全：类型 / 段号 / 段长 / 两端坐标 / 两端是否在膨胀区(1=障碍 0=空 -1=出图)
-          const int id_in = segment_ids[i].first, id_out = segment_ids[i].second;
-          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
-              "[A-star FAIL] type=%s seg(in_id=%d,out_id=%d) len=%.2fm | in=(%.2f,%.2f,%.2f) occ_in=%d | "
-              "out=(%.2f,%.2f,%.2f) occ_out=%d",
-              replanFailureToString(ret == ASTAR_RET::INIT_ERR ? ReplanFailure::ASTAR_INIT_ERR
-                                                               : ReplanFailure::ASTAR_NO_PATH),
-              id_in, id_out, (out - in).norm(),
-              in.x(), in.y(), in.z(),
-              grid_map_->getInflateOccupancy(in, estimateControlPointYaw(cps_.points, id_in)),
-              out.x(), out.y(), out.z(),
-              grid_map_->getInflateOccupancy(out, estimateControlPointYaw(cps_.points, id_out)));
-        }
-        if (ret == ASTAR_RET::SUCCESS)
-        {
-          vector<Eigen::Vector3d> path = a_star_->getPath();
-          if (path.size() < 2)
+          const std::pair<int, int> seg = queue[head++];
+          const Eigen::Vector3d in(cps_.points.col(seg.first)), out(cps_.points.col(seg.second));
+          const ASTAR_RET ret = a_star_->AstarSearch(grid_map_->getResolution(), in, out);
+          if (ret != ASTAR_RET::SUCCESS)
           {
+            // 【诊断】A* 失败一次打全：类型 / 段号 / 段长 / 两端坐标 / 两端是否在膨胀区(1=障碍 0=空 -1=出图)
             RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
-                        "A-star path has fewer than 2 points; drop collision segment");
-            // A* 路径太短 → 丢掉这一段
-            segment_ids.erase(segment_ids.begin() + i);
-            i--;
+                "[A-star FAIL] type=%s seg(in_id=%d,out_id=%d) len=%.2fm | in=(%.2f,%.2f,%.2f) occ_in=%d | "
+                "out=(%.2f,%.2f,%.2f) occ_out=%d",
+                replanFailureToString(ret == ASTAR_RET::INIT_ERR ? ReplanFailure::ASTAR_INIT_ERR
+                                                                 : ReplanFailure::ASTAR_NO_PATH),
+                seg.first, seg.second, (out - in).norm(),
+                in.x(), in.y(), in.z(),
+                grid_map_->getInflateOccupancy(in, estimateControlPointYaw(cps_.points, seg.first)),
+                out.x(), out.y(), out.z(),
+                grid_map_->getInflateOccupancy(out, estimateControlPointYaw(cps_.points, seg.second)));
+          }
+          vector<Eigen::Vector3d> path;
+          if (ret == ASTAR_RET::SUCCESS)
+            path = a_star_->getPath();
+          const bool got_path = (ret == ASTAR_RET::SUCCESS && path.size() >= 2);
+
+          if (!got_path && seg.second - seg.first >= 2) // 还够长 → 二分重试
+          {
+            const int mid = (seg.first + seg.second) / 2;
+            queue.push_back(std::make_pair(seg.first, mid));
+            queue.push_back(std::make_pair(mid, seg.second));
+            if (++split_cnt % 10 == 1)
+              RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                          "[P15] A-star failed on seg(%d,%d); split at %d and retry (%d splits so far)",
+                          seg.first, seg.second, mid, split_cnt);
             continue;
           }
-          a_star_paths.push_back(path);
+          if (!got_path)
+            RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                        "[P15] A-star failed on the shortest seg(%d,%d); keep optimizing without a rebound direction",
+                        seg.first, seg.second);
+          resolved.push_back(seg);
+          a_star_paths.push_back(got_path ? path : vector<Eigen::Vector3d>());
         }
-        // 搜索失败但后面还有段落 → 把它和下一段合并再试
-        else if (ret == ASTAR_RET::SEARCH_ERR && i + 1 < segment_ids.size())
-        {
-          segment_ids[i].second = segment_ids[i + 1].second;
-          segment_ids.erase(segment_ids.begin() + i + 1);
-          --i;
-          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
-                      "A-star failed on a collision segment; merge it with the next segment");
-        }
-        else
-        {
-          // 其它错误 → 同样丢掉这一段
-          RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"), "A-star error");
-          segment_ids.erase(segment_ids.begin() + i);
-          i--;
-        }
+        segment_ids = resolved;
       }
 
       /*** Assign parameters to each segment ***/
@@ -1061,6 +1121,9 @@ namespace scan_planner
       {
         if (i >= a_star_paths.size() || a_star_paths[i].size() < 2)
         {
+          // 【P15】没有 A* 路径 → 用“障碍面 + 外法线”兜底给出推出方向（同一套语义）
+          if (rebound_fallback_enable_)
+            synthesizeReboundFromObstacle(segment_ids[i]);
           RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
                       "Skip invalid A-star path while assigning rebound directions");
           continue;
