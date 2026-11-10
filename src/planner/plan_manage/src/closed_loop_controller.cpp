@@ -102,7 +102,7 @@ public:
   }
 
 private:
-  static constexpr double kMaxVYawLimit = 1.0;
+  static constexpr double kMaxVYawLimit = 1.2;   // 【P14b】1.0 → 1.2 rad/s（原本是硬上限，只改 yaml 无效）
 
   // 把角度规整到 [-π, π]，避免“359 度和 1 度其实很接近”这类计算错误。
   // 把角度规整到 [-π, π]（359° 和 1° 其实是同一个方向）

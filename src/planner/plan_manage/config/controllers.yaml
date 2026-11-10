@@ -23,7 +23,7 @@ closed_loop_controller:
     time_lead: 0.2
     max_vx: 0.75
     max_vy: 0.35
-    max_vyaw: 1.0
+    max_vyaw: 1.2
     # 距离终点小于这个值(米)且已走完轨迹，就发“停下”。
     finish_dist: 0.15
     # 轨迹整体超时(秒)：超过 traj_duration + 它仍未走完 → 丢弃该轨迹并发 0。0=关闭
@@ -61,7 +61,7 @@ go2_kinematic_sim:
     init_yaw: 0.0
     max_vx: 0.75
     max_vy: 0.35
-    max_vyaw: 1.0
+    max_vyaw: 1.2
     # 超过这个时间(秒)没收到新速度指令，就把速度清零（失联停车）。
     cmd_timeout: 0.3
     sim_rate: 100.0
