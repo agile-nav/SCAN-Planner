@@ -30,6 +30,11 @@ scan_planner_node:
     fsm.planning_horizon: 5.0
     manager.planning_horizon: 5.0
     # 速度上限(米/秒)
+    # A* 搜索池边长(格)：覆盖 = ±边长×分辨率/2，以每段碰撞区间的中点为中心
+    # 100 => ±2.5 m（约 48 MB）；160 => ±4.0 m（约 200 MB）
+    # 实测：A* 失败全是 SEARCH_ERR(ret=2)、失败段长中位 1.56 m/最大 3.35 m，
+    # 端点都在 100 的池子内，但绕行通路可能被池子卡住 ⇒ 本轮实验放大到 160
+    manager.a_star_pool_size: 160
     manager.max_vel: 1.0
     optimization.max_vel: 1.0
     # 局部滑动地图尺寸(米)与更新范围(米)
