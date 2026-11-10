@@ -49,6 +49,8 @@ public:
     kp_pos_ = declare_parameter<double>("kp_pos", 0.8);
     // 转向增益：朝向误差 → 转向角速度
     kp_yaw_ = declare_parameter<double>("kp_yaw", 1.5);
+    // 允许参考时刻超前"实际投影进度"的时间(秒)
+    time_lead_ = declare_parameter<double>("time_lead", 0.2);
     // 前进/横移/转向的速度上限（转向另有硬上限）
     max_vx_ = declare_parameter<double>("max_vx", 0.75);
     max_vy_ = declare_parameter<double>("max_vy", 0.35);
@@ -307,7 +309,12 @@ private:
     // 朝向已对齐 → 解除冻结，允许规划器继续推进轨迹
     publishExecutionFrozen(false);
     // 轨迹执行时间往前推进 dt
-    exec_time_ = std::min(traj_duration_, exec_time_ + dt);
+    // 【参考时刻跟随实际进度】原来只按墙钟推进：机器人一滞后，期望点就越跑越远，
+    //   位置纠偏 kp_pos*误差 被 clampNorm(max_vx) 限住后饱和（表现为"一直最大速度还是
+    //   追不上"）。这里把上限压到"实测位置在轨迹上的投影 + time_lead_"，最多只超前
+    //   实际进度 time_lead_ 秒。
+    const double t_proj = projectOntoTrajClamped(odom_pos_, exec_time_);
+    exec_time_ = std::min(traj_duration_, std::min(exec_time_ + dt, t_proj + time_lead_));
     // 记住这次时间，供下一轮计算 dt（此时 exec_time_ 已经推进）
     last_update_time_ = current_time;
     // 用推进后的时刻重新取目标位置
@@ -367,7 +374,7 @@ private:
   double odom_yaw_{0.0};
   double exec_time_{0.0};
   rclcpp::Time last_update_time_{0, 0, RCL_ROS_TIME};
-  double time_forward_, heading_error_threshold_, kp_pos_, kp_yaw_;
+  double time_forward_, time_lead_, heading_error_threshold_, kp_pos_, kp_yaw_;
   double max_vx_, max_vy_, max_vyaw_, finish_dist_;
   double traj_timeout_extra_{3.0};
   rclcpp::Time traj_recv_time_{0, 0, RCL_ROS_TIME};
