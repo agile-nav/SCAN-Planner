@@ -239,6 +239,8 @@ namespace scan_planner
     bool callEmergencyStop(Eigen::Vector3d stop_pos);                          // front-end and back-end method
     bool planFromCurrentTraj();
     void setStartStateFromOdomOrCurrentTraj();
+    // 把实测位置投影到当前局部轨迹，返回对应轨迹时刻（P0：仅诊断用）
+    double projectOdomToTrajParam(double t_hint) const;
 
     /* return value: std::pair< Times of the same state be continuously called, current continuously called state > */
     // 切换状态（例如从 GEN_NEW_TRAJ 切到 EXEC_TRAJ），并打印日志

@@ -690,6 +690,35 @@ namespace scan_planner
   // 处理上面的“冻结”信号：
   // 如果底盘正在原地转向，就把局部轨迹的开始时间往后推，等于让轨迹时钟暂停，
   // 这样轨迹不会在机器人还没转过来时就白白走完。
+  // 把机器人实测位置投影到当前局部轨迹上，返回它对应的轨迹时刻。
+  //   窗口 [-3.0, +1.0] 秒：偏向负方向是因为机器人通常落后；窗口化避免轨迹自交跳支；
+  //   只比较 xy（轨迹与 odom 的 z 有约 0.14 m 偏置）。
+  //   P0 阶段只用于诊断，不参与任何决策。
+  double SCANReplanFSM::projectOdomToTrajParam(double t_hint) const
+  {
+    const LocalTrajData *info = &planner_manager_->local_data_;
+    if (info->duration_ <= 1e-5)
+      return std::max(0.0, t_hint);
+
+    const double t_max = info->duration_;
+    double best_t = std::min(std::max(t_hint, 0.0), t_max);
+    const double lo = std::max(0.0, t_hint - 3.0);
+    const double hi = std::min(t_max, t_hint + 1.0);
+    constexpr double step = 0.02;
+    double best_d = std::numeric_limits<double>::max();
+    for (double t = lo; t <= hi + 1e-9; t += step)
+    {
+      const Eigen::Vector3d p = info->position_traj_.evaluateDeBoorT(t);
+      const double d = (p.head<2>() - odom_pos_.head<2>()).squaredNorm();
+      if (d < best_d)
+      {
+        best_d = d;
+        best_t = t;
+      }
+    }
+    return best_t;
+  }
+
   void SCANReplanFSM::updateLocalTrajTimeFreeze()
   {
     // 距上次处理过了多少秒
@@ -708,6 +737,19 @@ namespace scan_planner
     if ((go2_execution_frozen_ || !motion_enabled_) && info->start_time_.seconds() > 1e-5)
       // 效果：轨迹时钟暂停，机器人原地转向的时间不会“消耗”轨迹
       info->start_time_ += rclcpp::Duration::from_seconds(dt);
+
+    // 1 Hz 诊断（纯观测）：t_cur 与"实测位置投影 + 名义超前量"的关系
+    if (have_odom_ && info->duration_ > 1e-5)
+    {
+      const double t_wall = (now - info->start_time_).seconds();
+      if (t_wall > 0.0)
+      {
+        const double t_proj = projectOdomToTrajParam(t_wall);
+        RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                             "[traj-clock] t_wall=%.2f t_proj=%.2f t_cur=%.2f lead=%.2f max_lead=%.2f dur=%.2f",
+                             t_wall, t_proj, t_wall, t_wall - t_proj, 0.0, info->duration_);
+      }
+    }
   }
 
   // 收到新目标时进入 running；若之前是 goal_reached，这里把它重置。

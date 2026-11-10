@@ -13,6 +13,7 @@
 //   发布 planning/go2_execution_frozen —— 告诉规划器“我在原地转向，先暂停轨迹”
 // ============================================================================
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -129,6 +130,28 @@ private:
     return direction.head<2>().squaredNorm() < 1e-4
         // 还是退化的话就用里程计朝向；否则用 atan2 算出方向角
         ? odom_yaw_ : std::atan2(direction.y(), direction.x());
+  }
+
+  // 把机器人当前位置投影到当前轨迹上，返回对应时刻（窗口化，避免轨迹自交时跳到另一支；
+  //   只比较 xy —— 轨迹与 odom 在 z 上有约 0.14 m 系统性偏置）。
+  //   注意：P0 阶段只是"观测用"，不参与任何控制决策。
+  double projectOntoTrajClamped(const Eigen::Vector3d &p, double t0) const
+  {
+    const double lo = std::max(0.0, t0 - 0.5);
+    const double hi = std::min(traj_duration_, t0 + 1.0);
+    double t_best = std::clamp(t0, 0.0, traj_duration_);
+    double d_best = std::numeric_limits<double>::max();
+    constexpr double step = 0.02;
+    for (double t = lo; t <= hi + 1e-9; t += step)
+    {
+      const double d = (traj_[0].evaluateDeBoorT(t).head<2>() - p.head<2>()).squaredNorm();
+      if (d < d_best)
+      {
+        d_best = d;
+        t_best = t;
+      }
+    }
+    return t_best;
   }
 
   // 发送一个“停下”的速度指令（可选同时原地转向）。
@@ -297,6 +320,15 @@ private:
     if (exec_time_ >= traj_duration_ && pos_error.norm() < finish_dist_)
       // 发全 0 指令 → 停住
       command = geometry_msgs::msg::Twist();
+    // 1 Hz 诊断（纯观测）：exec_time 与"实测位置在轨迹上的投影"的差 = 参考超前量
+    {
+      const double t_proj = projectOntoTrajClamped(odom_pos_, exec_time_);
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+                           "[ctl-clock] exec_time=%.2f t_proj=%.2f lead=%.2f dur=%.2f pos_err=%.2f",
+                           exec_time_, t_proj, exec_time_ - t_proj, traj_duration_,
+                           pos_error.norm());
+    }
+
     // 发布速度指令
     cmd_vel_pub_->publish(command);
   }
