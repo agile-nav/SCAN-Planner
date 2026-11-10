@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <string>
 
 using namespace std;
 using namespace Eigen;
@@ -457,6 +458,73 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     if (elapsed > 0.1)
         RCLCPP_WARN(rclcpp::get_logger("path_searching"),
                     "A-star path search took %.3fs, iter=%d", elapsed, num_iter);
+
+    // 【诊断 P12】"为什么搜不到路"——把搜索平面**真实看到**的东西打出来（每 5 秒最多一张）。
+    //   与搜索完全一致：判定朝向 = 两端连线方向；每个 (x,y) 格的 z 按两端线性插值。
+    //   图上：. 空   # 占据   o 出图   S 起点   E 终点
+    {
+      static double last_dump_s = -1e9;
+      const double now_s =
+          std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+      if (now_s - last_dump_s > 5.0)
+      {
+        last_dump_s = now_s;
+        const double diag_yaw = std::atan2(end_pt(1) - start_pt(1), end_pt(0) - start_pt(0));
+        const Eigen::Vector2d s_xy = start_pt.head<2>(), e_xy = end_pt.head<2>();
+        const Eigen::Vector2d d_xy = e_xy - s_xy;
+        const double len2 = d_xy.squaredNorm();
+        auto plane_z = [&](const Eigen::Vector2d &q) -> double {
+          if (len2 < 1e-8)
+            return start_pt(2);
+          double r = (q - s_xy).dot(d_xy) / len2;
+          r = std::max(0.0, std::min(1.0, r));
+          return start_pt(2) + r * (end_pt(2) - start_pt(2));
+        };
+        int ring_occ = 0;
+        for (int dy = -1; dy <= 1; ++dy)
+          for (int dx = -1; dx <= 1; ++dx)
+            if (dx != 0 || dy != 0)
+            {
+              const Eigen::Vector3d q =
+                  end_pt + Eigen::Vector3d(dx * step_size_, dy * step_size_, 0.0);
+              if (checkOccupancy(q, std::atan2(static_cast<double>(dy), static_cast<double>(dx))) != 0)
+                ++ring_occ;
+            }
+        const int occ_s = checkOccupancy(Index2Coord(start_idx), diag_yaw);
+        const int occ_e = checkOccupancy(Index2Coord(end_idx), diag_yaw);
+        constexpr double CELL = 0.2;
+        constexpr int NR = 12; // ±2.4 m
+        const Eigen::Vector3d mid = (start_pt + end_pt) / 2.0;
+        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                    "[Astar] 平面占用图: start=(%.2f,%.2f,%.2f) occ_s=%d | end=(%.2f,%.2f,%.2f) occ_e=%d | "
+                    "Δz=%.2fm E周围8格被占=%d/8 | expanded=%d blocked=%d pool=±%.2fm | 1格=0.20m .空 #占据 o出图 S起点 E终点",
+                    start_pt(0), start_pt(1), start_pt(2), occ_s,
+                    end_pt(0), end_pt(1), end_pt(2), occ_e,
+                    end_pt(2) - start_pt(2), ring_occ, num_iter, blocked_cnt,
+                    POOL_SIZE_(0) * step_size_ * 0.5);
+        std::string map;
+        for (int iy = NR; iy >= -NR; --iy)
+        {
+          map += (iy % 3 == 0)
+                     ? ("   " + std::string(iy < 0 ? "-" : "+") + std::to_string(std::abs(iy) * 20) + "cm ")
+                     : std::string("       ");
+          for (int ix = -NR; ix <= NR; ++ix)
+          {
+            Eigen::Vector3d q(mid(0) + ix * CELL, mid(1) + iy * CELL, 0.0);
+            q(2) = plane_z(q.head<2>());
+            const int o = checkOccupancy(q, diag_yaw);
+            char c = (o < 0) ? 'o' : ((o > 0) ? '#' : '.');
+            if ((q.head<2>() - s_xy).norm() < CELL * 0.5)
+              c = 'S';
+            if ((q.head<2>() - e_xy).norm() < CELL * 0.5)
+              c = 'E';
+            map += c;
+          }
+          map += "\n";
+        }
+        RCLCPP_WARN(rclcpp::get_logger("path_searching"), "%s", map.c_str());
+      }
+    }
 
     reportAstarFailure("SEARCH_ERR(no path inside pool)");
     // 返回“搜索失败”
