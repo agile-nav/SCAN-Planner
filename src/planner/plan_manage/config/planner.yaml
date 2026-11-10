@@ -57,6 +57,8 @@ scan_planner_node:
     fsm.finish_timeout_extra: 30.0
     # 结束/放弃目标时发一条"停在原地"的轨迹通知控制器刹停（默认 true，不建议关）
     fsm.stop_traj_on_finish: true
+    # 轨迹时钟连续夹住(秒)：不允许 t_cur 比"实际投影进度"超前超过这么多。0=关闭
+    fsm.traj_clock_max_lead: 0.3
 
     # 下面四项只在 navi_mode=3（参考路径）下生效，用来判断"参考坐标系"是否还可信。
     # 参考路径写在地图系/参考系下，规划时要靠 TF 把它换算到 world 系；

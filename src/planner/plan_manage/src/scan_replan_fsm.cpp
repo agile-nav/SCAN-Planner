@@ -121,6 +121,7 @@ namespace scan_planner
     stuck_progress_eps_ = load_parameter<double>(node_, "fsm.finish_progress_eps", 0.05);
     finish_timeout_extra_ = load_parameter<double>(node_, "fsm.finish_timeout_extra", 30.0);
     stop_traj_on_finish_ = load_parameter<bool>(node_, "fsm.stop_traj_on_finish", true);
+    traj_clock_max_lead_ = load_parameter<double>(node_, "fsm.traj_clock_max_lead", 0.3);
 
     // ---------- 第3步：预设航点模式下，解析航点数组 ----------
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
@@ -734,23 +735,41 @@ namespace scan_planner
 
     // 取出当前局部轨迹数据
     LocalTrajData *info = &planner_manager_->local_data_;
-    // 若底盘冻结且轨迹已经开始 → 把轨迹的“开始时间”往后推 dt
-    if ((go2_execution_frozen_ || !motion_enabled_) && info->start_time_.seconds() > 1e-5)
-      // 效果：轨迹时钟暂停，机器人原地转向的时间不会“消耗”轨迹
-      info->start_time_ += rclcpp::Duration::from_seconds(dt);
+    if (info->start_time_.seconds() < 1e-5 || info->duration_ <= 1e-5)
+      return;
 
-    // 1 Hz 诊断（纯观测）：t_cur 与"实测位置投影 + 名义超前量"的关系
-    if (have_odom_ && info->duration_ > 1e-5)
+    // 【轨迹时钟跟随实际进度】连续夹住：不允许 t_cur 比"实际投影进度"超前超过 max_lead。
+    //   为什么改 start_time_ 而不是各个 t_cur 调用点：t_cur 有 5 个消费者 ——
+    //     ① planFromCurrentTraj 的起点速度/加速度
+    //     ② setStartStateFromOdomOrCurrentTraj 的速度/加速度
+    //     ③ checkCollisionCallback 的抽样位置与"还有多久撞"
+    //     ④ EXEC_TRAJ 的重规划冷却 (start_pos_ - pos)
+    //     ⑤ reboundReplan 的 Case B 内部自己算的 t_cur（在 planner_manager 里）
+    //   改时钟本身，5 处一起生效，不会漏掉 Case B。
+    const double t_wall = (now - info->start_time_).seconds();
+    double t_proj = t_wall;
+    if (have_odom_ && t_wall > 0.0)
+      t_proj = projectOdomToTrajParam(t_wall);
+
+    if (traj_clock_max_lead_ > 0.0 && have_odom_ && t_wall > 0.0)
     {
-      const double t_wall = (now - info->start_time_).seconds();
-      if (t_wall > 0.0)
-      {
-        const double t_proj = projectOdomToTrajParam(t_wall);
-        RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                             "[traj-clock] t_wall=%.2f t_proj=%.2f t_cur=%.2f lead=%.2f max_lead=%.2f dur=%.2f",
-                             t_wall, t_proj, t_wall, t_wall - t_proj, 0.0, info->duration_);
-      }
+      const double lead = t_wall - t_proj;
+      if (lead > traj_clock_max_lead_)
+        info->start_time_ += rclcpp::Duration::from_seconds(lead - traj_clock_max_lead_);
     }
+
+    // 1 Hz 诊断：t_cur 与"实际投影进度 + 允许超前量"的关系
+    {
+      const double t_cur_now = (now - info->start_time_).seconds();
+      RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                           "[traj-clock] t_wall=%.2f t_proj=%.2f t_cur=%.2f lead=%.2f max_lead=%.2f dur=%.2f",
+                           t_wall, t_proj, t_cur_now, t_cur_now - t_proj, traj_clock_max_lead_,
+                           info->duration_);
+    }
+
+    // 原有逻辑：底盘原地转向 / 外部未使能期间 → 冻结轨迹时钟
+    if (go2_execution_frozen_ || !motion_enabled_)
+      info->start_time_ += rclcpp::Duration::from_seconds(dt);
   }
 
   // 收到新目标时进入 running；若之前是 goal_reached，这里把它重置。
