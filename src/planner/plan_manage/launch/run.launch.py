@@ -83,6 +83,14 @@ def _robot_description_command(robot):
 def _setup(context):
     scan_share = get_package_share_directory("scan_planner")
     planner_yaml = os.path.join(scan_share, "config", "planner.yaml")
+    # 可选的"参数覆盖文件"：追加到各节点参数列表的最后（优先级最高）。
+    #   用于 A/B / 逐步验证：只需换一个 yaml，不改仓库里的配置文件、也不用重新编译。
+    #   文件里按节点名分段（scan_planner_node / closed_loop_controller …），
+    #   同一个文件会同时喂给规划器与控制器，各取自己那一段。
+    override_yaml = LaunchConfiguration("param_overrides").perform(context).strip()
+    if override_yaml and not os.path.isfile(override_yaml):
+        raise RuntimeError("param_overrides must reference an existing YAML file: %s" % override_yaml)
+    override_params = [override_yaml] if override_yaml else []
     controllers_yaml = os.path.join(scan_share, "config", "controllers.yaml")
     is_real = _as_bool(LaunchConfiguration("is_real_world").perform(context))
     use_sim_time = _as_bool(LaunchConfiguration("use_sim_time").perform(context))
@@ -185,7 +193,8 @@ def _setup(context):
             output="screen",
             parameters=[planner_yaml, planner_profile_params]
             + ([keypoints_file] if keypoints_file else [])
-            + [planner_overrides],
+            + [planner_overrides]
+            + override_params,
             remappings=[
                 ("body_pose", body_pose),
                 ("sensor_pose", sensor_pose),
@@ -247,7 +256,7 @@ def _setup(context):
                 executable="closed_loop_controller",
                 name="closed_loop_controller",
                 output="screen",
-                parameters=[controllers_yaml, controller_profile_params, common],
+                parameters=[controllers_yaml, controller_profile_params, common] + override_params,
                 remappings=[
                     ("body_pose", body_pose),
                     ("cmd_vel", "/cmd_vel" if is_real else "/quad_0/cmd_vel"),
@@ -362,6 +371,8 @@ def generate_launch_description():
             DeclareLaunchArgument("init_y", default_value=""),
             DeclareLaunchArgument("init_z", default_value=""),
             DeclareLaunchArgument("use_sim_time", default_value="false"),
+            # 可选：额外的参数覆盖文件路径（A/B 测试用；应用到规划器与控制器的参数列表最后）
+            DeclareLaunchArgument("param_overrides", default_value=""),
             OpaqueFunction(function=_setup),
         ]
     )
