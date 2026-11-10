@@ -48,6 +48,7 @@ scan_planner_node:
     grid_map.double_cylinder_radius: 0.25
     grid_map.double_cylinder_offset: 0.18
     # 【P11 自过滤】滤掉机器人自身回波（0=关闭）。先试 0.45，看 A* 的 expanded 是否明显变大
+    grid_map.self_filter_radius: 0.45
     # 竖直膨胀（注意：参数名与论文的 d_up/d_down 相反，按代码口径填）：
     #   保护区间 = [h_c − z_up, h_c + z_down]，h_c 为机身中心离地高度
     grid_map.obstacles_inflation_z_up: 0.1
