@@ -203,18 +203,28 @@ namespace scan_planner
         vector<Eigen::Vector3d> path = a_star_->getPath();
         if (path.size() < 2)
         {
-          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"), "A-star path has fewer than 2 points");
-          return a_star_paths;
+          // A* 返回的路径太短 → 这一段拿不到推出方向，但不必放弃整条优化
+          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                      "A-star path has fewer than 2 points; keep optimizing without a rebound direction");
+          a_star_paths.push_back(std::vector<Eigen::Vector3d>());
+          continue;
         }
         // 保存这条路径（后面只用来确定“往哪边推”）
         a_star_paths.push_back(path);
       }
       else
       {
-        // A* 都失败了 → 放弃这次优化
-        RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"), "A-star failed; aborting optimization");
-        last_failure_ = (ret == ASTAR_RET::INIT_ERR) ? ReplanFailure::ASTAR_INIT_ERR : ReplanFailure::ASTAR_NO_PATH;
-        return a_star_paths;
+        // A* 失败：不再放弃整条优化（旧实现在这里 return，只要第一段（往往就是起点所在
+        // 的那段）搜不出来，整个 replan 就直接失败，机器狗原地不动 → 死锁）。
+        // 这里 push 一条空路径，保持 a_star_paths 与 segment_ids 一一对应，后面 assign
+        // 阶段会自动跳过它（这一段没有推出方向）。优化器仍有机会靠平滑项/避障项绕开；
+        // 真的绕不开时，会在收尾的碰撞检查里以 START_IN_OBSTACLE / OPTIMIZE_FAILED 等
+        // 更准确的原因失败。
+        // 注意：这里不写 last_failure_，避免"还能继续优化"的情况被上报成一次硬失败。
+        RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                    "A-star failed on a collision segment; keep optimizing without a rebound direction (ret=%d)",
+                    static_cast<int>(ret));
+        a_star_paths.push_back(std::vector<Eigen::Vector3d>());
       }
     }
 

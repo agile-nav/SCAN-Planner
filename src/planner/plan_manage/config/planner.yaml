@@ -63,6 +63,9 @@ scan_planner_node:
     fsm.replan_retry_enable: true
     fsm.replan_retry_min: 0.2
     fsm.replan_retry_max: 1.0
+    # 重规划起点脱困(m)：起点若落在膨胀层里（机器人自身位置常在自己的膨胀层内），
+    # 沿"起点→局部目标"方向最多前推这么多米去找第一个自由格；0=关闭
+    fsm.start_escape_max_offset: 1.0
 
     # 下面四项只在 navi_mode=3（参考路径）下生效，用来判断"参考坐标系"是否还可信。
     # 参考路径写在地图系/参考系下，规划时要靠 TF 把它换算到 world 系；

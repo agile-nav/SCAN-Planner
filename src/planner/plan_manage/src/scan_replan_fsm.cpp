@@ -125,6 +125,8 @@ namespace scan_planner
     replan_retry_enable_ = load_parameter<bool>(node_, "fsm.replan_retry_enable", true);
     replan_retry_min_ = load_parameter<double>(node_, "fsm.replan_retry_min", 0.2);
     replan_retry_max_ = load_parameter<double>(node_, "fsm.replan_retry_max", 1.0);
+    // 起点脱困：起点落在膨胀层里时，沿"起点→局部目标"方向最多前推的距离 [m]
+    start_escape_max_offset_ = load_parameter<double>(node_, "fsm.start_escape_max_offset", 1.0);
 
     // ---------- 第3步：预设航点模式下，解析航点数组 ----------
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
@@ -1843,6 +1845,51 @@ namespace scan_planner
     }
   }
 
+  // 起点“脱困”：把落在膨胀层里的重规划起点推到最近的自由格。
+  //   为什么需要它：机器人自身位置（脚边点云 / 贴身墙面）常常就落在自己的膨胀层内，
+  //   而“轨迹时钟跟随实际进度”之后，重规划起点 ≈ 机器人自身位置，于是
+  //     A* 起点调整会一路退出搜索池（INIT_ERR）、优化器会以
+  //     “First three control points are in obstacles” 失败 → 机器狗原地不动、时钟冻结 → 死锁。
+  //   做法：沿“起点 → 局部目标”方向逐格前推，最多 start_escape_max_offset_ 米。
+  bool SCANReplanFSM::pushStartPtOutOfInflation()
+  {
+    auto map = planner_manager_->grid_map_;
+    if (!map)
+      return false;
+
+    const double yaw = getOdomYaw();
+    // 起点本来就在自由格 → 什么都不用做
+    if (map->getInflateOccupancy(start_pt_, yaw) == 0)
+      return false;
+
+    Eigen::Vector2d dir = local_target_pt_.head<2>() - start_pt_.head<2>();
+    if (dir.norm() < 1e-3)
+      return false;
+    dir.normalize();
+
+    const double step = map->getResolution();
+    const int step_max = std::max(1, static_cast<int>(std::ceil(start_escape_max_offset_ / step)));
+    for (int k = 1; k <= step_max; ++k)
+    {
+      Eigen::Vector3d cand = start_pt_;
+      cand.head<2>() += dir * (step * k);
+      if (map->getInflateOccupancy(cand, yaw) == 0)
+      {
+        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                             "[replan] start point was inside an inflated cell; pushed forward by %.2f m",
+                             step * k);
+        start_pt_ = cand;
+        return true;
+      }
+    }
+
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                         "[replan] no free start point within %.2f m; keep the original start",
+                         start_escape_max_offset_);
+    return false;
+  }
+
+
   // 调用规划总管做一次规划（先取局部目标点，再交给总管）。
   // 成功后把算出的轨迹打包成 Bspline 消息发布出去。
   // flag_use_poly_init：是否用多项式作为初始猜测；
@@ -1856,6 +1903,11 @@ namespace scan_planner
       setStatusReason(last_target_failure_);
       return false;
     }
+
+
+    // 第二步：起点脱困（需要“起点 → 局部目标”的方向，所以放在取到局部目标之后）。
+    // 起点若落在膨胀层里，就推向最近的自由格，别让 A*/优化器从一个“本来就撞着”的点出发。
+    pushStartPtOutOfInflation();
 
     // 第二步：让规划总管真正规划一条局部轨迹
     bool plan_success =

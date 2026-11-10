@@ -155,6 +155,8 @@ namespace scan_planner
     double replan_retry_min_{0.2}, replan_retry_max_{1.0};
     // 结束/放弃目标时发一条"停在原地"的轨迹通知控制器刹停
     bool stop_traj_on_finish_{true};
+    // 重规划起点脱困：起点落在膨胀层里时，沿"起点→局部目标"方向最多前推这么多米
+    double start_escape_max_offset_{1.0};
     bool enable_fail_safe_, need_hover_stop_;
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};
@@ -278,6 +280,8 @@ namespace scan_planner
     void publishSelfInflationMarker();
     void publishLocalPath(const UniformBspline &trajectory);
     double getOdomYaw() const;
+    // 重规划起点若落在膨胀层里，沿"起点→局部目标"方向前推到最近的自由格
+    bool pushStartPtOutOfInflation();
     double estimateYawFromSegment(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const;
     void updateLocalTrajTimeFreeze();
     // 收到新目标时调用：进入 running 并清掉 goal_reached/去抖状态
