@@ -1504,8 +1504,11 @@ namespace scan_planner
       //   航点模式：保持原有"轨迹时长到"判据（本次不改）
       const bool time_done = t_cur > info->duration_ - 1e-2;
       const bool hard_cap = t_cur > info->duration_ + finish_timeout_extra_;
+      // 【P16】exec_no_progress_ 还要求“当前这条轨迹已经执行 ≥ stuck_window_”：
+      //   刚换上一条新轨迹时不该被几秒前的旧判定直接判死。
+      const bool no_progress_valid = exec_no_progress_ && t_cur >= stuck_window_;
       const bool segment_done =
-          isWaypointSequenceMode() ? time_done : (status_is_stop_ || exec_no_progress_ || hard_cap);
+          isWaypointSequenceMode() ? time_done : (status_is_stop_ || no_progress_valid || hard_cap);
       if (segment_done)
       {
         // 复位执行进展统计
@@ -2022,6 +2025,18 @@ namespace scan_planner
                            start_pt_(0), start_pt_(1), local_target_pt_(0), local_target_pt_(1),
                            d_tgt, bearing_deg, tdir(0), tdir(1), traj_dur);
     }
+
+    // 【P16】新轨迹已生成 → 重置“无进展”看门狗的参考时刻与最近距离。
+    //   否则：之前卡住几秒（重规划连续失败、车没动）之后一旦规划成功，第一次 tick 就会命中
+    //   exec_no_progress_（它的参考时刻还是几秒前的），于是刚进 EXEC_TRAJ 就被强制结束：
+    //   发一条 3 s 的停车轨迹并回 WAIT_TARGET（实测 traj 71(8.86s) 之后 50 ms 就 WAIT_TARGET）。
+    if (plan_success)
+    {
+      exec_progress_time_ = node_->now();
+      exec_best_dist_ = (end_pt_.head<2>() - odom_pos_.head<2>()).norm();
+      exec_no_progress_ = false;
+    }
+
 
     // ---- 成功：把轨迹打包成消息发布出去 ----
     if (plan_success)
