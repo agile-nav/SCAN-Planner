@@ -150,6 +150,9 @@ namespace scan_planner
     bool motion_enabled_{false};
     // 轨迹时钟连续夹住：允许 t_cur 比"实际投影进度"超前的时间(秒)；0=关闭
     double traj_clock_max_lead_{0.3};
+    // 重规划重试节流：同一状态下连续重试的最小间隔与退避上限(秒)
+    bool replan_retry_enable_{true};
+    double replan_retry_min_{0.2}, replan_retry_max_{1.0};
     // 结束/放弃目标时发一条"停在原地"的轨迹通知控制器刹停
     bool stop_traj_on_finish_{true};
     bool enable_fail_safe_, need_hover_stop_;
@@ -203,6 +206,9 @@ namespace scan_planner
     std::vector<ReplanFailure> status_reasons_;
     // 硬错误(error)是否已锁存：一旦进入 error 就锁存，只有重启节点才清除
     bool status_error_latched_{false};
+    // 重试节流：上次真正尝试规划的时刻、连续失败次数（成功即清零）
+    rclcpp::Time last_plan_attempt_{0, 0, RCL_ROS_TIME};
+    int plan_retry_fails_{0};
 
     // 最近的失败原因（供 error 的 reason 字段）
     ReplanFailure status_reason_{ReplanFailure::NONE};
@@ -243,7 +249,11 @@ namespace scan_planner
     bool callEmergencyStop(Eigen::Vector3d stop_pos);                          // front-end and back-end method
     bool planFromCurrentTraj();
     void setStartStateFromOdomOrCurrentTraj();
-    // 把实测位置投影到当前局部轨迹，返回对应轨迹时刻（P0：仅诊断用）
+    // 重试节流闸门：本拍是否允许再尝试一次规划
+    bool planAttemptAllowed();
+    void notePlanAttempt();
+    void notePlanResult(bool ok);
+    // 把实测位置投影到当前局部轨迹，返回对应轨迹时刻
     double projectOdomToTrajParam(double t_hint) const;
 
     /* return value: std::pair< Times of the same state be continuously called, current continuously called state > */

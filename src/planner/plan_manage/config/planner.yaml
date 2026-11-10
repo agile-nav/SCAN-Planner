@@ -59,6 +59,10 @@ scan_planner_node:
     fsm.stop_traj_on_finish: true
     # 轨迹时钟连续夹住(秒)：不允许 t_cur 比"实际投影进度"超前超过这么多。0=关闭
     fsm.traj_clock_max_lead: 0.3
+    # 重规划重试节流：同一状态下连续重试的最小间隔(秒)与退避上限(秒)；false=每拍都试
+    fsm.replan_retry_enable: true
+    fsm.replan_retry_min: 0.2
+    fsm.replan_retry_max: 1.0
 
     # 下面四项只在 navi_mode=3（参考路径）下生效，用来判断"参考坐标系"是否还可信。
     # 参考路径写在地图系/参考系下，规划时要靠 TF 把它换算到 world 系；

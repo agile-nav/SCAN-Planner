@@ -122,6 +122,9 @@ namespace scan_planner
     finish_timeout_extra_ = load_parameter<double>(node_, "fsm.finish_timeout_extra", 30.0);
     stop_traj_on_finish_ = load_parameter<bool>(node_, "fsm.stop_traj_on_finish", true);
     traj_clock_max_lead_ = load_parameter<double>(node_, "fsm.traj_clock_max_lead", 0.3);
+    replan_retry_enable_ = load_parameter<bool>(node_, "fsm.replan_retry_enable", true);
+    replan_retry_min_ = load_parameter<double>(node_, "fsm.replan_retry_min", 0.2);
+    replan_retry_max_ = load_parameter<double>(node_, "fsm.replan_retry_max", 1.0);
 
     // ---------- 第3步：预设航点模式下，解析航点数组 ----------
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
@@ -692,6 +695,35 @@ namespace scan_planner
   // 处理上面的“冻结”信号：
   // 如果底盘正在原地转向，就把局部轨迹的开始时间往后推，等于让轨迹时钟暂停，
   // 这样轨迹不会在机器人还没转过来时就白白走完。
+  // 【重试节流】本拍是否允许再尝试一次规划。
+  //   失败后 FSM 留在原状态（GEN_NEW_TRAJ / REPLAN_TRAJ），主循环 10 ms 一拍就再来一次，
+  //   完全没等待 —— 实测达到约 12 次/秒，而两次之间位置/地图/目标都没变，注定失败。
+  //   间隔按连续失败次数翻倍：min×2^fails，封顶 max，成功清零。0.2→0.4→0.8→1.0…
+  bool SCANReplanFSM::planAttemptAllowed()
+  {
+    if (!replan_retry_enable_)
+      return true;
+    if (last_plan_attempt_.nanoseconds() == 0)
+      return true;
+    const int exp = std::min(plan_retry_fails_, 6);
+    double interval = replan_retry_min_ * std::pow(2.0, exp);
+    interval = std::min(interval, replan_retry_max_);
+    return (node_->now() - last_plan_attempt_).seconds() >= interval;
+  }
+
+  void SCANReplanFSM::notePlanAttempt()
+  {
+    last_plan_attempt_ = node_->now();
+  }
+
+  void SCANReplanFSM::notePlanResult(bool ok)
+  {
+    if (ok)
+      plan_retry_fails_ = 0;
+    else
+      plan_retry_fails_ = std::min(plan_retry_fails_ + 1, 100);
+  }
+
   // 把机器人实测位置投影到当前局部轨迹上，返回它对应的轨迹时刻。
   //   窗口 [-3.0, +1.0] 秒：偏向负方向是因为机器人通常落后；窗口化避免轨迹自交跳支；
   //   只比较 xy（轨迹与 odom 的 z 有约 0.14 m 偏置）。
@@ -1304,6 +1336,13 @@ namespace scan_planner
     // ---- 状态 GEN_NEW_TRAJ：生成一条全新轨迹 ----
     case GEN_NEW_TRAJ:
     {
+
+      // 【重试节流】同一状态下连续重试时，至少隔 replan_retry_min..max 秒再试一次。
+      //   失败后 FSM 会留在原状态，主循环 10 ms 一拍就再来一次；不节流就是每秒十几次
+      //   注定失败的重规划。用 break 让本拍的收尾逻辑照跑。
+      if (!planAttemptAllowed())
+        break;
+      notePlanAttempt();
       // 先确定起点（默认里程计；有轨迹时用轨迹上的速度/加速度）
       setStartStateFromOdomOrCurrentTraj();
 
@@ -1326,6 +1365,7 @@ namespace scan_planner
       {
 
         replan_fail_count_ = 0;
+        notePlanResult(true);
         changeFSMExecState(EXEC_TRAJ, "FSM");
         // 允许后续从急停中恢复
         flag_escape_emergency_ = true;
@@ -1345,6 +1385,7 @@ namespace scan_planner
         else
       {
         if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
+        notePlanResult(false);
         changeFSMExecState(GEN_NEW_TRAJ, "FSM");
       }
       }
@@ -1355,6 +1396,13 @@ namespace scan_planner
     // ---- 状态 REPLAN_TRAJ：重新规划 ----
     case REPLAN_TRAJ:
     {
+
+      // 【重试节流】同一状态下连续重试时，至少隔 replan_retry_min..max 秒再试一次。
+      //   失败后 FSM 会留在原状态，主循环 10 ms 一拍就再来一次；不节流就是每秒十几次
+      //   注定失败的重规划。用 break 让本拍的收尾逻辑照跑。
+      if (!planAttemptAllowed())
+        break;
+      notePlanAttempt();
       // 从当前轨迹出发重新规划；若是参考系跳变触发的重规划，
       // 则以当前实测状态为起点（旧轨迹的预测状态已失效）
       bool success;
@@ -1373,6 +1421,7 @@ namespace scan_planner
         reference_jump_replan_ = false;
         // 成功 → 进入执行状态
         replan_fail_count_ = 0;
+        notePlanResult(true);
         changeFSMExecState(EXEC_TRAJ, "FSM");
       }
       else
@@ -1391,6 +1440,7 @@ namespace scan_planner
       {
         // 失败 → 计数 +1，保持重规划状态继续尝试
         if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
+        notePlanResult(false);
         changeFSMExecState(REPLAN_TRAJ, "FSM");
       }
       }
