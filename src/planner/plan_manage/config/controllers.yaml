@@ -28,6 +28,10 @@ closed_loop_controller:
     finish_dist: 0.15
     # 轨迹整体超时(秒)：超过 traj_duration + 它仍未走完 → 丢弃该轨迹并发 0。0=关闭
     traj_timeout_extra: 3.0
+    # 卡住判定：指令想动(>stuck_cmd_eps)但实测(<stuck_speed_eps)持续 stuck_time 秒 → 刹停 + 冻结
+    stuck_cmd_eps: 0.15
+    stuck_speed_eps: 0.03
+    stuck_time: 1.0
 
 # ---- 开环控制器 open_loop_controller ----
 # 它不控制机器人，只把轨迹直接当成里程计发出去（理想执行）。
