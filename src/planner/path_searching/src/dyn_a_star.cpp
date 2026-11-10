@@ -135,10 +135,22 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
     // 先把世界坐标转成格子坐标；超出搜索范围就直接失败
     if (!Coord2Index(start_pt, start_idx) || !Coord2Index(end_pt, end_idx))
         return false;
+    // 【P14】起终点落在同一格 → 这一段是退化的：A* 会“秒成功”却只返回 1 个点的路径，
+    // 调用方随即报 “A-star path has fewer than 2 points” 并丢掉这一段。直接判失败更诚实。
+    if (start_idx(0) == end_idx(0) && start_idx(1) == end_idx(1) && start_idx(2) == end_idx(2))
+    {
+        static int same_cell_cnt = 0;
+        if (++same_cell_cnt % 20 == 1)
+            RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                        "[Astar] start and end map to the same cell (%.2f,%.2f,%.2f); skip degenerate segment",
+                        start_pt(0), start_pt(1), start_pt(2));
+        return false;
+    }
 
     // 起点指向终点的方向（用来算朝向，也用来把点往外挪）
     Eigen::Vector3d start_to_end = end_pt - start_pt;
-    if (start_to_end.norm() < 1e-6)
+    const double seg_len = start_to_end.norm();   // 【P14】段长：用于限制“朝终点方向”的挪动距离
+    if (seg_len < 1e-6)
         return false;
     // 这条搜索路径的朝向 —— 查障碍时要带上朝向
     const double path_yaw = std::atan2(start_to_end(1), start_to_end(0));
@@ -167,6 +179,9 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
             Vector3i cand_idx;
             if (!Coord2Index(cand, cand_idx)) // 出了搜索池
                 return false;
+            // 【P14】不要把起点挪到“终点所在的那一格”：否则就是上面那个退化情况
+            if (cand_idx(0) == end_idx(0) && cand_idx(1) == end_idx(1) && cand_idx(2) == end_idx(2))
+                return false;
             if (checkOccupancy(Index2Coord(cand_idx), path_yaw) != 0)
                 return false;
             escaped_pt = cand;
@@ -174,8 +189,10 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
             return true;
         };
 
-        // (1) 先朝终点方向挪（机器人贴着自己膨胀层时，前方通常是空的）
-        for (int k = 1; k <= k_max && !found; ++k)
+        // (1) 先朝终点方向挪（机器人贴着自己膨胀层时，前方通常是空的）。
+        //     但最多只挪“段长的 80%” —— 否则短段会被挪到终点那一格，造成起终同格的退化。
+        const int k_fwd = std::min(k_max, static_cast<int>(std::floor(0.8 * seg_len / step_size_)));
+        for (int k = 1; k <= k_fwd && !found; ++k)
             found = try_candidate(start_pt + start_to_end * (step_size_ * k));
         // (2) 再朝反方向挪（保留旧行为，但加了距离上限）
         for (int k = 1; k <= k_max && !found; ++k)

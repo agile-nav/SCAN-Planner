@@ -127,6 +127,12 @@ namespace scan_planner
     replan_retry_max_ = load_parameter<double>(node_, "fsm.replan_retry_max", 1.0);
     // 起点脱困：起点落在膨胀层里时，沿"起点→局部目标"方向最多前推的距离 [m]
     start_escape_max_offset_ = load_parameter<double>(node_, "fsm.start_escape_max_offset", 1.0);
+    // 【P14 打转守卫】
+    spin_guard_enable_ = load_parameter<bool>(node_, "fsm.spin_guard_enable", true);
+    spin_rot_thresh_deg_ = load_parameter<double>(node_, "fsm.spin_rot_thresh_deg", 180.0);
+    spin_move_thresh_ = load_parameter<double>(node_, "fsm.spin_move_thresh", 0.15);
+    spin_cooldown_ = load_parameter<double>(node_, "fsm.spin_cooldown", 2.0);
+    spin_max_count_ = load_parameter<int>(node_, "fsm.spin_max_count", 5);
 
     // ---------- 第3步：预设航点模式下，解析航点数组 ----------
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
@@ -721,7 +727,10 @@ namespace scan_planner
   void SCANReplanFSM::notePlanResult(bool ok)
   {
     if (ok)
+    {
       plan_retry_fails_ = 0;
+      spin_count_ = 0; // 【P14】规划成功 → 打转计数清零
+    }
     else
       plan_retry_fails_ = std::min(plan_retry_fails_ + 1, 100);
   }
@@ -1603,6 +1612,10 @@ namespace scan_planner
     }
     }
 
+    // 【P14】打转守卫（只在执行轨迹时判定：位置几乎不动却一直转 → 判失败并重取目标）
+    if (exec_state_ == EXEC_TRAJ)
+      updateSpinGuard();
+
     // 第三步：收尾（失败太多则强制急停）
     finishProcess();
 
@@ -1613,6 +1626,55 @@ namespace scan_planner
 
   // 每轮主循环结束后的收尾：如果连续规划失败次数太多，就强制进入紧急停止。
   // 收尾检查：如果连续失败次数太多，就强制急停并等待新目标
+  // 【P14 打转守卫】“原地打转”检测：一段时间里位置几乎不动、机身却累计转了很多角度。
+  //   命中 → 判为一次规划失败：切到 GEN_NEW_TRAJ（重新从实测状态取起点、重新取局部目标，
+  //   连续失败后还会自动改用带随机点的多项式换一条方向），而不是让它无限原地转。
+  void SCANReplanFSM::updateSpinGuard()
+  {
+    if (!spin_guard_enable_ || !have_odom_)
+      return;
+
+    const double now = node_->now().seconds();
+    const double yaw = getOdomYaw();
+    // 首次 / 时间跳变 → 重新开始累计
+    if (spin_last_time_ < 0.0 || now - spin_last_time_ > 1.0)
+    {
+      spin_last_time_ = now; spin_last_yaw_ = yaw; spin_last_pt_ = odom_pos_;
+      spin_acc_rot_ = 0.0; spin_acc_dist_ = 0.0;
+      return;
+    }
+    const double raw = yaw - spin_last_yaw_;
+    spin_acc_rot_ += std::abs(std::atan2(std::sin(raw), std::cos(raw))) * 180.0 / M_PI;
+    spin_acc_dist_ += (odom_pos_ - spin_last_pt_).norm();
+    spin_last_yaw_ = yaw; spin_last_pt_ = odom_pos_; spin_last_time_ = now;
+
+    // 有明显位移 → 不是原地打转（正常转弯/长距离行驶），清零重来
+    if (spin_acc_dist_ > spin_move_thresh_)
+    {
+      spin_acc_rot_ = 0.0; spin_acc_dist_ = 0.0;
+      return;
+    }
+    if (now < spin_cooldown_until_ || spin_acc_rot_ < spin_rot_thresh_deg_)
+      return;
+
+    // ---- 命中：判失败 + 重新取目标 ----
+    const double rot = spin_acc_rot_, mv = spin_acc_dist_;
+    spin_acc_rot_ = 0.0; spin_acc_dist_ = 0.0;
+    spin_cooldown_until_ = now + spin_cooldown_;
+    spin_count_++;
+    RCLCPP_WARN(node_->get_logger(),
+                "[spin] 原地打转：累计转角 %.0f°、位移仅 %.3f m（第 %d 次）→ 重新取目标重规划",
+                rot, mv, spin_count_);
+    if (spin_count_ >= spin_max_count_)
+    {
+      spin_count_ = 0;
+      setStatusReason(ReplanFailure::SPIN_IN_PLACE);
+      replan_fail_count_++;
+    }
+    changeFSMExecState(GEN_NEW_TRAJ, "SPIN");
+  }
+
+
   void SCANReplanFSM::finishProcess()
   {
     // 失败次数达到上限 → 强制进入急停

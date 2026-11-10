@@ -157,6 +157,16 @@ namespace scan_planner
     bool stop_traj_on_finish_{true};
     // 重规划起点脱困：起点落在膨胀层里时，沿"起点→局部目标"方向最多前推这么多米
     double start_escape_max_offset_{1.0};
+    // 【P14 打转守卫】位置几乎不动、机身却累计转很多 → 判为一次规划失败并从头重规划
+    bool spin_guard_enable_{true};
+    double spin_rot_thresh_deg_{180.0};   // 累计转角阈值(度)
+    double spin_move_thresh_{0.15};       // 认定“没动”的位移阈值(m)
+    double spin_cooldown_{2.0};           // 触发后的冷却(s)
+    int spin_max_count_{5};               // 连续触发这么多次才计入规划失败并上报 reason
+    double spin_acc_rot_{0.0}, spin_acc_dist_{0.0};
+    double spin_last_time_{-1.0}, spin_last_yaw_{0.0}, spin_cooldown_until_{0.0};
+    Eigen::Vector3d spin_last_pt_{Eigen::Vector3d::Zero()};
+    int spin_count_{0};
     bool enable_fail_safe_, need_hover_stop_;
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};
@@ -282,6 +292,8 @@ namespace scan_planner
     double getOdomYaw() const;
     // 重规划起点若落在膨胀层里，沿"起点→局部目标"方向前推到最近的自由格
     bool pushStartPtOutOfInflation();
+    // 【P14】原地打转检测（位置几乎不动 + 累计转角大）→ 判失败 + 重取目标
+    void updateSpinGuard();
     double estimateYawFromSegment(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const;
     void updateLocalTrajTimeFreeze();
     // 收到新目标时调用：进入 running 并清掉 goal_reached/去抖状态

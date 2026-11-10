@@ -29,6 +29,7 @@ enum class ReplanFailure
   EMERGENCY_TF_JUMP_FAIL,         // TF 跳变后重规划失败急停
   EMERGENCY_TF_MISSING_COLLISION, // TF 缺失期间又检测到碰撞急停
   MAX_REPLAN_FAIL,                // 连续失败达上限
+  SPIN_IN_PLACE,                  // 原地打转：位置几乎不动、机身却累计转很多
   UNKNOWN
 };
 
@@ -95,6 +96,8 @@ inline const char *replanFailureToString(ReplanFailure f)
     return "emergency_tf_missing_collision";
   case ReplanFailure::MAX_REPLAN_FAIL:
     return "max_replan_fail";
+  case ReplanFailure::SPIN_IN_PLACE:
+    return "spin_in_place";
   case ReplanFailure::UNKNOWN:
     return "unknown";
   }
