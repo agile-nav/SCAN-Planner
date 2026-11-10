@@ -56,6 +56,9 @@ public:
     max_vyaw_ = std::min(declare_parameter<double>("max_vyaw", 1.0), kMaxVYawLimit);
     // 到终点多近就算“到达”，可以停下
     finish_dist_ = declare_parameter<double>("finish_dist", 0.15);
+    // 轨迹整体超时(秒)：超过 traj_duration + 它仍未走完 → 丢弃并停车（0=关闭）。
+    //   防止"机器人不前进 → 时钟不推进 → 轨迹永远走不完 → 一直顶着速度"。
+    traj_timeout_extra_ = declare_parameter<double>("traj_timeout_extra", 3.0);
 
     // 订阅规划器发布的轨迹
     bspline_sub_ = create_subscription<scan_planner_msgs::msg::Bspline>(
@@ -215,6 +218,7 @@ private:
     // 标记“已经有轨迹可跟踪了”
     receive_traj_ = true;
     // 打印日志
+    traj_recv_time_ = now();
     RCLCPP_INFO(get_logger(), "Received trajectory %lld, duration %.3fs",
                 static_cast<long long>(traj_id_), traj_duration_);
   }
@@ -264,6 +268,18 @@ private:
       last_update_time_ = current_time;
       return;
     }
+    // 【整体超时】轨迹活得太久 → 丢弃并停车
+    if (traj_timeout_extra_ > 0.0 && traj_recv_time_.nanoseconds() != 0 &&
+        (current_time - traj_recv_time_).seconds() > traj_duration_ + traj_timeout_extra_)
+    {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                           "trajectory older than duration+%.1fs; drop it and stop", traj_timeout_extra_);
+      receive_traj_ = false;
+      publishExecutionFrozen(false);
+      publishStop();
+      return;
+    }
+
     // 距上次计算过了多久
     double dt = (current_time - last_update_time_).seconds();
     // 时间差异常（时钟跳变/卡顿）→ 当作 0，不推进
@@ -353,6 +369,8 @@ private:
   rclcpp::Time last_update_time_{0, 0, RCL_ROS_TIME};
   double time_forward_, heading_error_threshold_, kp_pos_, kp_yaw_;
   double max_vx_, max_vy_, max_vyaw_, finish_dist_;
+  double traj_timeout_extra_{3.0};
+  rclcpp::Time traj_recv_time_{0, 0, RCL_ROS_TIME};
 };
 }  // namespace scan_planner
 
