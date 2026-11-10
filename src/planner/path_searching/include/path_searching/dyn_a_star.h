@@ -105,6 +105,8 @@ private:
 	double step_size_, inv_step_size_;
 	Eigen::Vector3d center_;
 	Eigen::Vector3i CENTER_IDX_, POOL_SIZE_;
+	// 【诊断】上一次搜索中，起点/终点因落在障碍里被挪动的距离(m)，0=没挪
+	double last_start_adjust_{0.0}, last_end_adjust_{0.0};
 	const double tie_breaker_ = 1.0 + 1.0 / 10000;
 
 	std::vector<GridNodePtr> gridPath_;

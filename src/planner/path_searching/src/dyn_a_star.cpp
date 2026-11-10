@@ -144,6 +144,9 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
     start_to_end.normalize();
 
     // 检查起点是否正好落在障碍里
+    // 【诊断】清空上一次的起点/终点挪动距离
+    last_start_adjust_ = 0.0;
+    last_end_adjust_ = 0.0;
     int occ = checkOccupancy(Index2Coord(start_idx), path_yaw);
     if (occ)
     {
@@ -202,11 +205,13 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
                         "[Astar] start point pushed out of obstacle by %.2f m",
                         (escaped_pt - start_pt).norm());
 
+        last_start_adjust_ = (escaped_pt - start_pt).norm();
         start_pt = escaped_pt;
         start_idx = escaped_idx;
     }
 
     // 终点同理：如果落在障碍里就往前挪
+    const Eigen::Vector3d end_pt_input = end_pt;   // 【诊断】终点被挪动前的坐标
     occ = checkOccupancy(Index2Coord(end_idx), path_yaw);
     if (occ)
     {
@@ -227,6 +232,8 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         } while (occ);
     }
 
+    // 【诊断】记录终点被挪动的距离（0=没挪）
+    last_end_adjust_ = (end_pt - end_pt_input).norm();
     return true;
 }
 
@@ -255,7 +262,10 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     if (!ConvertToIndexAndAdjustStartEndPoints(start_pt, end_pt, start_idx, end_idx))
     {
         RCLCPP_ERROR(rclcpp::get_logger("path_searching"),
-                     "Unable to handle the initial or end point, force return!");
+                     "[Astar] INIT_ERR: start=(%.2f,%.2f,%.2f) adj_s=%.2fm end=(%.2f,%.2f,%.2f) adj_e=%.2fm pool=±%.2fm",
+                     start_pt(0), start_pt(1), start_pt(2), last_start_adjust_,
+                     end_pt(0), end_pt(1), end_pt(2), last_end_adjust_,
+                     POOL_SIZE_(0) * step_size_ * 0.5);
         // 起终点有问题 → 返回“初始化错误”
         return ASTAR_RET::INIT_ERR;
     }
@@ -317,6 +327,19 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     double tentative_gScore;
 
     int num_iter = 0;
+    // 【诊断】blocked_cnt：被障碍挡掉的邻居数；与 expanded 一起回答"为什么搜不到路"
+    int blocked_cnt = 0;
+    auto reportAstarFailure = [&](const char *why) {
+      RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                  "[Astar] %s: expanded=%d blocked=%d(%.0f%%) time=%.3fs pool=±%.2fm "
+                  "start=(%.2f,%.2f,%.2f) adj_s=%.2fm end=(%.2f,%.2f,%.2f) adj_e=%.2fm",
+                  why, num_iter, blocked_cnt,
+                  num_iter > 0 ? 100.0 * blocked_cnt / num_iter : 0.0,
+                  std::chrono::duration<double>(std::chrono::steady_clock::now() - time_1).count(),
+                  POOL_SIZE_(0) * step_size_ * 0.5,
+                  start_pt(0), start_pt(1), start_pt(2), last_start_adjust_,
+                  end_pt(0), end_pt(1), end_pt(2), last_end_adjust_);
+    };
     // 主循环：只要还有待扩展的格子就继续
     while (!openSet_.empty())
     {
@@ -385,6 +408,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                 // 邻居是障碍 → 走不通，跳过
                 if (checkOccupancy(Index2Coord(neighborPtr->index), neighbor_yaw))
                 {
+                    ++blocked_cnt;   // 【诊断】这个邻居被障碍挡掉了
                     continue;
                 }
 
@@ -420,6 +444,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
         {
             RCLCPP_WARN(rclcpp::get_logger("path_searching"),
                         "Failed in A-star path search: 0.2 second time limit exceeded");
+            reportAstarFailure("SEARCH_ERR(timeout 0.2s)");
             return ASTAR_RET::SEARCH_ERR;
         }
     }
@@ -433,6 +458,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
         RCLCPP_WARN(rclcpp::get_logger("path_searching"),
                     "A-star path search took %.3fs, iter=%d", elapsed, num_iter);
 
+    reportAstarFailure("SEARCH_ERR(no path inside pool)");
     // 返回“搜索失败”
     return ASTAR_RET::SEARCH_ERR;
 }

@@ -197,6 +197,21 @@ namespace scan_planner
       Eigen::Vector3d in(init_points.col(segment_ids[i].first)), out(init_points.col(segment_ids[i].second));
       // 开始 A* 搜索
       ASTAR_RET ret = a_star_->AstarSearch(grid_map_->getResolution(), in, out);
+        if (ret != ASTAR_RET::SUCCESS)
+        {
+          // 【诊断】A* 失败一次打全：类型 / 段号 / 段长 / 两端坐标 / 两端是否在膨胀区(1=障碍 0=空 -1=出图)
+          const int id_in = segment_ids[i].first, id_out = segment_ids[i].second;
+          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+              "[A-star FAIL] type=%s seg(in_id=%d,out_id=%d) len=%.2fm | in=(%.2f,%.2f,%.2f) occ_in=%d | "
+              "out=(%.2f,%.2f,%.2f) occ_out=%d",
+              replanFailureToString(ret == ASTAR_RET::INIT_ERR ? ReplanFailure::ASTAR_INIT_ERR
+                                                               : ReplanFailure::ASTAR_NO_PATH),
+              id_in, id_out, (out - in).norm(),
+              in.x(), in.y(), in.z(),
+              grid_map_->getInflateOccupancy(in, estimateControlPointYaw(cps_.points, id_in)),
+              out.x(), out.y(), out.z(),
+              grid_map_->getInflateOccupancy(out, estimateControlPointYaw(cps_.points, id_out)));
+        }
       if (ret == ASTAR_RET::SUCCESS)
       {
         // 取出 A* 找到的绕行路径
@@ -994,6 +1009,21 @@ namespace scan_planner
         Eigen::Vector3d in(cps_.points.col(segment_ids[i].first)), out(cps_.points.col(segment_ids[i].second));
         // 在这一段的起终点之间跑一次 A*
         ASTAR_RET ret = a_star_->AstarSearch(grid_map_->getResolution(), in, out);
+        if (ret != ASTAR_RET::SUCCESS)
+        {
+          // 【诊断】A* 失败一次打全：类型 / 段号 / 段长 / 两端坐标 / 两端是否在膨胀区(1=障碍 0=空 -1=出图)
+          const int id_in = segment_ids[i].first, id_out = segment_ids[i].second;
+          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+              "[A-star FAIL] type=%s seg(in_id=%d,out_id=%d) len=%.2fm | in=(%.2f,%.2f,%.2f) occ_in=%d | "
+              "out=(%.2f,%.2f,%.2f) occ_out=%d",
+              replanFailureToString(ret == ASTAR_RET::INIT_ERR ? ReplanFailure::ASTAR_INIT_ERR
+                                                               : ReplanFailure::ASTAR_NO_PATH),
+              id_in, id_out, (out - in).norm(),
+              in.x(), in.y(), in.z(),
+              grid_map_->getInflateOccupancy(in, estimateControlPointYaw(cps_.points, id_in)),
+              out.x(), out.y(), out.z(),
+              grid_map_->getInflateOccupancy(out, estimateControlPointYaw(cps_.points, id_out)));
+        }
         if (ret == ASTAR_RET::SUCCESS)
         {
           vector<Eigen::Vector3d> path = a_star_->getPath();
