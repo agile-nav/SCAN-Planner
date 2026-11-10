@@ -27,17 +27,17 @@ scan_planner_node:
     # 目标怎么来：A2 上用参考路径模式（订阅外部 global_planner 的 /global_path）
     fsm.navi_mode: 3
     # 规划视野(米)：局部与全局各用一个值（实机 A2 实测取值）
-    fsm.planning_horizon: 2.5
-    manager.planning_horizon: 3.5
+    fsm.planning_horizon: 5.0
+    manager.planning_horizon: 5.0
     # 速度上限(米/秒)
     manager.max_vel: 1.0
     optimization.max_vel: 1.0
     # 局部滑动地图尺寸(米)与更新范围(米)
-    grid_map.sliding_map_size_x: 6.0
-    grid_map.sliding_map_size_y: 6.0
+    grid_map.sliding_map_size_x: 12.0
+    grid_map.sliding_map_size_y: 12.0
     grid_map.sliding_map_size_z: 4.0
-    grid_map.local_update_range_x: 4.0
-    grid_map.local_update_range_y: 4.0
+    grid_map.local_update_range_x: 6.0
+    grid_map.local_update_range_y: 6.0
     # 机器人形态（实机调试后定稿，取代原先“按官方站立尺寸换算”的取值）
     grid_map.body_height: 0.0
     grid_map.double_cylinder_radius: 0.25
