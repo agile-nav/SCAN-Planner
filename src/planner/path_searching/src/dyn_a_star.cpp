@@ -494,13 +494,48 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
         const int occ_e = checkOccupancy(Index2Coord(end_idx), diag_yaw);
         constexpr double CELL = 0.2;
         constexpr int NR = 12; // ±2.4 m
-        const Eigen::Vector3d mid = (start_pt + end_pt) / 2.0;
+        // 【P13a】搜索"实际使用"的两端格子（经过脱困/推移之后）与原始点的差异
+        const Eigen::Vector3d s_adj = Index2Coord(start_idx);
+        const Eigen::Vector3d e_adj = Index2Coord(end_idx);
+        const int occ_sa = checkOccupancy(s_adj, diag_yaw);
+        const int occ_ea = checkOccupancy(e_adj, diag_yaw);
+        auto exploredAt = [&](int ix, int iy, int iz) -> bool {
+          if (ix < 0 || iy < 0 || iz < 0 || ix >= POOL_SIZE_(0) || iy >= POOL_SIZE_(1) || iz >= POOL_SIZE_(2))
+            return false;
+          return GridNodeMap_[ix][iy][iz]->rounds == rounds_;
+        };
+        int occ_ring_e_adj = 0, exp_ring3_e_adj = 0, exp_ring5_e_adj = 0;
+        for (int dy = -2; dy <= 2; ++dy)
+          for (int dx = -2; dx <= 2; ++dx)
+          {
+            if (dx == 0 && dy == 0)
+              continue;
+            if (std::abs(dx) <= 1 && std::abs(dy) <= 1)
+            {
+              const Eigen::Vector3d q = e_adj + Eigen::Vector3d(dx * step_size_, dy * step_size_, 0.0);
+              if (checkOccupancy(q, std::atan2(static_cast<double>(dy), static_cast<double>(dx))) != 0)
+                ++occ_ring_e_adj;
+              if (exploredAt(end_idx(0) + dx, end_idx(1) + dy, end_idx(2)))
+                ++exp_ring3_e_adj;
+            }
+            else if (exploredAt(end_idx(0) + dx, end_idx(1) + dy, end_idx(2)))
+              ++exp_ring5_e_adj;
+          }
+        const Eigen::Vector3d mid = (s_adj + e_adj) / 2.0;
         RCLCPP_WARN(rclcpp::get_logger("path_searching"),
-                    "[Astar] 平面占用图: start=(%.2f,%.2f,%.2f) occ_s=%d | end=(%.2f,%.2f,%.2f) occ_e=%d | "
-                    "Δz=%.2fm E周围8格被占=%d/8 | expanded=%d blocked=%d pool=±%.2fm | 1格=0.20m .空 #占据 o出图 S起点 E终点",
+                    "[Astar] 平面占用图① 原始: start=(%.2f,%.2f,%.2f) occ=%d | end=(%.2f,%.2f,%.2f) occ=%d | Δz=%.2fm | 原始E周围8格被占=%d/8",
                     start_pt(0), start_pt(1), start_pt(2), occ_s,
                     end_pt(0), end_pt(1), end_pt(2), occ_e,
-                    end_pt(2) - start_pt(2), ring_occ, num_iter, blocked_cnt,
+                    end_pt(2) - start_pt(2), ring_occ);
+        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                    "[Astar] 平面占用图② 搜索实际用: Sa=(%.2f,%.2f,%.2f) occ=%d | Ea=(%.2f,%.2f,%.2f) occ=%d | 推移 Δs=%.2fm(%.2f,%.2f) Δe=%.2fm(%.2f,%.2f)",
+                    s_adj(0), s_adj(1), s_adj(2), occ_sa,
+                    e_adj(0), e_adj(1), e_adj(2), occ_ea,
+                    last_start_adjust_, s_adj(0) - start_pt(0), s_adj(1) - start_pt(1),
+                    last_end_adjust_, e_adj(0) - end_pt(0), e_adj(1) - end_pt(1));
+        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                    "[Astar] 平面占用图③ Ea 周围: 3x3被占=%d/8  3x3被搜索到=%d/8  5x5外圈被搜索到=%d/24 | expanded=%d blocked=%d pool=±%.2fm | 1格=0.20m .空 #占据 o出图 S/E=原始 s/e=搜索实际",
+                    occ_ring_e_adj, exp_ring3_e_adj, exp_ring5_e_adj, num_iter, blocked_cnt,
                     POOL_SIZE_(0) * step_size_ * 0.5);
         std::string map;
         for (int iy = NR; iy >= -NR; --iy)
@@ -518,6 +553,10 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
               c = 'S';
             if ((q.head<2>() - e_xy).norm() < CELL * 0.5)
               c = 'E';
+            if ((q.head<2>() - s_adj.head<2>()).norm() < CELL * 0.5)
+              c = 's';
+            if ((q.head<2>() - e_adj.head<2>()).norm() < CELL * 0.5)
+              c = 'e';
             map += c;
           }
           map += "\n";
