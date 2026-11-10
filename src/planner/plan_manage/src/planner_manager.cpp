@@ -111,8 +111,19 @@ namespace scan_planner
     bspline_optimizer_rebound_->setParam(node_);
     bspline_optimizer_rebound_->setEnvironment(grid_map_);
     bspline_optimizer_rebound_->a_star_.reset(new AStar);
-    // A* 的搜索空间固定为 100x100x100 个格子
-    bspline_optimizer_rebound_->a_star_->initGridMap(grid_map_, Eigen::Vector3i(100, 100, 100));
+    // A* 搜索池的边长（格数）。池子以"当前这一段的中点"为中心，物理覆盖 = 边长 × 分辨率：
+    //   100 格 × 0.05 m = 5 m ⇒ 每段中点周围 ±2.5 m。
+    // 池子偏小时 A* 会直接以 SEARCH_ERR 搜不到路（日志痕迹："... (ret=2)"），
+    // 因为障碍团比池子还厚、绕行通路落在池子外面。内存 ∝ 边长³：
+    //   100³ ≈ 48 MB，128³ ≈ 100 MB，160³ ≈ 200 MB（板载机请自行确认内存）。
+    {
+      if (!node->has_parameter("manager.a_star_pool_size"))
+        node->declare_parameter<int>("manager.a_star_pool_size", 100);
+      const int pool = std::max(32, static_cast<int>(node->get_parameter("manager.a_star_pool_size").as_int()));
+      RCLCPP_INFO(node->get_logger(), "[Astar] pool=%d^3  覆盖=±%.2f m  约 %.0f MB",
+                  pool, pool * grid_map_->getResolution() * 0.5, pool * pool * pool * 48.0 / 1e6);
+      bspline_optimizer_rebound_->a_star_->initGridMap(grid_map_, Eigen::Vector3i(pool, pool, pool));
+    }
 
     // 保存可视化对象（在 RViz 里画轨迹、目标点）
     visualization_ = vis;

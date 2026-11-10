@@ -139,6 +139,10 @@ scan_planner_node:
     manager.control_points_distance: 0.2
     manager.feasibility_tolerance: 0.5
     manager.planning_horizon: 7.5
+    # A* 搜索池边长(格)。池子以"每一段的中点"为中心，物理覆盖 = ±边长×分辨率/2 米
+    #   100 x 0.05 = 5 m => ±2.5 m；放大到 160 => ±4 m（内存 48 MB -> 约 200 MB）
+    #   A* 报 SEARCH_ERR(日志里 "A-star failed ... (ret=2)") 且障碍团很厚时，可试着放大它
+    manager.a_star_pool_size: 100
 
     # 下面是“轨迹优化”的各项权重。权重越大，优化越倾向于满足那一项。
     # lambda_smooth：平滑度（让轨迹不要抖）

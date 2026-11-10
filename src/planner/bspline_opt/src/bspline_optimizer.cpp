@@ -222,8 +222,9 @@ namespace scan_planner
         // 更准确的原因失败。
         // 注意：这里不写 last_failure_，避免"还能继续优化"的情况被上报成一次硬失败。
         RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
-                    "A-star failed on a collision segment; keep optimizing without a rebound direction (ret=%d)",
-                    static_cast<int>(ret));
+                    "A-star failed on a collision segment (ret=%d): in=(%.2f,%.2f,%.2f) out=(%.2f,%.2f,%.2f) seg_len=%.2f m; "
+                    "keep optimizing without a rebound direction",
+                    static_cast<int>(ret), in(0), in(1), in(2), out(0), out(1), out(2), (out - in).norm());
         a_star_paths.push_back(std::vector<Eigen::Vector3d>());
       }
     }
