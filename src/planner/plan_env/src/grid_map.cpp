@@ -63,6 +63,9 @@ void GridMap::initMap(rclcpp::Node *node)
   load_parameter(node_, "grid_map.obstacles_inflation_z_down", mp_.obstacles_inflation_z_down, -1.0);
   load_parameter(node_, "grid_map.double_cylinder_radius", mp_.double_cylinder_radius_, -1.0);
   load_parameter(node_, "grid_map.double_cylinder_offset", mp_.double_cylinder_offset_, 0.0);
+  // 【P11 自过滤】传感器周围 self_filter_radius 球内的点不写入地图；<=0 = 关闭
+  load_parameter(node_, "grid_map.self_filter_radius", mp_.self_filter_radius_, 0.0);
+  RCLCPP_INFO(node_->get_logger(), "[GridMap] self_filter_radius = %.2f m (<=0 关闭)", mp_.self_filter_radius_);
   load_parameter(node_, "grid_map.map_sliding_en", mp_.map_sliding_en_, true);
   load_parameter(node_, "grid_map.map_sliding_thresh", mp_.map_sliding_thresh_, mp_.resolution_);
 
@@ -687,6 +690,9 @@ void GridMap::projectDepthImage()
       // }
 
       // 存进投影点数组，计数 +1
+      // 【P11 自过滤】机器人自身周围球内的点不写入地图
+      if (mp_.self_filter_radius_ > 0.0 && (pt_world - md_.ray_pos_).norm() < mp_.self_filter_radius_)
+        continue;
       md_.proj_points_[md_.proj_points_cnt++] = pt_world;
     }
   }
@@ -1162,6 +1168,9 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr 
     // 这个点离传感器多远
     const Eigen::Vector3d devi = pt_world - ray_pos;
     const double ray_length = devi.norm();
+    // 【P11 自过滤】传感器周围球内的点（机器人自身腿/机身回波）不写入地图
+    if (mp_.self_filter_radius_ > 0.0 && ray_length < mp_.self_filter_radius_)
+      continue;
     // 判断它是否落在“局部更新范围”内
     const bool in_local_range =
         fabs(devi(0)) <= mp_.local_update_range_(0) && fabs(devi(1)) <= mp_.local_update_range_(1) &&

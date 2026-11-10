@@ -96,6 +96,9 @@ scan_planner_node:
     grid_map.double_cylinder_radius: 0.25
     # 两个圆柱中心离机器人中心的距离(米)。所以圆柱中心分别在前后 0.18 米处。
     grid_map.double_cylinder_offset: 0.18
+    # 【P11 自过滤】传感器周围这个半径(m)球内的点不写入地图（滤掉机器人自身腿/机身的回波）。
+    # 自身回波会被当成障碍再膨胀，在脚下堆出"障碍团"、把自由空间切成孤岛
+    # （症状：A* 报 "no path inside pool"、起点落进 <1 m² 的小口袋）。<=0 = 关闭；A2 建议 0.45 起试
     grid_map.body_height: 0.4
     # 膨胀在竖直方向的范围：向上 0.1 米、向下 0.4 米（下方的障碍更危险）
     grid_map.obstacles_inflation_z_up: 0.1
