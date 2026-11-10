@@ -120,6 +120,7 @@ namespace scan_planner
     stuck_window_ = load_parameter<double>(node_, "fsm.finish_stuck_window", 3.0);
     stuck_progress_eps_ = load_parameter<double>(node_, "fsm.finish_progress_eps", 0.05);
     finish_timeout_extra_ = load_parameter<double>(node_, "fsm.finish_timeout_extra", 30.0);
+    stop_traj_on_finish_ = load_parameter<bool>(node_, "fsm.stop_traj_on_finish", true);
 
     // ---------- 第3步：预设航点模式下，解析航点数组 ----------
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
@@ -1451,6 +1452,12 @@ namespace scan_planner
           active_waypoints_.clear();
           current_wp_ = 0;
         }
+
+        // 【结束后必须通知控制器停车】否则 FSM 回到 WAIT_TARGET 后，控制器手上还握着最后
+        //   一条轨迹，会继续按 kp_pos*(pos_des-odom) 下发速度（实测"指令 0.375 m/s、
+        //   实测 0.015 m/s"长期顶着）。发一条"停在原地"的退化轨迹，控制器立刻刹停。
+        if (stop_traj_on_finish_)
+          callEmergencyStop(odom_pos_);
 
         // 标记“目标已完成”
         have_target_ = false;

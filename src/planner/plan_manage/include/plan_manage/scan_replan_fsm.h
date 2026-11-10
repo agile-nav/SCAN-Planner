@@ -148,6 +148,8 @@ namespace scan_planner
     bool go2_execution_frozen_;
     // 外部使能（/motion_enabled，遥控器 START/B）：false 时冻结轨迹不规划不下发
     bool motion_enabled_{false};
+    // 结束/放弃目标时发一条"停在原地"的轨迹通知控制器刹停
+    bool stop_traj_on_finish_{true};
     bool enable_fail_safe_, need_hover_stop_;
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};
