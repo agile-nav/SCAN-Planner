@@ -167,6 +167,10 @@ namespace scan_planner
     double spin_last_time_{-1.0}, spin_last_yaw_{0.0}, spin_cooldown_until_{0.0};
     Eigen::Vector3d spin_last_pt_{Eigen::Vector3d::Zero()};
     int spin_count_{0};
+    // 【P17a】碰撞检查跳过“当前位置附近”这段(秒)：机器人自身常在自己的膨胀层里，
+    //   否则会在 t≈t_cur 处立刻判撞（日志里的 "emergency stop in 0.000s"），白白打断轨迹。
+    //   <=0 = 不跳过（旧行为）
+    double collision_skip_from_start_{0.25};
     bool enable_fail_safe_, need_hover_stop_;
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};

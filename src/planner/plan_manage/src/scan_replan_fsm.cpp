@@ -133,6 +133,8 @@ namespace scan_planner
     spin_move_thresh_ = load_parameter<double>(node_, "fsm.spin_move_thresh", 0.15);
     spin_cooldown_ = load_parameter<double>(node_, "fsm.spin_cooldown", 2.0);
     spin_max_count_ = load_parameter<int>(node_, "fsm.spin_max_count", 5);
+    // 【P17a】碰撞检查跳过起点附近这段(秒)
+    collision_skip_from_start_ = load_parameter<double>(node_, "fsm.collision_skip_from_start", 0.25);
 
     // ---------- 第3步：预设航点模式下，解析航点数组 ----------
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
@@ -1859,6 +1861,10 @@ namespace scan_planner
       // 一旦越过 2/3 分界点，就停止检查
       if (t_cur < t_2_3 && t >= t_2_3) // If t_cur < t_2_3, only the first 2/3 partition of the trajectory is considered valid and will get checked.
         break;
+        // 【P17a】跳过“当前位置附近”这段：机器人自身（脚边点云/贴身墙面）常落在自己的
+        //   膨胀层里，过去会在 t≈t_cur 处立刻判撞（"emergency stop in 0.000s"），无谓打断轨迹。
+        if (collision_skip_from_start_ > 0.0 && t - t_cur < collision_skip_from_start_)
+          continue;
 
       // 该时刻的位置
       Eigen::Vector3d pos = info->position_traj_.evaluateDeBoorT(t);
@@ -1867,6 +1873,12 @@ namespace scan_planner
       // 问地图：机器人以这个朝向待在这里，会不会撞？
       if (map->getInflateOccupancy(pos, estimateYawFromSegment(pos, pos_next)))
       {
+          // 【P17a 诊断】一次打全：距当前位置多久、撞点坐标、机器人自身是否在膨胀层内
+          //   self_occ=1 说明“撞点就在自己脚下/自己身上”，这类应由跳过窗口挡掉
+          RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
+                               "[collision] ahead=%.2fs pos=(%.2f,%.2f,%.2f) self_occ=%d → 先尝试从当前轨迹重规划",
+                               t - t_cur, pos(0), pos(1), pos(2),
+                               map->getInflateOccupancy(odom_pos_, getOdomYaw()));
         // 参考 TF 缺失期间又检测到碰撞 → 直接急停（此时无法确认参考路径是否仍安全）
         if (navi_mode_ == NAVI_MODE::REFERENCE_PATH &&
             reference_tf_missing_since_.nanoseconds() != 0)

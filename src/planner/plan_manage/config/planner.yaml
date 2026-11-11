@@ -72,6 +72,9 @@ scan_planner_node:
     fsm.spin_move_thresh: 0.15
     fsm.spin_cooldown: 2.0
     fsm.spin_max_count: 5
+    # 【P17a】碰撞检查跳过“当前位置附近”这段(秒)：避免把机器人自身膨胀层判成碰撞
+    #   （症状：日志 "Obstacle discovered; emergency stop in 0.000s"）。<=0 = 旧行为
+    fsm.collision_skip_from_start: 0.25
 
     # 下面四项只在 navi_mode=3（参考路径）下生效，用来判断"参考坐标系"是否还可信。
     # 参考路径写在地图系/参考系下，规划时要靠 TF 把它换算到 world 系；
