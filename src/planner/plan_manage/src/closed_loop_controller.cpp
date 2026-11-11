@@ -183,6 +183,7 @@ private:
     // 填入 true/false
     msg.data = frozen;
     // 发布
+      execution_frozen_state_ = frozen; // 【P19a】记下当前冻结状态
     execution_frozen_pub_->publish(msg);
   }
 
@@ -275,9 +276,16 @@ private:
       last_update_time_ = current_time;
       return;
     }
-    // 【整体超时】轨迹活得太久 → 丢弃并停车
-    if (traj_timeout_extra_ > 0.0 && traj_recv_time_.nanoseconds() != 0 &&
-        (current_time - traj_recv_time_).seconds() > traj_duration_ + traj_timeout_extra_)
+    // 【P19a】冻结/未使能期间“墙钟年龄”没有意义：规划器会故意冻结轨迹时钟（车卡住时
+    //   t_wall 一直停在 ~0.3 s），而控制器按墙钟算会判它超时 → drop + stop，
+    //   之后规划器还停在 EXEC_TRAJ 等、控制器手里却没轨迹了 ⇒ 双方各说各话、车彻底不动。
+    //   所以冻结期间只把基准顺延，不计入超时；解冻后重新开始计时。
+    if (execution_frozen_state_ || !motion_enabled_)
+    {
+      traj_recv_time_ = current_time;
+    }
+    else if (traj_timeout_extra_ > 0.0 && traj_recv_time_.nanoseconds() != 0 &&
+             (current_time - traj_recv_time_).seconds() > traj_duration_ + traj_timeout_extra_)
     {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
                            "trajectory older than duration+%.1fs; drop it and stop", traj_timeout_extra_);
@@ -387,6 +395,8 @@ private:
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr execution_frozen_pub_;
+  // 【P19a】最近一次发出的“冻结”状态（冻结期间不做轨迹整体超时判定）
+  bool execution_frozen_state_{false};
   rclcpp::Subscription<scan_planner_msgs::msg::Bspline>::SharedPtr bspline_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mission_control_sub_;

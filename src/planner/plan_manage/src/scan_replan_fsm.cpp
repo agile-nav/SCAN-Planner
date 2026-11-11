@@ -1508,7 +1508,13 @@ namespace scan_planner
       const bool hard_cap = t_cur > info->duration_ + finish_timeout_extra_;
       // 【P16】exec_no_progress_ 还要求“当前这条轨迹已经执行 ≥ stuck_window_”：
       //   刚换上一条新轨迹时不该被几秒前的旧判定直接判死。
-      const bool no_progress_valid = exec_no_progress_ && t_cur >= stuck_window_;
+      // 【P19b】门槛用“墙钟自提交以来的秒数”，不能用 t_cur：
+      //   车卡住时 t_cur 被 P4 夹在 (t_proj + max_lead) ≈ 0.3 s，永远到不了 stuck_window(3 s)
+      //   ⇒ 本段永远不会被判“无进展” ⇒ FSM 卡在 EXEC_TRAJ，既不重规划也不收尾。
+      const double wall_since_commit = (traj_commit_wall_.nanoseconds() == 0)
+                                           ? 0.0
+                                           : (node_->now() - traj_commit_wall_).seconds();
+      const bool no_progress_valid = exec_no_progress_ && wall_since_commit >= stuck_window_;
       const bool segment_done =
           isWaypointSequenceMode() ? time_done : (status_is_stop_ || no_progress_valid || hard_cap);
       if (segment_done)
@@ -2045,6 +2051,9 @@ namespace scan_planner
     if (plan_success)
     {
       exec_progress_time_ = node_->now();
+      exec_best_dist_ = (end_pt_.head<2>() - odom_pos_.head<2>()).norm();
+      exec_no_progress_ = false;
+      traj_commit_wall_ = node_->now(); // 【P19b】这条轨迹的墙钟提交时刻
       exec_best_dist_ = (end_pt_.head<2>() - odom_pos_.head<2>()).norm();
       exec_no_progress_ = false;
     }

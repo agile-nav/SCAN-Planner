@@ -171,6 +171,8 @@ namespace scan_planner
     //   否则会在 t≈t_cur 处立刻判撞（日志里的 "emergency stop in 0.000s"），白白打断轨迹。
     //   <=0 = 不跳过（旧行为）
     double collision_skip_from_start_{0.25};
+    // 【P19b】最近一次提交新轨迹的墙钟时刻：无进展看门狗用它，而不是被夹住的 t_cur
+    rclcpp::Time traj_commit_wall_{0, 0, RCL_ROS_TIME};
     bool enable_fail_safe_, need_hover_stop_;
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};
