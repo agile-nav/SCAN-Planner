@@ -1860,10 +1860,10 @@ namespace scan_planner
       // 一旦越过 2/3 分界点，就停止检查
       if (t_cur < t_2_3 && t >= t_2_3) // If t_cur < t_2_3, only the first 2/3 partition of the trajectory is considered valid and will get checked.
         break;
-        // 【P17a】跳过“当前位置附近”这段：机器人自身（脚边点云/贴身墙面）常落在自己的
-        //   膨胀层里，过去会在 t≈t_cur 处立刻判撞（"emergency stop in 0.000s"），无谓打断轨迹。
-        if (collision_skip_from_start_ > 0.0 && t - t_cur < collision_skip_from_start_)
-          continue;
+      // 【P17a】跳过“当前位置附近”这段：机器人自身（脚边点云/贴身墙面）常落在自己的
+      //   膨胀层里，过去会在 t≈t_cur 处立刻判撞（"emergency stop in 0.000s"），无谓打断轨迹。
+      if (collision_skip_from_start_ > 0.0 && t - t_cur < collision_skip_from_start_)
+        continue;
 
       // 该时刻的位置
       Eigen::Vector3d pos = info->position_traj_.evaluateDeBoorT(t);
