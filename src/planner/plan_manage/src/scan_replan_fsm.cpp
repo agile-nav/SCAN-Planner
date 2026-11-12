@@ -845,13 +845,6 @@ namespace scan_planner
           status_goal_snapshot_ = end_pt_;
           state = "running";
         }
-        else if (!have_target_ && speed_now < status_speed_tol_exit_ &&
-                 !problem && status_problem_since_.nanoseconds() == 0)
-        {
-          // 收口：规划器已无目标（任务结束）、机器人已停、且不在失败中 → 回 idle，
-          //       避免"任务早结束但离目标还差一点"时状态永远停在 running
-          state = "idle";
-        }
         else
         {
           state = "running";
