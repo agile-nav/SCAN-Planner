@@ -199,6 +199,9 @@ namespace scan_planner
     std::vector<ReplanFailure> status_reasons_;
     // 硬错误(error)是否已锁存：一旦进入 error 就锁存，只有重启节点才清除
     bool status_error_latched_{false};
+    // 门控状态名（可配置；下游若需兼容旧的 stopped，可把 disabled 配成 stopped）
+    std::string status_name_disabled_{"disabled"};
+    std::string status_name_paused_{"paused"};
 
     // 最近的失败原因（供 error 的 reason 字段）
     ReplanFailure status_reason_{ReplanFailure::NONE};
@@ -274,6 +277,8 @@ namespace scan_planner
     void publishPlannerStatus(const std::string &state);
     // 把状态拼成 JSON（state / msgs）
     std::string buildStatusJson(const std::string &state);
+    // “如果没有门控，本该报什么状态”（只读、无副作用），供 JSON 的 inner 字段使用
+    std::string statusInnerState() const;
     // 记录一次失败原因（设为当前原因，并累积到本次 error 的原因列表）
     void setStatusReason(ReplanFailure r);
     // 任务控制回调：pause / resume

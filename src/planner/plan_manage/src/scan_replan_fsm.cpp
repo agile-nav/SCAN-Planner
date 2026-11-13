@@ -117,6 +117,8 @@ namespace scan_planner
     status_heartbeat_hz_ = load_parameter<double>(node_, "fsm.status_heartbeat_hz", 1.0);
     status_goal_change_eps_ = load_parameter<double>(node_, "fsm.status_goal_change_eps", 0.05);
     status_error_time_ = load_parameter<double>(node_, "fsm.status_error_time", 3.0);
+    status_name_disabled_ = load_parameter<std::string>(node_, "fsm.status_name_disabled", "disabled");
+    status_name_paused_ = load_parameter<std::string>(node_, "fsm.status_name_paused", "paused");
     stuck_window_ = load_parameter<double>(node_, "fsm.finish_stuck_window", 3.0);
     stuck_progress_eps_ = load_parameter<double>(node_, "fsm.finish_progress_eps", 0.05);
     finish_timeout_extra_ = load_parameter<double>(node_, "fsm.finish_timeout_extra", 30.0);
@@ -773,7 +775,7 @@ namespace scan_planner
   }
 
   // 每个 tick 判定运行状态，按优先级发到 /local_planner/status：
-  //   stopped(pause) > idle(未收到目标) > goal_reached(到达,仅一次) > error(持续解不出来) > running
+  //   disabled(未使能) > paused(任务暂停) > idle(无目标/已到达) > error(锁存) > 到达判定
   // 状态发生切换时【立即发布】；同一状态才按 1Hz 心跳。
   void SCANReplanFSM::updatePlannerStatus()
   {
@@ -784,10 +786,15 @@ namespace scan_planner
 
     std::string state;
 
-    if (externally_stopped_ || !motion_enabled_)
+    if (!motion_enabled_)
     {
-      // pause 或 外部未使能（/motion_enabled=false）→ 一律 stopped
-      state = "stopped";
+      // 外部未使能（遥控器未 START / 按 B / 发布者掉线）⇒ 安全回路未上使能
+      state = status_name_disabled_;
+    }
+    else if (externally_stopped_)
+    {
+      // /mission/control="pause" ⇒ 任务暂停（轨迹已清）
+      state = status_name_paused_;
     }
     else if (!status_have_goal_)
     {
@@ -915,11 +922,12 @@ namespace scan_planner
   {
     if (state.empty())
       return;
-    // error 锁存：除 stopped（外部停止优先级最高）外一律上报 error；只有重启节点才清除
+    // error 锁存：除 disabled/paused（门控优先级最高）外一律上报 error；只有重启节点才清除
     std::string out = state;
-    if (!motion_enabled_ && out != "stopped")
-      out = "stopped";                       // 外部未使能：与 pause 同义
-    else if (status_error_latched_ && out != "stopped")
+    if (!motion_enabled_ && out != status_name_disabled_)
+      out = status_name_disabled_;                 // 外部未使能
+    else if (status_error_latched_ && out != status_name_disabled_ &&
+             out != status_name_paused_)
       out = "error";
     std_msgs::msg::String msg;
     msg.data = buildStatusJson(out);
@@ -929,6 +937,17 @@ namespace scan_planner
   }
 
   // 拼 JSON：{"state":..,"msgs":["原因1","原因2",...]}
+  // “如果没有门控，本该报什么状态”：只读、无副作用，供 JSON 的 inner 字段使用
+  // 门控（未使能/暂停）期间用于诊断“本来应该是什么状态”
+  std::string SCANReplanFSM::statusInnerState() const
+  {
+    if (!status_have_goal_)                       return "idle";
+    if (status_is_stop_)                          return "idle";
+    if (status_error_latched_)                    return "error";
+    if (status_problem_since_.nanoseconds() != 0) return "failed";  // 失败计时中（近似）
+    return "running";
+  }
+
   std::string SCANReplanFSM::buildStatusJson(const std::string &state)
   {
     std::string msgs = "[]";
@@ -946,7 +965,16 @@ namespace scan_planner
       arr += "]";
       msgs = arr;
     }
-    return "{\"state\":\"" + state + "\",\"msgs\":" + msgs + "}";
+    std::string inner = statusInnerState();
+    std::string json = "{\"state\":\"" + state + "\",\"msgs\":" + msgs;
+    json += ",\"enabled\":" + std::string(motion_enabled_ ? "true" : "false");
+    json += ",\"paused\":" + std::string(externally_stopped_ ? "true" : "false");
+    json += ",\"latched\":" + std::string(status_error_latched_ ? "true" : "false");
+    json += ",\"problem\":" + std::string(((replan_fail_count_ != 0) || (exec_state_ == EMERGENCY_STOP)) ? "true" : "false");
+    json += ",\"have_goal\":" + std::string(status_have_goal_ ? "true" : "false");
+    json += ",\"inner\":\"" + inner + "\"";
+    json += "}";
+    return json;
   }
 
   // 记录一次失败原因：设为当前原因，并把新出现的原因累积到本次 error 的原因列表里
@@ -1001,9 +1029,9 @@ namespace scan_planner
     planner_manager_->local_data_.duration_ = 0.0;
     planner_manager_->local_data_.start_time_ =
         rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
-    // 状态 → stopped（立即发一次，之后 1Hz）
+      // 状态 → paused（立即发一次，之后 1Hz）
     status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
-    publishPlannerStatus("stopped");
+    publishPlannerStatus(status_name_paused_);
     RCLCPP_WARN(node_->get_logger(),
                 "External STOP: global/local trajectories cleared; local map kept");
   }
