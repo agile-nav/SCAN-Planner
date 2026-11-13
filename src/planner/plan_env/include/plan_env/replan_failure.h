@@ -42,18 +42,12 @@ inline bool replanFailureIsBenign(ReplanFailure f)
 // “必须人工干预”的硬错误（→ error）：被堵死 / 目标不可达 / 碰撞急停 / 连续失败超限。
 // A* 无路（astar_no_path）不在此列：它常由局部地图/搜索池的瞬时情况引起，按可自恢复处理，归 failed。
 // 其余（优化、拟合、TF/定位类、超限等可自恢复的）归 failed。
-inline bool replanFailureNeedsIntervention(ReplanFailure f)
+// 【当前策略】不再区分“必须人工干预”的硬错误：
+// 全部原因都归入软错误 ⇒ 状态只报 failed（不再有 error、也不再锁存）。
+// 保留本函数（而非删除分级），以备将来需要时把某些原因重新划回 error。
+inline bool replanFailureNeedsIntervention(ReplanFailure)
 {
-  switch (f)
-  {
-  case ReplanFailure::NO_FREE_TARGET:
-  case ReplanFailure::TARGET_OCCUPIED:
-  case ReplanFailure::EMERGENCY_SAFETY:
-  case ReplanFailure::MAX_REPLAN_FAIL:
-    return true;
-  default:
-    return false;
-  }
+  return false;
 }
 inline const char *replanFailureToString(ReplanFailure f)
 {

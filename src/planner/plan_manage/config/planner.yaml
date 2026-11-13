@@ -48,9 +48,9 @@ scan_planner_node:
     fsm.status_goal_change_eps: 0.05
     # 持续规划失败/急停(碰撞、TF异常)多久判为 error(秒)
     fsm.status_error_time: 3.0
-    # 门控状态名：未使能 / 任务暂停（下游若需兼容旧的 stopped，可把 disabled 配成 stopped）
+    # 门控状态名：未使能(disabled) / 任务暂停(stopped，沿用旧名)
     fsm.status_name_disabled: disabled
-    fsm.status_name_paused: paused
+    fsm.status_name_paused: stopped
     # ---- 执行进展(stuck)检测（只用于判"走完"，与上面的状态话题判据独立）----
     # 无进展窗口(秒)：这么久没有更靠近目标 + 已停 + 非原地转向 → 判为卡住
     fsm.finish_stuck_window: 3.0

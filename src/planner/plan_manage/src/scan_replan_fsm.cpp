@@ -118,7 +118,7 @@ namespace scan_planner
     status_goal_change_eps_ = load_parameter<double>(node_, "fsm.status_goal_change_eps", 0.05);
     status_error_time_ = load_parameter<double>(node_, "fsm.status_error_time", 3.0);
     status_name_disabled_ = load_parameter<std::string>(node_, "fsm.status_name_disabled", "disabled");
-    status_name_paused_ = load_parameter<std::string>(node_, "fsm.status_name_paused", "paused");
+    status_name_paused_ = load_parameter<std::string>(node_, "fsm.status_name_paused", "stopped");
     stuck_window_ = load_parameter<double>(node_, "fsm.finish_stuck_window", 3.0);
     stuck_progress_eps_ = load_parameter<double>(node_, "fsm.finish_progress_eps", 0.05);
     finish_timeout_extra_ = load_parameter<double>(node_, "fsm.finish_timeout_extra", 30.0);
