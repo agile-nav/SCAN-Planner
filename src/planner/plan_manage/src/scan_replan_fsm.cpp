@@ -166,9 +166,10 @@ namespace scan_planner
         "planning/go2_execution_frozen", 10,
         std::bind(&SCANReplanFSM::go2ExecutionFrozenCallback, this, std::placeholders::_1));
     // 任务控制：/mission/control（"pause" 清轨迹停住 / "resume" 重建并继续）；命令类话题，不锁存
-    // 外部使能：/motion_enabled（遥控器 START/B）；发布端是 RELIABLE+TRANSIENT_LOCAL，这里同 QoS 才能拿到锁存初值
+    // 外部使能：/motion_enabled（遥控器 START/B）；使用默认 QoS（KEEP_LAST(10)+RELIABLE+VOLATILE，不锁存）
+    //   注意：VOLATILE ⇒ 节点重启后拿不到“上一次的锁存值”，必须等发布端再次发 true。
     motion_enabled_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
-        "motion_enabled", rclcpp::QoS(1).reliable().transient_local(),
+        "motion_enabled", rclcpp::QoS(10),
         std::bind(&SCANReplanFSM::motionEnabledCallback, this, std::placeholders::_1));
     mission_control_sub_ = node_->create_subscription<std_msgs::msg::String>(
         "/mission/control", rclcpp::QoS(10).reliable(),

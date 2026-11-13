@@ -68,9 +68,9 @@ public:
     cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 20);
     // 发布“冻结”信号：告诉规划器先别推进轨迹
     execution_frozen_pub_ = create_publisher<std_msgs::msg::Bool>("planning/go2_execution_frozen", 10);
-    // 外部使能：/motion_enabled；false 时不下发 /cmd_vel
+    // 外部使能：/motion_enabled；false 时不下发 /cmd_vel；默认 QoS（KEEP_LAST(10)+RELIABLE+VOLATILE，不锁存）
     motion_enabled_sub_ = create_subscription<std_msgs::msg::Bool>(
-        "motion_enabled", rclcpp::QoS(1).reliable().transient_local(),
+        "motion_enabled", rclcpp::QoS(10),
         [this](const std_msgs::msg::Bool::SharedPtr msg) {
           motion_enabled_ = msg && msg->data;
         });
