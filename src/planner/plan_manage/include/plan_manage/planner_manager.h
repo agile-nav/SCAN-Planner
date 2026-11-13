@@ -25,6 +25,7 @@
 #include <bspline_opt/bspline_optimizer.h>
 #include <bspline_opt/uniform_bspline.h>
 #include <plan_env/grid_map.h>
+#include <plan_env/replan_failure.h>
 #include <plan_manage/plan_container.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <traj_utils/planning_visualization.h>
@@ -69,6 +70,9 @@ namespace scan_planner
     GlobalTrajData global_data_;
     GridMap::Ptr grid_map_;
 
+    // 最近一次 reboundReplan 失败的原因
+    ReplanFailure lastFailureReason() const { return last_failure_; }
+
   private:
     rclcpp::Node *node_{nullptr};
     /* main planning algorithms & modules */
@@ -80,6 +84,9 @@ namespace scan_planner
 
     // 连续失败了几次（用来做退避策略和随机重试）
     int continuous_failures_count_{0};
+
+    // 最近一次 reboundReplan 失败的原因（供状态话题使用）
+    ReplanFailure last_failure_{ReplanFailure::NONE};
 
     // 把刚算出来的轨迹记录进 local_data_（开始时间、时长、轨迹本体等）
     void updateTrajInfo(const UniformBspline &position_traj, const rclcpp::Time time_now);
