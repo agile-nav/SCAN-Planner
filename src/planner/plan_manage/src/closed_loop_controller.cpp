@@ -24,6 +24,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <scan_planner_msgs/msg/bspline.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2/utils.hpp>
 
@@ -67,6 +68,21 @@ public:
     cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 20);
     // 发布“冻结”信号：告诉规划器先别推进轨迹
     execution_frozen_pub_ = create_publisher<std_msgs::msg::Bool>("planning/go2_execution_frozen", 10);
+    // 外部使能：/motion_enabled；false 时不下发 /cmd_vel；默认 QoS（KEEP_LAST(10)+RELIABLE+VOLATILE，不锁存）
+    motion_enabled_sub_ = create_subscription<std_msgs::msg::Bool>(
+        "motion_enabled", rclcpp::QoS(10),
+        [this](const std_msgs::msg::Bool::SharedPtr msg) {
+          motion_enabled_ = msg && msg->data;
+        });
+    // 任务控制：/mission/control（"pause" 停 / "resume" 继续）；命令类话题，不锁存
+    mission_control_sub_ = create_subscription<std_msgs::msg::String>(
+        "/mission/control", rclcpp::QoS(10).reliable(),
+        [this](const std_msgs::msg::String::ConstSharedPtr msg) {
+          if (msg->data == "pause")
+            paused_ = true;
+          else if (msg->data == "resume")
+            paused_ = false;
+        });
     // 每 10ms 执行一次控制计算
     cmd_timer_ = create_wall_timer(std::chrono::milliseconds(10),
                                    std::bind(&ClosedLoopController::cmdCallback, this));
@@ -200,6 +216,13 @@ private:
   // 【核心】每 10ms 一次：算出并发布速度指令
   void cmdCallback()
   {
+    // 外部未使能（未按 START / 按了 B）→ 不下发 /cmd_vel，并让规划器冻结轨迹时钟
+    if (!motion_enabled_)
+    {
+      publishExecutionFrozen(true);
+      last_update_time_ = now();
+      return;
+    }
     // 还没轨迹、或还没里程计 → 什么都不做，只发一个“停”和“未冻结”
     if (!receive_traj_ || !have_odom_)
     {
@@ -210,6 +233,14 @@ private:
     }
     // 当前时间
     const auto current_time = now();
+    // 外部暂停（/mission/control = pause）：只发 0、不跟踪任何轨迹，直到 resume
+    if (paused_)
+    {
+      publishExecutionFrozen(true);
+      publishStop();
+      last_update_time_ = current_time;
+      return;
+    }
     // 距上次计算过了多久
     double dt = (current_time - last_update_time_).seconds();
     // 时间差异常（时钟跳变/卡顿）→ 当作 0，不推进
@@ -274,9 +305,13 @@ private:
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr execution_frozen_pub_;
   rclcpp::Subscription<scan_planner_msgs::msg::Bspline>::SharedPtr bspline_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mission_control_sub_;
   rclcpp::TimerBase::SharedPtr cmd_timer_;
   bool receive_traj_{false};
+  bool motion_enabled_{false};
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr motion_enabled_sub_;
   bool have_odom_{false};
+  bool paused_{false};
   std::vector<UniformBspline> traj_;
   double traj_duration_{0.0};
   std::int64_t traj_id_{0};

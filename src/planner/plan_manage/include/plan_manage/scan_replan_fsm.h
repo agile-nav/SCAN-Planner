@@ -43,6 +43,7 @@
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include <vector>
@@ -50,6 +51,7 @@
 
 #include <bspline_opt/bspline_optimizer.h>
 #include <plan_env/grid_map.h>
+#include <plan_env/replan_failure.h>
 #include <scan_planner_msgs/msg/bspline.hpp>
 #include <scan_planner_msgs/msg/data_disp.hpp>
 #include <plan_manage/planner_manager.h>
@@ -113,12 +115,39 @@ namespace scan_planner
     double reference_tf_max_age_{0.3}, reference_tf_grace_{0.5};
     double reference_tf_jump_translation_{0.2}, reference_tf_jump_yaw_{5.0 * 3.14159265358979323846 / 180.0};
 
+    // ---------- 运行状态(running/goal_reached)判定参数 ----------
+    // 到达目标的 2D 水平距离容差(米)
+    double status_goal_tol_{0.20};
+    // 到达判定的退出阈值（滞回）：越小越容易掉出"到达候选"
+    double status_goal_tol_exit_{0.30};
+    // "速度为零"阈值(米/秒)
+    double status_speed_tol_{0.05};
+    // "已停"判定的退出阈值（滞回）
+    double status_speed_tol_exit_{0.10};
+    // ---- 执行进展(stuck)检测：只看物理进展，不看时间 ----
+    // 无进展窗口(秒)：这么久没有"更靠近目标"就判为卡住
+    double stuck_window_{3.0};
+    // 窗口内距离至少要比历史最小值再小这么多才算"有进展"(米)
+    double stuck_progress_eps_{0.05};
+    // 绝对上限(秒)：t_cur > 轨迹时长 + 它 才强制收尾，只防死循环
+    double finish_timeout_extra_{30.0};
+    // 到达且停稳持续多久才判为 goal_reached(秒)
+    double status_stop_debounce_{1.0};
+    // 心跳频率(Hz)：周期性重发当前状态；0 表示关闭
+    double status_heartbeat_hz_{1.0};
+    // 判定"目标变了"的位置阈值(米)：新目标点与上一次相差超过它才算新目标
+    double status_goal_change_eps_{0.05};
+    // 持续规划失败/急停多久判为 error(秒)
+    double status_error_time_{1.0};
+
     // ---------- 运行时数据（程序自己维护的状态） ----------
     /* planning data */
     bool trigger_, have_target_, have_odom_, have_new_target_;
     bool preset_started_{false};
     bool rviz_height_ready_;
     bool go2_execution_frozen_;
+    // 外部使能（/motion_enabled，遥控器 START/B）：false 时冻结轨迹不规划不下发
+    bool motion_enabled_{false};
     bool enable_fail_safe_, need_hover_stop_;
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};
@@ -143,6 +172,47 @@ namespace scan_planner
     std::vector<Eigen::Vector3d> active_waypoints_;
     int current_wp_;
 
+    // ---------- 运行状态发布(running/goal_reached) ----------
+    // 是否收到过目标：没收到过属于 idle，不上话题
+    bool status_have_goal_{false};
+    // 当前是否已判为 goal_reached（锁存，直到收到新目标）
+    bool status_is_stop_{false};
+    // 是否已有"上一次目标点"，用于重复路径去重
+    bool status_goal_valid_{false};
+    // 上一次用于判定的目标点（参考系/map）
+    Eigen::Vector3d status_goal_ref_{Eigen::Vector3d::Zero()};
+    // 到达判定期间锁存的目标点：防止 end_pt_ 随定位漂移导致判定基准变化
+    Eigen::Vector3d status_goal_snapshot_{Eigen::Vector3d::Zero()};
+    // "到达且停稳"起始时刻，用于去抖
+    rclcpp::Time status_hold_since_{0, 0, RCL_ROS_TIME};
+    // 上一次发布状态的时刻，用于心跳
+    rclcpp::Time status_last_pub_time_{0, 0, RCL_ROS_TIME};
+    // 持续失败/急停的起始时刻（用于 error 去抖）
+    rclcpp::Time status_problem_since_{0, 0, RCL_ROS_TIME};
+    // 执行进展：本轮见过的"到目标最小 2D 距离"、最后一次有进展的时刻、本拍是否无进展
+    double exec_best_dist_{1e9};
+    rclcpp::Time exec_progress_time_{0, 0, RCL_ROS_TIME};
+    bool exec_no_progress_{false};
+    // 上一次发布的状态（用于状态切换时立即上报）
+    std::string status_last_state_;
+    // 本次 error 期间出现过的所有失败原因（去重、按首次出现顺序）
+    std::vector<ReplanFailure> status_reasons_;
+    // 硬错误(error)是否已锁存：一旦进入 error 就锁存，只有重启节点才清除
+    bool status_error_latched_{false};
+    // 门控状态名（可配置；下游若需兼容旧的 stopped，可把 disabled 配成 stopped）
+    std::string status_name_disabled_{"disabled"};
+    std::string status_name_paused_{"paused"};
+
+    // 最近的失败原因（供 error 的 reason 字段）
+    ReplanFailure status_reason_{ReplanFailure::NONE};
+    // getLocalTarget 失败的具体原因（no_free_target / tf_unavailable）
+    ReplanFailure last_target_failure_{ReplanFailure::NONE};
+
+    // 外部任务控制：/mission/control 是否处于 pause（停止）
+    bool externally_stopped_{false};
+    // 最近一条可用的全局路径（/global_path）；resume 时用它重建
+    nav_msgs::msg::Path::ConstSharedPtr last_global_path_;
+
     bool flag_escape_emergency_;
 
     /* ROS utils */
@@ -156,10 +226,15 @@ namespace scan_planner
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr go2_execution_frozen_sub_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr motion_enabled_sub_;
+    // 任务控制：/mission/control（pause 停 / resume 继续）
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mission_control_sub_;
     rclcpp::Publisher<scan_planner_msgs::msg::Bspline>::SharedPtr bspline_pub_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr local_path_pub_;
     rclcpp::Publisher<scan_planner_msgs::msg::DataDisp>::SharedPtr data_disp_pub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr self_inflation_pub_;
+    // 运行状态话题：只发 running / goal_reached（idle 不发）
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
 
     // ---------- 辅助函数（内部使用） ----------
     /* helper functions */
@@ -192,6 +267,26 @@ namespace scan_planner
     double getOdomYaw() const;
     double estimateYawFromSegment(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const;
     void updateLocalTrajTimeFreeze();
+    // 收到新目标时调用：进入 running 并清掉 goal_reached/去抖状态
+    void armPlannerStatus();
+    // 每个 tick 评估是否"到达目标且停稳"，并用心跳周期重发
+    void updatePlannerStatus();
+    void updateExecutionProgress();
+    void motionEnabledCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg);
+    // 向 /local_planner/status 发布状态（空串不发布）
+    void publishPlannerStatus(const std::string &state);
+    // 把状态拼成 JSON（state / msgs）
+    std::string buildStatusJson(const std::string &state);
+    // “如果没有门控，本该报什么状态”（只读、无副作用），供 JSON 的 inner 字段使用
+    std::string statusInnerState() const;
+    // 记录一次失败原因（设为当前原因，并累积到本次 error 的原因列表）
+    void setStatusReason(ReplanFailure r);
+    // 任务控制回调：pause / resume
+    void missionControlCallback(const std_msgs::msg::String::ConstSharedPtr &msg);
+    // 外部停止：清全局+局部轨迹，状态置 stopped
+    void applyExternalStop();
+    // 外部继续：用缓存路径重建，或等待新的 /global_path
+    void applyExternalResume();
 
     // ---------- ROS 回调函数（收到消息/定时器到点时被自动调用） ----------
     /* ROS functions */
