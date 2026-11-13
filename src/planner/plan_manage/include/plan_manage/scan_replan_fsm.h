@@ -127,6 +127,8 @@ namespace scan_planner
     // ---- 执行进展(stuck)检测：只看物理进展，不看时间 ----
     // 无进展窗口(秒)：这么久没有"更靠近目标"就判为卡住
     double stuck_window_{3.0};
+    // 诊断打印节流(ms)：[replan-geom] 等高频日志用
+    int diag_throttle_ms_{200};
     // 窗口内距离至少要比历史最小值再小这么多才算"有进展"(米)
     double stuck_progress_eps_{0.05};
     // 绝对上限(秒)：t_cur > 轨迹时长 + 它 才强制收尾，只防死循环

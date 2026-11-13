@@ -118,6 +118,7 @@ namespace scan_planner
     status_goal_change_eps_ = load_parameter<double>(node_, "fsm.status_goal_change_eps", 0.05);
     status_error_time_ = load_parameter<double>(node_, "fsm.status_error_time", 3.0);
     stuck_window_ = load_parameter<double>(node_, "fsm.finish_stuck_window", 3.0);
+    diag_throttle_ms_ = load_parameter<int>(node_, "fsm.diag_throttle_ms", 200);
     stuck_progress_eps_ = load_parameter<double>(node_, "fsm.finish_progress_eps", 0.05);
     finish_timeout_extra_ = load_parameter<double>(node_, "fsm.finish_timeout_extra", 30.0);
     stop_traj_on_finish_ = load_parameter<bool>(node_, "fsm.stop_traj_on_finish", true);
@@ -2027,7 +2028,7 @@ namespace scan_planner
             tdir.normalize();
         }
       }
-      RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 200,
+      RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), diag_throttle_ms_,
                            "[replan-geom] ok=%d robot=(%.2f,%.2f,yaw=%.0f) goal=(%.2f,%.2f) d_goal=%.2f "
                            "start=(%.2f,%.2f) target=(%.2f,%.2f) d_target=%.2f bearing=%.0fdeg "
                            "traj_dir=(%.2f,%.2f) traj_dur=%.2f",

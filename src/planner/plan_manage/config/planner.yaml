@@ -55,6 +55,8 @@ scan_planner_node:
     fsm.finish_progress_eps: 0.05
     # 绝对上限(秒)：t_cur > 轨迹时长 + 它 才强制收尾，只防死循环
     fsm.finish_timeout_extra: 30.0
+    # 诊断打印节流(ms)：[replan-geom] 每条最快这么多毫秒一条（0=不节流）
+    fsm.diag_throttle_ms: 200
     # 结束/放弃目标时发一条"停在原地"的轨迹通知控制器刹停（默认 true，不建议关）
     fsm.stop_traj_on_finish: true
     # 轨迹时钟连续夹住(秒)：不允许 t_cur 比"实际投影进度"超前超过这么多。0=关闭
