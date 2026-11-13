@@ -31,6 +31,34 @@ scan_planner_node:
     # 连续规划失败超过这个次数，就强制进入紧急停止
     fsm.max_replan_fail_count: 1000
 
+    # ---- 运行状态(running/goal_reached)判定（发到 /local_planner/status）----
+    # 到达目标的 2D 水平距离容差(米)：与控制器 finish_dist 口径一致
+    fsm.status_goal_tol: 0.20
+    # 到达判定的"退出"阈值(米)：滞回用，大于进入阈值 → 边界抖动不会反复重置去抖
+    fsm.status_goal_tol_exit: 0.30
+    # "速度为零"阈值(米/秒)
+    fsm.status_speed_tol: 0.05
+    # "已停"判定的"退出"阈值(米/秒)：滞回用
+    fsm.status_speed_tol_exit: 0.10
+    # 到达且停稳持续多久才判为 goal_reached(秒)
+    fsm.status_stop_debounce: 1.0
+    # 心跳频率(Hz)：周期性重发当前状态；0 表示关闭
+    fsm.status_heartbeat_hz: 1.0
+    # 判定"目标变了"的位置阈值(米)：新目标点与上一次相差超过它才算新目标
+    fsm.status_goal_change_eps: 0.05
+    # 持续规划失败/急停(碰撞、TF异常)多久判为 error(秒)
+    fsm.status_error_time: 3.0
+    # 门控状态名：未使能(disabled) / 任务暂停(stopped，沿用旧名)
+    fsm.status_name_disabled: disabled
+    fsm.status_name_paused: stopped
+    # ---- 执行进展(stuck)检测（只用于判"走完"，与上面的状态话题判据独立）----
+    # 无进展窗口(秒)：这么久没有更靠近目标 + 已停 + 非原地转向 → 判为卡住
+    fsm.finish_stuck_window: 3.0
+    # 窗口内距离至少要比历史最小值再小这么多才算"有进展"(米)
+    fsm.finish_progress_eps: 0.05
+    # 绝对上限(秒)：t_cur > 轨迹时长 + 它 才强制收尾，只防死循环
+    fsm.finish_timeout_extra: 30.0
+
     # 下面四项只在 navi_mode=3（参考路径）下生效，用来判断"参考坐标系"是否还可信。
     # 参考路径写在地图系/参考系下，规划时要靠 TF 把它换算到 world 系；
     # TF 一旦长时间拿不到、或突然跳变，就必须停下来重新规划。
