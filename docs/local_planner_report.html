@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>局部规划流水线 —— 工作汇报</title>
+<style>
+  :root{
+    --bg:#0f1216; --panel:#161b22; --panel2:#1b222b; --line:#2a3441;
+    --fg:#e6edf3; --dim:#9aa7b4; --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 22px 80px}
+  header{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:28px}
+  h1{font-size:26px;margin:0 0 8px;letter-spacing:.3px}
+  .sub{color:var(--dim);font-size:14px}
+  .sub code{color:var(--acc)}
+  .lede{margin-top:18px;padding:14px 16px;background:var(--panel2);border-left:3px solid var(--acc);border-radius:6px;font-size:14.5px}
+  h2{font-size:19px;margin:38px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h2 .tag{font-size:12px;color:var(--dim);font-weight:400;margin-left:8px}
+
+  /* 流程条 */
+  .flow{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 6px}
+  .flow .n{flex:1 1 92px;min-width:92px;background:var(--panel);border:1px solid var(--line);
+           border-radius:8px;padding:9px 10px;font-size:12.5px;text-align:center}
+  .flow .n b{display:block;color:var(--acc);font-family:var(--mono);font-size:11px;letter-spacing:.6px}
+  .flow .arrow{align-self:center;color:var(--dim);font-size:13px}
+
+  /* 阶段卡片 */
+  .stage{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:12px 0}
+  .stage h3{margin:0 0 10px;font-size:16px;display:flex;align-items:center;gap:10px}
+  .stage h3 .idx{font-family:var(--mono);font-size:12px;color:var(--bg);background:var(--acc);
+                 padding:2px 8px;border-radius:20px;font-weight:700}
+  .stage p{margin:8px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px 22px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .kv{font-size:14px}
+  .kv b{color:var(--dim);font-weight:500}
+  ul{margin:8px 0 8px 20px;padding:0}
+  li{margin:4px 0}
+  code{font-family:var(--mono);font-size:13px;background:#0b0f14;border:1px solid var(--line);
+       border-radius:4px;padding:1px 5px;color:#c9d1d9}
+  .num{font-family:var(--mono);color:#79c0ff}
+  .new{display:inline-block;font-size:11.5px;color:var(--ok);border:1px solid rgba(63,185,80,.45);
+       background:rgba(63,185,80,.10);border-radius:20px;padding:1px 8px;margin-left:6px;vertical-align:1px}
+  .fix{display:inline-block;font-size:11.5px;color:var(--warn);border:1px solid rgba(210,153,34,.45);
+       background:rgba(210,153,34,.10);border-radius:20px;padding:1px 8px;margin-left:6px;vertical-align:1px}
+
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--dim);font-weight:600}
+  td code{background:transparent;border:none;padding:0}
+
+  .weak{border-left:3px solid var(--bad)}
+  .weak h3 .idx{background:var(--bad);color:#fff}
+  .evid{font-family:var(--mono);font-size:12.5px;color:var(--dim);background:#0b0f14;
+        border:1px solid var(--line);border-radius:6px;padding:10px 12px;white-space:pre-wrap;margin:10px 0 0}
+  footer{margin-top:46px;padding-top:16px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  .pill{display:inline-block;font-family:var(--mono);font-size:12px;background:var(--panel2);
+        border:1px solid var(--line);border-radius:20px;padding:2px 10px;margin:0 6px 6px 0;color:var(--dim)}
+  @media print{
+    :root{--bg:#fff;--panel:#fff;--panel2:#f6f8fa;--line:#d0d7de;--fg:#1f2328;--dim:#57606a;--acc:#0969da}
+    body{font-size:12px} .wrap{max-width:none;padding:0}
+    .stage,.lede,.flow .n{break-inside:avoid}
+    code{background:#f6f8fa}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>局部规划流水线 —— 工作汇报</h1>
+  <div class="sub">
+    仓库 <code>scan_planner</code> · 分支 <code>feat/progress-clock</code> · 断点提交 <code>3b0327c</code>（P17a + P19）
+    · 基于 <code>ff134f4</code> 共 28 次提交 / 20 个文件 / +1558 −70
+  </div>
+  <div class="lede">
+    <b>一句话概括：</b>全局轨迹给出「往哪走」（一个 <span class="num">5 m</span> 外的点和它的速度），
+    草稿给出「大概怎么连」，采样与高度给出「离散的形状」，参数化把它变成可优化的控制点，
+    避障准备给出「往哪推」，L-BFGS 给出「最终形状」，可行性修正给出「走多快」，
+    最后控制器把它变成每 <span class="num">10 ms</span> 一个的机体系速度指令；
+    位姿经里程计回到规划器，构成闭环。
+  </div>
+</header>
+
+<h2>流水线全景 <span class="tag">阶段 0 → 10</span></h2>
+<div class="flow">
+  <div class="n"><b>0</b>触发</div><div class="arrow">→</div>
+  <div class="n"><b>1</b>取局部目标</div><div class="arrow">→</div>
+  <div class="n"><b>2</b>造草稿</div><div class="arrow">→</div>
+  <div class="n"><b>3</b>采样与高度</div><div class="arrow">→</div>
+  <div class="n"><b>4</b>B 样条参数化</div><div class="arrow">→</div>
+  <div class="n"><b>5</b>避障准备</div><div class="arrow">→</div>
+  <div class="n"><b>6</b>L-BFGS 优化</div><div class="arrow">→</div>
+  <div class="n"><b>7</b>可行性修正</div><div class="arrow">→</div>
+  <div class="n"><b>8</b>复核与发布</div><div class="arrow">→</div>
+  <div class="n"><b>9</b>控制层</div><div class="arrow">→</div>
+  <div class="n"><b>10</b>反馈回环</div>
+</div>
+
+<!-- ===================== 阶段 0 ===================== -->
+<div class="stage">
+  <h3><span class="idx">阶段 0</span>触发：什么时候需要一条新轨迹</h3>
+  <div class="grid2">
+    <div class="kv"><b>① 收到新目标</b> → 进入 <code>GEN_NEW_TRAJ</code>（<code>have_new_target_ = true</code>）</div>
+    <div class="kv"><b>② 走满前视阈值</b> → 相对轨迹起点实际推进 <span class="num">1.0 m</span>（<code>fsm.thresh_replan</code>）即允许常规重规划；距起点不足 <code>replan_thresh_</code> 时明确不重规划（避免抖动）</div>
+    <div class="kv"><b>③ 安全循环</b>（<span class="num">50 ms</span>）沿轨迹采样发现碰撞 → 抢救式重规划，来不及则急停</div>
+    <div class="kv"><b>④ 参考系跳变</b>（mode 3）→ 参考 TF 平移 &gt; <span class="num">0.2 m</span> 或偏航 &gt; <span class="num">5°</span> 时以实测状态重规划<span class="new">本分支</span></div>
+  </div>
+  <p><b>补充</b>：同一状态下的连续重试带退避 <span class="num">0.2→0.4→0.8→1.0 s</span><span class="new">P6</span>；
+  另有"原地打转守卫"（位移 ≤0.15 m 且累计转角 ≥180° → 判失败并重取目标）<span class="new">P14</span>。</p>
+</div>
+
+<!-- ===================== 阶段 1 ===================== -->
+<div class="stage">
+  <h3><span class="idx">阶段 1</span>取局部目标：把全局轨迹变成一个"可执行的点 + 速度"</h3>
+  <ul>
+    <li>在全局轨迹上定位机器人当前对应的时刻（投影），沿轨迹累计弧长到 <code>fsm.planning_horizon</code> = <span class="num">5.0 m</span>（A2 当前值），取该处位置为局部目标、该处速度为局部目标速度。</li>
+    <li>目标落在障碍里 → 沿轨迹向前/向后各扩展搜索一个可站点替代；找不到则本轮放弃（<code>NO_FREE_TARGET</code>）。</li>
+    <li>局部目标距最终终点 &lt; <b>刹车距离</b> 时，目标速度置零。<br>
+        <code>braking_distance = max_vel² / (2·max_acc)</code> = 1.0²/(2×1.5) = <span class="num">0.33 m</span><span class="fix">修正：不是 1.0 m</span></li>
+    <li>mode 3 下：终点 <code>end_pt_ = reference_to_world × reference_end_pt_</code>，位置/速度都要过一遍参考系变换。</li>
+  </ul>
+</div>
+
+<!-- ===================== 阶段 2 ===================== -->
+<div class="stage">
+  <h3><span class="idx">阶段 2</span>造草稿：先要一条"能连起来"的初始猜测</h3>
+  <div class="grid2">
+    <div>
+      <p><b>A 分支（新目标 / 强制多项式 / 首次）</b></p>
+      <ul>
+        <li>按梯形速度曲线估时长：<code>T = (d − v²/a)/v + 2v/a</code>（A2：v=1.0, a=1.5）
+            ⇒ 5 m 约 <span class="num">5.67 s</span>、2.5 m 约 <span class="num">3.17 s</span><span class="fix">修正：不是固定 4.5 s</span></li>
+        <li>解一条单段五次多项式，六个边界条件（起点 p/v/a、终点 p/v/a）。</li>
+      </ul>
+    </div>
+    <div>
+      <p><b>B 分支（常规重规划）</b></p>
+      <ul>
+        <li>沿旧轨迹从当前时刻采到末尾；末端与新目标还差一截就补一段五次多项式接过去（保持速度/加速度连续）。</li>
+        <li>失败降级链：<b>续接 → 多项式 → 带随机中点的多项式</b>。</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 阶段 3 ===================== -->
+<div class="stage">
+  <h3><span class="idx">阶段 3</span>采样与高度：把连续曲线离散成点集</h3>
+  <ul>
+    <li>按时间步长打点，要求相邻点距 ≤ <code>ctrl_pt_dist×1.5</code> = <span class="num">0.3 m</span>、点数 ≥ <span class="num">7</span>，否则缩短步长重来。</li>
+    <li>高度重写 <code>applyLinearZReference()</code>：按<b>水平累计距离</b>的比例，从起点高度线性插值到目标高度（首尾强制对齐）。目的：四足走平地时高度不该忽高忽低。</li>
+  </ul>
+</div>
+
+<!-- ===================== 阶段 4 ===================== -->
+<div class="stage">
+  <h3><span class="idx">阶段 4</span>B 样条参数化：连续 → 可优化</h3>
+  <ul>
+    <li>用点集 + 四个边界导数解<b>超定线性方程组</b>，得到 K+2 个控制点。</li>
+    <li>阶数 3、时间间隔 <code>ts = ctrl_pt_dist / max_vel × 1.2</code> = 0.2/1.0×1.2 = <span class="num">0.24 s</span>（若 max_vel 改回 0.75 则为 0.32 s）。</li>
+    <li>此后任意时刻的位置、速度、加速度都可求 ⇒ 后续所有检查与下发都基于这条曲线。</li>
+  </ul>
+</div>
+
+<!-- ===================== 阶段 5 ===================== -->
+<div class="stage">
+  <h3><span class="idx">阶段 5</span>避障准备：给每个撞墙控制点一个"往哪推"</h3>
+  <ul>
+    <li>沿控制点连成的折线细密采样，只检查<b>前 2/3</b> 的控制点，找出所有连续碰撞段。</li>
+    <li>每段跑一次 A\*（池子 <span class="num">160³</span>，覆盖 ±4 m，以段中点为中心）得到绕行路线。</li>
+    <li>求"控制点切线"与 A\* 路线的交点 ⇒ 每个撞墙控制点得到一组 <b>基点（障碍表面）+ 方向（外法线）</b>。</li>
+    <li><b>本分支的健壮化</b>：A\* 失败不再"与下一段合并"（越并越长），改为<b>二分重试</b>；最短段仍失败时用<b>障碍法线兜底</b>给出方向<span class="new">P15</span>。</li>
+  </ul>
+</div>
+
+<!-- ===================== 阶段 6 ===================== -->
+<div class="stage">
+  <h3><span class="idx">阶段 6</span>L-BFGS 优化：最终形状</h3>
+  <ul>
+    <li>优化变量：中间控制点的 <b>x、y</b>（z 梯度清零，不优化）。<b>首尾各 <code>order_=3</code> 个控制点锁死</b> ⇒ 起点若在障碍里，优化器救不回来（这解释了历史上 <code>START_IN_OBSTACLE</code> 的顽固性）。</li>
+    <li>三项代价：<b>平滑</b>（四阶差分近似 jerk）、<b>避障</b>（沿方向离开障碍表面的距离不足安全距离就罚）、<b>可行性</b>（速度/加速度超限就罚）。</li>
+    <li>优化中途发现新碰撞 → 中断本轮、重算方向、从头再来（<code>STOP_FOR_REBOUND</code>）。</li>
+    <li>求解后仍碰撞 → <b>避障权重加倍重启，最多 3 次</b>；第 3 次仍失败才判本轮失败。</li>
+  </ul>
+</div>
+
+<!-- ===================== 阶段 7 ===================== -->
+<div class="stage">
+  <h3><span class="idx">阶段 7</span>可行性修正：几何不动，只拉长时间轴</h3>
+  <ul>
+    <li>检查是否超速/超加速度；超限就按超限倍数把时间轴整体拉长 ⇒ 几何路径不变、速度成比例下降、加速度按平方下降。</li>
+    <li>拉长后重新采样并做一次细化优化，用<b>各向异性贴合</b>把轨迹拉回原形状：纵向允许偏 <span class="num">25×</span>、横向只允许 <span class="num">1×</span>（横向更严格，保证不贴边）。</li>
+    <li>修正后仍不可行 → 丢弃，本轮失败（<code>DYNAMIC_INFEASIBLE</code> / <code>REFINE_UNSAFE</code>）。</li>
+  </ul>
+</div>
+
+<!-- ===================== 阶段 8 ===================== -->
+<div class="stage">
+  <h3><span class="idx">阶段 8</span>复核与发布</h3>
+  <ul>
+    <li>再按细步长采一遍，核对速度/加速度模长是否达标（同样只查前 2/3）。</li>
+    <li>通过后把位置/速度/加速度三条曲线写入 <code>local_data_</code>，轨迹编号 +1。</li>
+    <li>打包成 <code>Bspline</code> 消息（控制点 + 节点向量 + 阶数 + 起始时刻 + 编号）发布到 <code>/planning/bspline</code>，同时发一份 <code>/local_path</code> 供观察。</li>
+  </ul>
+</div>
+
+<!-- ===================== 阶段 9 ===================== -->
+<div class="stage">
+  <h3><span class="idx">阶段 9</span>控制层：每 10 ms 一条机体系速度</h3>
+  <ul>
+    <li>用控制点 + 节点向量重建 B 样条并求导得速度曲线。</li>
+    <li><b>参考时刻跟随实际进度</b>：<code>exec_time</code> 被夹在「机器人实际投影进度 + <code>time_lead 0.2 s</code>」以内，不再开环推进<span class="new">P3</span>。</li>
+    <li>用前方 <span class="num">0.8 s</span>（<code>time_forward</code>）处的点估算期望朝向；朝向误差 &gt; <span class="num">0.8 rad</span> → 发冻结信号、只输出角速度（原地转向，上限 <span class="num">1.2 rad/s</span>）；否则解除冻结、推进执行时间。</li>
+    <li>期望世界系速度 = <b>轨迹速度 + 位置误差 × 0.8</b>（<code>kp_pos</code>），限幅（<span class="num">0.75 / 0.35 m/s</span>）后转到机体系发 <code>/cmd_vel</code>。</li>
+    <li>轨迹走完且位置误差 &lt; <span class="num">0.15 m</span> → 全零停车。</li>
+    <li><b>三个保护</b>：轨迹整体超时（<code>dur + 3 s</code> 丢弃并发 0）<span class="new">P2</span>；
+        卡住刹停（"想动但实测不动"持续 <span class="num">1.0 s</span> → 冻结 + 停）<span class="new">P5</span>；
+        冻结期间超时判定顺延<span class="new">P19</span>。</li>
+  </ul>
+</div>
+
+<!-- ===================== 阶段 10 ===================== -->
+<div class="stage">
+  <h3><span class="idx">阶段 10</span>反馈回环：让"时间"锚在实测上</h3>
+  <ul>
+    <li><code>/cmd_vel</code> → 执行机构 → 位姿更新 → <code>/lio/robo/odom</code> 回到规划器，成为下一轮起点。</li>
+    <li><b>轨迹时钟连续夹住</b>：<code>t_cur</code> 不得超过「实际投影进度 + <span class="num">0.3 s</span>」<span class="new">P4</span>（一处改动，5 个消费者同时生效）。</li>
+    <li>冻结信号回传状态机 → 原地转向期间暂停轨迹时钟；结束/放弃时发一条"停在原地"轨迹让控制器立即刹停<span class="new">P1</span>。</li>
+    <li><b>无进展收尾</b>：以<b>墙钟</b>计（提交后 ≥3 s 且几乎不动）判本段结束，避免"时钟被夹住 ⇒ 永不收尾"<span class="new">P16/P19</span>。</li>
+    <li><b>50 ms 安全循环</b>：沿轨迹采样查碰撞，跳过"当前位置附近 0.25 s"（机器人自身常在自己膨胀层里）<span class="new">P17a</span>；
+        发现碰撞 → 抢救式重规划，来不及（&lt;1.0 s）→ 急停。</li>
+  </ul>
+</div>
+
+<!-- ===================== 参数面板 ===================== -->
+<h2>当前 A2 参数面板 <span class="tag">真机实测生效值</span></h2>
+<table>
+  <tr><th>类别</th><th>参数</th><th>值</th><th>说明</th></tr>
+  <tr><td rowspan="3">规划视野</td><td><code>fsm.planning_horizon</code></td><td><span class="num">5.0 m</span></td><td>局部目标前视距离</td></tr>
+  <tr><td><code>manager.planning_horizon</code></td><td><span class="num">5.0 m</span></td><td>仅用于"初始路径异常过长"判据</td></tr>
+  <tr><td><code>fsm.thresh_replan</code> / <code>thresh_no_replan</code></td><td><span class="num">1.0 / 0.1 m</span></td><td>重规划门槛 / 近终点不重规划</td></tr>
+  <tr><td rowspan="3">局部地图</td><td><code>sliding_map_size x/y/z</code></td><td><span class="num">12 / 12 / 4 m</span></td><td>滑动窗口（≥2×前视距离）</td></tr>
+  <tr><td><code>local_update_range x/y</code></td><td><span class="num">6 / 6 m</span></td><td>点云写入范围</td></tr>
+  <tr><td><code>resolution</code></td><td><span class="num">0.05 m</span></td><td>同时决定 A\* 步长</td></tr>
+  <tr><td rowspan="3">碰撞模型</td><td><code>double_cylinder_radius</code> / <code>offset</code></td><td><span class="num">0.25 / 0.18 m</span></td><td>前后双圆柱（带朝向判定）</td></tr>
+  <tr><td><code>obstacles_inflation_z_up/z_down</code></td><td><span class="num">0.1 / 0.1 m</span></td><td>竖直膨胀带</td></tr>
+  <tr><td><code>self_filter_radius</code></td><td><span class="num">0.45 m</span></td><td>滤掉机器人自身点云（0=关）</td></tr>
+  <tr><td rowspan="3">运动学</td><td><code>manager/optimization.max_vel</code></td><td><span class="num">1.0 m/s</span></td><td>规划速度上限</td></tr>
+  <tr><td><code>max_acc</code></td><td><span class="num">1.5 m/s²</span></td><td>加速度上限（决定刹车距离 0.33 m）</td></tr>
+  <tr><td><code>control_points_distance</code></td><td><span class="num">0.2 m</span></td><td>控制点间距（决定 ts=0.24 s）</td></tr>
+  <tr><td rowspan="3">A\* / 优化</td><td><code>manager.a_star_pool_size</code></td><td><span class="num">160³</span></td><td>覆盖 ±4 m（约 200 MB）</td></tr>
+  <tr><td>重启次数上限 / A\* 超时</td><td><span class="num">3 次 / 0.2 s</span></td><td>避障失败后的兜底</td></tr>
+  <tr><td><code>optimization.dist0</code>（clearance）</td><td>配置文件值</td><td>期望离障碍的安全距离</td></tr>
+  <tr><td rowspan="3">控制器</td><td><code>max_vx / max_vy / max_vyaw</code></td><td><span class="num">0.75 / 0.35 / 1.2</span></td><td>速度与角速度限幅（角速度有硬上限 1.2）</td></tr>
+  <tr><td><code>kp_pos / kp_yaw / time_lead</code></td><td><span class="num">0.8 / 1.5 / 0.2 s</span></td><td>位置增益 / 朝向增益 / 参考时刻超前量</td></tr>
+  <tr><td><code>heading_error_threshold / finish_dist</code></td><td><span class="num">0.8 rad / 0.15 m</span></td><td>原地转向阈值 / 到达判定</td></tr>
+</table>
+
+<!-- ===================== 薄弱环节 ===================== -->
+<h2>三个结构性薄弱环节 <span class="tag">已知、有实测依据、后续工作接口</span></h2>
+
+<div class="stage weak">
+  <h3><span class="idx">①</span>碰撞检查只覆盖前 2/3</h3>
+  <p>阶段 5（避障准备）、阶段 8（复核）、阶段 10（安全循环）三处都只查 <code>2/3</code> 的轨迹时长，控制器侧<b>完全没有</b>碰撞检查。
+  对 6 s 的局部轨迹，最后约 2 s（1~2 m）从未被校验 ⇒ 若该段穿障碍，仍会被发布并被跟踪。
+  <div class="evid">bspline_optimizer.cpp:1359  for (t = tm; t &lt; tmp * 2 / 3; ...)
+bspline_optimizer.cpp:1484  同上（refine 后复核）
+scan_replan_fsm.cpp:1871    t_2_3 = duration * 2 / 3
+closed_loop_controller.cpp  无任何 getInflateOccupancy / 碰撞检查</div>
+</div>
+
+<div class="stage weak">
+  <h3><span class="idx">②</span>投影在"折返路径"上有二义</h3>
+  <p>阶段 1 在<b>整条</b>全局轨迹上找"离机器人最近的点"。折返楼梯的两跑在 XY 上几乎重叠（只差约 2 m 高度），
+  最近点可能被吸到另一跑 ⇒ 局部目标跑到目标的反方向 ⇒ 局部目标朝反方向、d_goal 单调增大。
+  <div class="evid">实测：|局部目标 − 真目标| 平均 4.0 m、最大 8.5 m；
+      典型一帧 target=(7.70,3.93) vs goal=(3.58,5.48)，d_target 4.39 / d_goal 4.26，bearing 64°（有时 ±180°）
+一次"带 z 门限 + 单调"的尝试曾把局部目标锁死在南边 1 m（d_target=1.05、traj_dur=1.68 s），已回退</div>
+</div>
+
+<div class="stage weak">
+  <h3><span class="idx">③</span>全局路径与局部地图不一致</h3>
+  <p>全局规划器 <code>robot_radius: 0.0</code>（不膨胀），路径按"质点"搜索 ⇒ 可能穿过局部地图判定为障碍的结构。
+  局部规划器只能忠实跟随 ⇒ 初始路径穿墙 ⇒ 控制点成串落入膨胀层 ⇒ A\* 连串失败（二分到 0.1~0.4 m 仍失败）⇒ 法线硬推 ⇒ 优化失败 / 动态不可行 ⇒ 撞点在 0.5 s 内 ⇒ 急停。
+  <div class="evid">实测 15:41:26：局部目标 bearing 17°~76°、d_target 4~5 m（墙在中间）
+  [A-star FAIL] 控制点 x≈−4.2~−5.5、y≈−2.7~−4.9（一堵墙的两侧），occ_in=1 / occ_out=1 成串
+  [collision] ahead 5.16 → 4.03 → 1.49 → 0.52 s（self_occ=0，真障碍）⇒ EMERGENCY_SAFETY
+  状态 msgs = [optimize_failed, dynamic_infeasible, emergency_safety]</div>
+</div>
+
+<!-- ===================== 本分支改动 ===================== -->
+<h2>本分支做了什么 <span class="tag">相对基座 ff134f4，28 次提交</span></h2>
+<table>
+  <tr><th>方向</th><th>内容</th><th>提交</th></tr>
+  <tr><td><b>时间跟实际走</b></td><td>控制器参考时刻跟随实际进度（time_lead 0.2）；轨迹时钟连续夹住（≤投影+0.3 s）</td><td><code>87b721e</code> <code>8674dca</code></td></tr>
+  <tr><td><b>收尾与安全</b></td><td>结束后发停车轨迹；控制器轨迹整体超时；卡住刹停+同步冻结时钟；修"刚成功就被判无进展"；修"冻结时钟 vs 墙钟超时"死锁</td><td><code>608949b</code> <code>97d08aa</code> <code>81e8a4f</code> <code>3d37ca3</code> <code>3b0327c</code></td></tr>
+  <tr><td><b>起点能用</b></td><td>起点脱困三件套；修"起终同格"退化；原地打转守卫</td><td><code>861af55</code> <code>145a9d5</code></td></tr>
+  <tr><td><b>A\*/优化器健壮性</b></td><td>A\* 失败二分重试 + 障碍法线兜底（不再合并）；自过滤机器人自身点云</td><td><code>243959b</code> <code>af25e53</code></td></tr>
+  <tr><td><b>碰撞检查</b></td><td>跳过"当前位置附近 0.25 s"；打点 <code>[collision] ahead / self_occ</code></td><td><code>523eb36</code></td></tr>
+  <tr><td><b>观测</b></td><td>1 Hz 时间诊断、重规划几何量、A\* 失败原因/两端状态、搜索平面占用图、实际使用端点与推移量、启动前体检脚本</td><td><code>2c3701d</code> <code>5cecf7f</code> <code>49e9924</code> <code>5b86d81</code> <code>253dd3d</code> <code>2e92227</code></td></tr>
+  <tr><td><b>参数</b></td><td>视野 2.5→5.0 m、局部地图 6×6→12×12×4、A\* 池 100→160、自过滤 0.45、角速度 1.0→1.2、<code>param_overrides</code> 启动参数</td><td><code>622b8a5</code> <code>3356304</code> <code>134e466</code> <code>13e397c</code> <code>a6ea323</code></td></tr>
+</table>
+
+<h2>效果（真机）</h2>
+<table>
+  <tr><th>指标</th><th>改造前</th><th>改造后</th></tr>
+  <tr><td>规划成功率 ok1</td><td>30~37%</td><td><b>71~84%</b></td></tr>
+  <tr><td>优化器"前三个控制点在障碍里"</td><td>16~30 次/run</td><td><b>0~1 次</b></td></tr>
+  <tr><td>碰撞急停</td><td>8~56 次/run</td><td><b>1~3 次/run</b>（均为真实障碍）</td></tr>
+  <tr><td>结束后残余速度</td><td>0.375 m/s 长期顶着</td><td><b>0.004 m/s</b></td></tr>
+  <tr><td>轨迹时钟超前实际进度</td><td>最多 9.94 s</td><td><b>≤ 0.30 s</b>（控制器 ≤0.20 s）</td></tr>
+  <tr><td>长时间原地打转 / 卡住不收尾 / 墙钟超时丢轨迹</td><td>有</td><td><b>0 次</b></td></tr>
+  <tr><td>一次典型任务</td><td>—</td><td>5 分钟 60 次重规划，<b>d_goal 19.2 → 1.0 m</b></td></tr>
+</table>
+
+<footer>
+  <span class="pill">scan_planner</span><span class="pill">feat/progress-clock</span><span class="pill">HEAD 3b0327c</span>
+  <span class="pill">阶段 P1–P19（P17b/P19.1 已回退）</span>
+  <div style="margin-top:10px">待办：① 全局规划器 <code>robot_radius 0.0 → 0.28</code>；② 三处 2/3 → <code>check_fraction 0.95</code>；③ 投影带 z + 单调（须带偏置初值与质量恢复）。详见仓库 <code>docs/PENDING.md</code>。</div>
+</footer>
+
+</div>
+</body>
+</html>

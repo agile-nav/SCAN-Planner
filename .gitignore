@@ -56,3 +56,7 @@ Thumbs.db
 *.so.*
 *.dylib
 *.dll
+
+# ---- AI 编码工具的本机状态（每台机器各自的学习记录，不应进共享仓库） ----
+# AI coding assistant local state
+/.commandcode/
