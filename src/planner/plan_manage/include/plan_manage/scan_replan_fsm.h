@@ -159,6 +159,8 @@ namespace scan_planner
     double start_escape_max_offset_{1.0};
     // [replan-geom] 节流(ms)；0=不节流
     int diag_throttle_ms_{200};
+    // P17a：碰撞检查跳过起点附近这段(秒)
+    double collision_skip_from_start_{0.25};
     // 诊断：每次重规划关联号；diag_verbose 控制成功/逐迭代日志（默认关）
     uint64_t replan_rid_{0};
     bool diag_verbose_{false};

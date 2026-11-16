@@ -132,6 +132,7 @@ namespace scan_planner
     // [replan-geom] 节流(ms)；0=不节流
     diag_throttle_ms_ = load_parameter<int>(node_, "fsm.diag_throttle_ms", 200);
     diag_verbose_ = load_parameter<bool>(node_, "fsm.diag_verbose", false);
+    collision_skip_from_start_ = load_parameter<double>(node_, "fsm.collision_skip_from_start", 0.25);
     diag_param_cb_ = node_->add_on_set_parameters_callback(
         [this](const std::vector<rclcpp::Parameter> &params) {
           for (const auto &p : params)
@@ -1921,8 +1922,10 @@ namespace scan_planner
     for (double t = t_cur; t < info->duration_; t += time_step)
     {
       // 一旦越过 2/3 分界点，就停止检查
-      if (t_cur < t_2_3 && t >= t_2_3) // If t_cur < t_2_3, only the first 2/3 partition of the trajectory is considered valid and will get checked.
+      if (t_cur < t_2_3 && t >= t_2_3)
         break;
+      if (collision_skip_from_start_ > 0.0 && t - t_cur < collision_skip_from_start_)
+        continue;
 
       // 该时刻的位置
       Eigen::Vector3d pos = info->position_traj_.evaluateDeBoorT(t);
@@ -1931,6 +1934,10 @@ namespace scan_planner
       // 问地图：机器人以这个朝向待在这里，会不会撞？
       if (map->getInflateOccupancy(pos, estimateYawFromSegment(pos, pos_next)))
       {
+        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
+                             "[collision] ahead=%.2fs pos=(%.2f,%.2f,%.2f) self_occ=%d",
+                             t - t_cur, pos(0), pos(1), pos(2),
+                             map->getInflateOccupancy(odom_pos_, getOdomYaw()));
         // 参考 TF 缺失期间又检测到碰撞 → 直接急停（此时无法确认参考路径是否仍安全）
         if (navi_mode_ == NAVI_MODE::REFERENCE_PATH &&
             reference_tf_missing_since_.nanoseconds() != 0)

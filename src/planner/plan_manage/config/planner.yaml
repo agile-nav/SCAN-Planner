@@ -68,6 +68,8 @@ scan_planner_node:
     # [replan-geom] 节流(ms)；0=不节流
     fsm.diag_throttle_ms: 200
     fsm.diag_verbose: false
+    # P17a：碰撞检查跳过起点附近这段(秒)；0=旧行为
+    fsm.collision_skip_from_start: 0.25
 
     # 下面四项只在 navi_mode=3（参考路径）下生效，用来判断"参考坐标系"是否还可信。
     # 参考路径写在地图系/参考系下，规划时要靠 TF 把它换算到 world 系；
