@@ -120,7 +120,7 @@ public:
 	AStar(){};
 	~AStar();
 
-// 初始化：关联地图，并分配一块 pool_size 大小的搜索空间（本项目是 100x100x100 格）。
+// 初始化：关联地图，并分配一块 pool_size 大小的搜索空间（由 planner_manager 传入，当前为 160x160x100 格）。
 	void initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size);
 
 // 【核心】开始搜索。step_size 是格子边长（这里直接用地图像素分辨率），

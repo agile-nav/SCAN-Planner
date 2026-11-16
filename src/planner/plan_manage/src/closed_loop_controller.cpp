@@ -92,7 +92,7 @@ public:
   }
 
 private:
-  static constexpr double kMaxVYawLimit = 1.0;
+  static constexpr double kMaxVYawLimit = 1.2;
 
   // 把角度规整到 [-π, π]，避免“359 度和 1 度其实很接近”这类计算错误。
   // 把角度规整到 [-π, π]（359° 和 1° 其实是同一个方向）

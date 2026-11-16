@@ -111,8 +111,8 @@ namespace scan_planner
     bspline_optimizer_rebound_->setParam(node_);
     bspline_optimizer_rebound_->setEnvironment(grid_map_);
     bspline_optimizer_rebound_->a_star_.reset(new AStar);
-    // A* 的搜索空间固定为 100x100x100 个格子
-    bspline_optimizer_rebound_->a_star_->initGridMap(grid_map_, Eigen::Vector3i(100, 100, 100));
+    // A* 的搜索空间：160x160x100 个格子（@0.05 m 即 8x8x5 m，与滑动地图尺寸一致）
+    bspline_optimizer_rebound_->a_star_->initGridMap(grid_map_, Eigen::Vector3i(160, 160, 100));
 
     // 保存可视化对象（在 RViz 里画轨迹、目标点）
     visualization_ = vis;
