@@ -111,8 +111,27 @@ namespace scan_planner
     bspline_optimizer_rebound_->setParam(node_);
     bspline_optimizer_rebound_->setEnvironment(grid_map_);
     bspline_optimizer_rebound_->a_star_.reset(new AStar);
-    // A* 的搜索空间：160x160x100 个格子（@0.05 m 即 8x8x5 m，与滑动地图尺寸一致）
-    bspline_optimizer_rebound_->a_star_->initGridMap(grid_map_, Eigen::Vector3i(160, 160, 100));
+    // A* 搜索池按 XY 边长 + Z 深度参数化，默认保持本分支原来的 160×160×100。
+    // 池子以"当前这一段的中点"为中心，物理覆盖 = 边长 × 分辨率：
+    //   160 格 × 0.05 m = 8 m（XY 每侧 ±4.0 m）；100 格 × 0.05 m = 5 m（Z 每侧 ±2.5 m）。
+    // 池子偏小时 A* 会以 SEARCH_ERR 搜不到路（日志里 "A-star failed ... (ret=2)"）。
+    // 内存 ≈ XY² × Z × 48 B：160×160×100 ≈ 123 MB；160×160×160 ≈ 197 MB。
+    {
+      if (!node->has_parameter("manager.a_star_pool_size"))
+        node->declare_parameter<int>("manager.a_star_pool_size", 160);
+      if (!node->has_parameter("manager.a_star_pool_z"))
+        node->declare_parameter<int>("manager.a_star_pool_z", 100);
+      const int pool_xy = std::max(32, static_cast<int>(node->get_parameter("manager.a_star_pool_size").as_int()));
+      const int pool_z = std::max(32, static_cast<int>(node->get_parameter("manager.a_star_pool_z").as_int()));
+      RCLCPP_INFO(node->get_logger(),
+                  "[Astar] pool=%dx%dx%d  覆盖=±%.2f(x) ±%.2f(y) ±%.2f(z) m  约 %.0f MB",
+                  pool_xy, pool_xy, pool_z,
+                  pool_xy * grid_map_->getResolution() * 0.5,
+                  pool_xy * grid_map_->getResolution() * 0.5,
+                  pool_z * grid_map_->getResolution() * 0.5,
+                  pool_xy * pool_xy * pool_z * 48.0 / 1e6);
+      bspline_optimizer_rebound_->a_star_->initGridMap(grid_map_, Eigen::Vector3i(pool_xy, pool_xy, pool_z));
+    }
 
     // 保存可视化对象（在 RViz 里画轨迹、目标点）
     visualization_ = vis;
@@ -391,7 +410,8 @@ namespace scan_planner
     // STEP 5：后端优化（L-BFGS）。同时优化平滑度、避障、速度/加速度限制。
     // flag_step_1_success = 优化是否收敛成功。
     bool flag_step_1_success = bspline_optimizer_rebound_->BsplineOptimizeTrajRebound(ctrl_pts, ts);
-    cout << "first_optimize_step_success=" << flag_step_1_success << endl;
+    RCLCPP_INFO(node_->get_logger(), "[diag] rid=%llu stage=opt event=step1 ok=%d t_init=%.3f",
+                static_cast<unsigned long long>(diag_rid_), static_cast<int>(flag_step_1_success), t_init);
     if (!flag_step_1_success)
     {
       // visualization_->displayOptimalList( ctrl_pts, vis_id );
@@ -435,7 +455,9 @@ namespace scan_planner
     {
       // 打印蓝色警告并放弃（绝不把不安全的轨迹发出去）
     last_failure_ = flag_step_2_success ? ReplanFailure::DYNAMIC_INFEASIBLE : ReplanFailure::REFINE_UNSAFE;
-      printf("\033[34mThis refined trajectory is unsafe or dynamically infeasible. Skip publishing it.\n\033[0m");
+      RCLCPP_WARN(node_->get_logger(),
+                  "[diag] rid=%llu stage=feas event=refine_unpublish reason=%s",
+                  static_cast<unsigned long long>(diag_rid_), replanFailureToString(last_failure_));
       continuous_failures_count_++;
       return false;
     }
@@ -449,8 +471,9 @@ namespace scan_planner
     updateTrajInfo(pos, node_->now());
 
     // 打印三个阶段的总耗时
-    cout << "total time:\033[42m" << (t_init + t_opt + t_refine)
-         << "\033[0m,optimize:" << (t_init + t_opt) << ",refine:" << t_refine << endl;
+    RCLCPP_INFO(node_->get_logger(),
+                "[diag] rid=%llu stage=opt event=total t_init=%.3f t_opt=%.3f t_refine=%.3f total=%.3f",
+                static_cast<unsigned long long>(diag_rid_), t_init, t_opt, t_refine, t_init + t_opt + t_refine);
 
     // success. YoY
     // 规划成功，把连续失败计数清零

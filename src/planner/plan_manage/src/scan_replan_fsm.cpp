@@ -129,7 +129,20 @@ namespace scan_planner
     traj_clock_max_lead_ = load_parameter<double>(node_, "fsm.traj_clock_max_lead", 0.3);
     // 起点脱困：起点落在膨胀层里时，沿"起点→局部目标"方向最多前推的距离 [m]
     start_escape_max_offset_ = load_parameter<double>(node_, "fsm.start_escape_max_offset", 1.0);
+    // [replan-geom] 节流(ms)；0=不节流
+    diag_throttle_ms_ = load_parameter<int>(node_, "fsm.diag_throttle_ms", 200);
     diag_verbose_ = load_parameter<bool>(node_, "fsm.diag_verbose", false);
+    diag_param_cb_ = node_->add_on_set_parameters_callback(
+        [this](const std::vector<rclcpp::Parameter> &params) {
+          for (const auto &p : params)
+          {
+            if (p.get_name() == "fsm.diag_verbose") diag_verbose_ = p.as_bool();
+            else if (p.get_name() == "fsm.diag_throttle_ms") diag_throttle_ms_ = static_cast<int>(p.as_int());
+          }
+          rcl_interfaces::msg::SetParametersResult result;
+          result.successful = true;
+          return result;
+        });
 
     // ---------- 第3步：预设航点模式下，解析航点数组 ----------
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
@@ -1051,6 +1064,9 @@ namespace scan_planner
   // 记录一次失败原因：设为当前原因，并把新出现的原因累积到本次 error 的原因列表里
   void SCANReplanFSM::setStatusReason(ReplanFailure r)
   {
+    if (r != status_reason_ && r != ReplanFailure::NONE)
+      RCLCPP_INFO(node_->get_logger(), "[diag] rid=%llu stage=status event=reason reason=%s replan_fail=%d",
+                  static_cast<unsigned long long>(replan_rid_), replanFailureToString(r), replan_fail_count_);
     status_reason_ = r;
     if (r == ReplanFailure::NONE || replanFailureIsBenign(r))
       return;
@@ -2049,8 +2065,50 @@ namespace scan_planner
       traj_commit_wall_ = node_->now();
     }
 
-    // 打印规划结果
-    cout << "final_plan_success=" << plan_success << endl;
+    // 打印规划结果（ROS 日志，带 rid）
+    const auto fail_reason = planner_manager_ ? planner_manager_->lastFailureReason() : ReplanFailure::NONE;
+    RCLCPP_INFO(node_->get_logger(),
+                "[diag] rid=%llu stage=fsm event=replan ok=%d reason=%s traj_id=%d",
+                static_cast<unsigned long long>(replan_rid_), static_cast<int>(plan_success),
+                replanFailureToString(fail_reason), planner_manager_ ? planner_manager_->local_data_.traj_id_ : -1);
+
+    // ---- 【P9 诊断】每次重规划的几何量（只打印，不改行为）----
+    //   看两个数：bearing=局部目标相对机身朝向的夹角（±180° = 目标在身后 → 控制器会原地调头）；
+    //             d_target=局部目标距离（≈0 说明局部目标退化了 → 轨迹方向没有意义）。
+    {
+      const double yaw = getOdomYaw();
+      const Eigen::Vector2d to_tgt = local_target_pt_.head<2>() - odom_pos_.head<2>();
+      const double d_tgt = to_tgt.norm();
+      double bearing_deg = 0.0;
+      if (d_tgt > 1e-3)
+      {
+        const double raw = std::atan2(to_tgt(1), to_tgt(0)) - yaw;
+        bearing_deg = std::atan2(std::sin(raw), std::cos(raw)) * 180.0 / M_PI;
+      }
+      Eigen::Vector2d tdir(0.0, 0.0);
+      double traj_dur = 0.0;
+      if (plan_success)
+      {
+        const auto &info = planner_manager_->local_data_;
+        traj_dur = info.duration_;
+        if (traj_dur > 1e-3)
+        {
+          const Eigen::Vector3d p0 = info.position_traj_.evaluateDeBoorT(0.0);
+          const Eigen::Vector3d p1 = info.position_traj_.evaluateDeBoorT(std::min(0.1, traj_dur));
+          tdir = (p1 - p0).head<2>();
+          if (tdir.norm() > 1e-6)
+            tdir.normalize();
+        }
+      }
+      RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), diag_throttle_ms_,
+                           "[replan-geom] rid=%llu ok=%d robot=(%.2f,%.2f,yaw=%.0f) goal=(%.2f,%.2f) d_goal=%.2f "
+                           "start=(%.2f,%.2f) target=(%.2f,%.2f) d_target=%.2f bearing=%.0fdeg "
+                           "traj_dir=(%.2f,%.2f) traj_dur=%.2f",
+                           static_cast<unsigned long long>(replan_rid_), static_cast<int>(plan_success), odom_pos_(0), odom_pos_(1), yaw * 180.0 / M_PI,
+                           end_pt_(0), end_pt_(1), (end_pt_ - odom_pos_).norm(),
+                           start_pt_(0), start_pt_(1), local_target_pt_(0), local_target_pt_(1),
+                           d_tgt, bearing_deg, tdir(0), tdir(1), traj_dur);
+    }
 
     // ---- 成功：把轨迹打包成消息发布出去 ----
     if (plan_success)

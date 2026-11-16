@@ -65,6 +65,9 @@ scan_planner_node:
     # 重规划起点脱困(m)：起点若落在膨胀层里（机器人自身位置常在自己的膨胀层内），
     # 沿"起点→局部目标"方向最多前推这么多米去找第一个自由格；0=关闭
     fsm.start_escape_max_offset: 1.0
+    # [replan-geom] 节流(ms)；0=不节流
+    fsm.diag_throttle_ms: 200
+    fsm.diag_verbose: false
 
     # 下面四项只在 navi_mode=3（参考路径）下生效，用来判断"参考坐标系"是否还可信。
     # 参考路径写在地图系/参考系下，规划时要靠 TF 把它换算到 world 系；
@@ -138,6 +141,10 @@ scan_planner_node:
     manager.control_points_distance: 0.2
     manager.feasibility_tolerance: 0.5
     manager.planning_horizon: 7.5
+    # A* 搜索池：XY 边长(格) + Z 深度(格)，池子以每段中点为中心
+    #   160×0.05=8 m（XY ±4.0 m）；100×0.05=5 m（Z ±2.5 m）；约 123 MB
+    manager.a_star_pool_size: 160
+    manager.a_star_pool_z: 100
 
     # 下面是“轨迹优化”的各项权重。权重越大，优化越倾向于满足那一项。
     # lambda_smooth：平滑度（让轨迹不要抖）

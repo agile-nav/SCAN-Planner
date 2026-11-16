@@ -42,6 +42,8 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
+#include <rclcpp/node_interfaces/node_parameters_interface.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <tf2_ros/buffer.h>
@@ -155,9 +157,12 @@ namespace scan_planner
     bool motion_enabled_{false};
     // 重规划起点脱困：起点落在膨胀层里时，沿"起点→局部目标"方向最多前推这么多米
     double start_escape_max_offset_{1.0};
+    // [replan-geom] 节流(ms)；0=不节流
+    int diag_throttle_ms_{200};
     // 诊断：每次重规划关联号；diag_verbose 控制成功/逐迭代日志（默认关）
     uint64_t replan_rid_{0};
     bool diag_verbose_{false};
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr diag_param_cb_;
     bool enable_fail_safe_, need_hover_stop_;
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};
