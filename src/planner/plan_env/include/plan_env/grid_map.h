@@ -105,6 +105,10 @@ struct MappingParameters {
 // 机器人形状参数：圆柱半径、前后两个圆柱中心离机器人中心的距离
   // 机器人被抽象成"前后两个圆柱"：radius 是圆柱半径，offset 是两圆心离中心的距离
   double double_cylinder_radius_, double_cylinder_offset_;
+  // 【P11 自过滤】传感器周围这个半径(m)的球内的点不写入地图——用于滤掉机器人自身
+  // （腿/机身）的回波，否则它们会被当成障碍并膨胀，在脚下堆出一圈"障碍团"、
+  // 把自由空间切成孤岛（A* 报 no path / 起点变成小口袋）。<=0 表示关闭
+  double self_filter_radius_{-1.0};
   // 是否启用滑动地图，以及“机器人移动多远才滑动一次”的阈值
   // map_sliding_thresh 单位是米；map_sliding_thresh_vox_ 是它换算成的格子数
   bool map_sliding_en_;
