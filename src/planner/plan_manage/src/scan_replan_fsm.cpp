@@ -193,8 +193,8 @@ namespace scan_planner
         // 发布机器人外形（前后两个圆柱的 Marker）
         "self_inflation", rclcpp::QoS(1).reliable().transient_local());
     // 倾斜双圆柱 / 姿态轴线 / 角度文字（独立话题与命名空间，避免与检测窗口混淆）
-    body_pose_visual_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
-        "body_pose_visual", rclcpp::QoS(1).reliable().transient_local());
+    body_pose_visual_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+        "body_pose_visual", rclcpp::QoS(10).reliable().transient_local());
     // 双圆柱 marker 改由 20 Hz 定时器发布（原来挂在里程计回调里，约 100 Hz × 2 条 = 200 条/秒）。
     // RViz 的 Marker 订阅 Depth 只有 5，跟不上；队列按“保留最新”丢样本，每对里先发的
     // 前圆柱（id=0）几乎总被丢掉 —— 这就是“第一个圆柱隔很久才出现”的原因。
@@ -1232,6 +1232,9 @@ namespace scan_planner
     const double zshift = 0.5 * (z_up - z_down);
     const double off = self_double_cylinder_offset_;
 
+    // 一轮只发一条 MarkerArray：队列不会只收到其中一半，避免圆柱间歇消失。
+    visualization_msgs::msg::MarkerArray arr;
+
     visualization_msgs::msg::Marker marker;
     marker.header.frame_id = self_inflation_frame_id_.empty() ? "world" : self_inflation_frame_id_;
     marker.header.stamp = node_->now();
@@ -1273,7 +1276,7 @@ namespace scan_planner
       marker.pose.position.x = c(0);
       marker.pose.position.y = c(1);
       marker.pose.position.z = c(2);
-      body_pose_visual_pub_->publish(marker);
+      arr.markers.push_back(marker);
     }
 
     // 姿态轴线
@@ -1299,11 +1302,10 @@ namespace scan_planner
       pb.x = b(0); pb.y = b(1); pb.z = b(2);
       axis.points.push_back(pa);
       axis.points.push_back(pb);
-      body_pose_visual_pub_->publish(axis);
+      arr.markers.push_back(axis);
     }
 
-    // 角度文字：20 Hz 定时器每 2 帧发一次 ≈ 10 Hz
-    if ((body_pose_visual_text_counter_++ % 2) == 0)
+    // 角度文字：贴在前圆柱上方，逐帧随 MarkerArray 发布
     {
       visualization_msgs::msg::Marker text;
       text.header = marker.header;
@@ -1312,23 +1314,28 @@ namespace scan_planner
       text.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
       text.action = visualization_msgs::msg::Marker::ADD;
       text.pose.orientation.w = 1.0;
-      const Eigen::Vector3d c = odom_pos_ + 0.8 * up;
+      const double text_h = 0.09;
+      // 前圆柱中心 → 顶端 → 文字中心（留 3 cm 间隙）
+      const Eigen::Vector3d c = odom_pos_ + off * fwd
+          + (zshift + 0.5 * height + 0.5 * text_h + 0.03) * up;
       text.pose.position.x = c(0);
       text.pose.position.y = c(1);
       text.pose.position.z = c(2);
-      text.scale.z = 0.14;
+      text.scale.z = text_h;
       text.color.r = 1.0;
       text.color.g = 0.90;
       text.color.b = 0.20;
       text.color.a = 1.0;
       text.lifetime = marker.lifetime;
       char buf[128];
-      std::snprintf(buf, sizeof(buf), "pitch: %+.1f°  roll: %+.1f°",
+      std::snprintf(buf, sizeof(buf), "pitch: %+.1f°　　roll: %+.1f°",
                     map->getBodyPitch() * 180.0 / M_PI,
                     map->getBodyRoll() * 180.0 / M_PI);
       text.text = buf;
-      body_pose_visual_pub_->publish(text);
+      arr.markers.push_back(text);
     }
+
+    body_pose_visual_pub_->publish(arr);
   }
 
   // 切换状态（例如 GEN_NEW_TRAJ → EXEC_TRAJ），同时打印一行日志。
