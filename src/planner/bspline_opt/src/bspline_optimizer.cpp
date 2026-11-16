@@ -999,7 +999,6 @@ namespace scan_planner
       {
         for (size_t k = 0; k < cps_.direction[i].size(); ++k)
         {
-          cout.precision(2);
           // 若它还没被推离上一次的障碍面 → 说明是同一个老碰撞，不算新的
           if ((cps_.points.col(i) - cps_.base_point[i][k]).dot(cps_.direction[i][k]) < 1 * grid_map_->getResolution()) // current point is outside all the collision_points.
           {

@@ -76,7 +76,7 @@ namespace scan_planner
   SCANPlannerManager::SCANPlannerManager() {}
 
   // 析构函数：只打印一行调试信息
-  SCANPlannerManager::~SCANPlannerManager() { std::cout << "des manager" << std::endl; }
+  SCANPlannerManager::~SCANPlannerManager() {}
 
   // 初始化：读参数（最大速度/加速度等）、创建栅格地图并初始化、
   // 创建 B 样条优化器并注入地图、创建 A* 并设定搜索池大小。
@@ -159,16 +159,20 @@ namespace scan_planner
     // 下面几行只是调试打印：每次调用打一条分隔线并显示起终点
     last_failure_ = ReplanFailure::NONE;
     static int count = 0;
-    std::cout << endl
-              << "[rebo replan]: -------------------------------------" << count++ << std::endl;
-    cout.precision(3);
-    cout << "start: " << start_pt.transpose() << ", " << start_vel.transpose() << "\ngoal:" << local_target_pt.transpose() << ", " << local_target_vel.transpose()
-         << endl;
+    RCLCPP_INFO(node_->get_logger(),
+                "[rebo replan] #%d rid=%llu start=(%.2f,%.2f,%.2f) vel=(%.2f,%.2f,%.2f) "
+                "goal=(%.2f,%.2f,%.2f) target_vel=(%.2f,%.2f,%.2f)",
+                count++, static_cast<unsigned long long>(diag_rid_),
+                start_pt(0), start_pt(1), start_pt(2), start_vel(0), start_vel(1), start_vel(2),
+                local_target_pt(0), local_target_pt(1), local_target_pt(2),
+                local_target_vel(0), local_target_vel(1), local_target_vel(2));
 
     // 【提前退出】起点离目标不到 0.2 米 → 已经到地方了，没必要再规划
     if ((start_pt - local_target_pt).norm() < 0.2)
     {
-      cout << "Close to goal" << endl;
+      RCLCPP_INFO(node_->get_logger(), "[diag] rid=%llu event=close_to_goal start=(%.2f,%.2f,%.2f) target=(%.2f,%.2f,%.2f)",
+                  static_cast<unsigned long long>(diag_rid_), start_pt(0), start_pt(1), start_pt(2),
+                  local_target_pt(0), local_target_pt(1), local_target_pt(2));
       last_failure_ = ReplanFailure::CLOSE_TO_GOAL;
       // 记一次“连续失败”，用于触发退避策略
       continuous_failures_count_++;

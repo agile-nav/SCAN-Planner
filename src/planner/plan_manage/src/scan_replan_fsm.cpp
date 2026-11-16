@@ -315,7 +315,8 @@ namespace scan_planner
       return;
 
     // 正式触发：记录触发标志和起点
-    cout << "Triggered!" << endl;
+    RCLCPP_INFO(node_->get_logger(), "[FSM] Triggered goal at (%.2f,%.2f,%.2f)",
+                odom_pos_(0), odom_pos_(1), odom_pos_(2));
     trigger_ = true;
     init_pt_ = odom_pos_;
 
@@ -1377,7 +1378,8 @@ namespace scan_planner
     // 更新当前状态
     exec_state_ = new_state;
     // 打印“从 X 到 Y”
-    cout << "[" + pos_call + "]: from " + state_str[pre_s] + " to " + state_str[int(new_state)] << endl;
+    RCLCPP_INFO(node_->get_logger(), "[FSM] %s: from %s to %s",
+                pos_call.c_str(), state_str[pre_s].c_str(), state_str[int(new_state)].c_str());
   }
 
   // 返回 <当前状态已经连续被调用了多少次, 当前状态>，用来做重试策略。
@@ -1393,7 +1395,7 @@ namespace scan_planner
     static string state_str[7] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP"};
 
     // 打印当前状态名（调试用）
-    cout << "[FSM]: state: " + state_str[int(exec_state_)] << endl;
+    RCLCPP_INFO(node_->get_logger(), "[FSM] state: %s", state_str[int(exec_state_)].c_str());
   }
 
   // ==========================================================================
@@ -1428,9 +1430,9 @@ namespace scan_planner
       // 打印状态；顺便提示是否还缺里程计 / 目标
       printFSMExecState();
       if (!have_odom_)
-        cout << "no odom." << endl;
+        RCLCPP_WARN(node_->get_logger(), "[FSM] no odom");
       if (!trigger_)
-        cout << "wait for goal." << endl;
+        RCLCPP_INFO(node_->get_logger(), "[FSM] wait for goal");
       // 计数清零
       fsm_num = 0;
     }
@@ -1922,8 +1924,9 @@ namespace scan_planner
     for (double t = t_cur; t < info->duration_; t += time_step)
     {
       // 一旦越过 2/3 分界点，就停止检查
-      if (t_cur < t_2_3 && t >= t_2_3)
+      if (t_cur < t_2_3 && t >= t_2_3) // If t_cur < t_2_3, only the first 2/3 partition of the trajectory is considered valid and will get checked.
         break;
+      // P17a：跳过起点附近，避免把机器人自身膨胀层判成碰撞
       if (collision_skip_from_start_ > 0.0 && t - t_cur < collision_skip_from_start_)
         continue;
 
@@ -1935,7 +1938,7 @@ namespace scan_planner
       if (map->getInflateOccupancy(pos, estimateYawFromSegment(pos, pos_next)))
       {
         RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
-                             "[collision] ahead=%.2fs pos=(%.2f,%.2f,%.2f) self_occ=%d",
+                             "[collision] ahead=%.2fs pos=(%.2f,%.2f,%.2f) self_occ=%d -> 先尝试重规划",
                              t - t_cur, pos(0), pos(1), pos(2),
                              map->getInflateOccupancy(odom_pos_, getOdomYaw()));
         // 参考 TF 缺失期间又检测到碰撞 → 直接急停（此时无法确认参考路径是否仍安全）
