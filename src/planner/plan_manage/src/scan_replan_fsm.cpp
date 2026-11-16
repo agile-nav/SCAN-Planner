@@ -21,6 +21,7 @@
 #include <plan_manage/reference_path_utils.h>
 #include <plan_manage/reference_frame_utils.h>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 #include <tf2/time.hpp>
@@ -191,12 +192,18 @@ namespace scan_planner
     self_inflation_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
         // 发布机器人外形（前后两个圆柱的 Marker）
         "self_inflation", rclcpp::QoS(1).reliable().transient_local());
+    // 倾斜双圆柱 / 姿态轴线 / 角度文字（独立话题与命名空间，避免与检测窗口混淆）
+    body_pose_visual_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
+        "body_pose_visual", rclcpp::QoS(1).reliable().transient_local());
     // 双圆柱 marker 改由 20 Hz 定时器发布（原来挂在里程计回调里，约 100 Hz × 2 条 = 200 条/秒）。
     // RViz 的 Marker 订阅 Depth 只有 5，跟不上；队列按“保留最新”丢样本，每对里先发的
     // 前圆柱（id=0）几乎总被丢掉 —— 这就是“第一个圆柱隔很久才出现”的原因。
     self_inflation_timer_ = node_->create_wall_timer(std::chrono::milliseconds(50), [this]() {
       if (have_odom_)
+      {
         publishSelfInflationMarker();
+        publishBodyPoseVisualization();
+      }
     });
     // 运行状态话题：只发 running / goal_reached（idle 不发），用 transient_local 让后订阅者也能拿到当前状态
     status_pub_ = node_->create_publisher<std_msgs::msg::String>(
@@ -1203,6 +1210,125 @@ namespace scan_planner
     marker.pose.position.y = rear(1);
     marker.pose.position.z = rear(2);
     self_inflation_pub_->publish(marker);
+  }
+
+  // 发布“倾斜双圆柱 + 姿态轴线 + 角度文字”，用于确认姿态数据/轴向是否正确。
+  // 与检测窗口（self_inflation）使用独立命名空间和颜色，不参与碰撞查询。
+  void SCANReplanFSM::publishBodyPoseVisualization()
+  {
+    auto map = planner_manager_->grid_map_;
+    if (!map)
+      return;
+
+    const Eigen::Quaterniond q = map->getBodyQuaternion();
+    const Eigen::Matrix3d R = q.toRotationMatrix();
+    const Eigen::Vector3d fwd = R.col(0);
+    const Eigen::Vector3d up = R.col(2);
+
+    const double radius = std::max(0.0, self_double_cylinder_radius_);
+    const double z_up = std::max(0.0, self_inflation_z_up_);
+    const double z_down = std::max(0.0, self_inflation_z_down_);
+    const double height = std::max(1e-3, z_up + z_down);
+    const double zshift = 0.5 * (z_up - z_down);
+    const double off = self_double_cylinder_offset_;
+
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = self_inflation_frame_id_.empty() ? "world" : self_inflation_frame_id_;
+    marker.header.stamp = node_->now();
+    marker.ns = "body_pose_visual";
+    marker.type = visualization_msgs::msg::Marker::CYLINDER;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.pose.orientation.x = q.x();
+    marker.pose.orientation.y = q.y();
+    marker.pose.orientation.z = q.z();
+    marker.pose.orientation.w = q.w();
+    marker.scale.x = 2.0 * radius;
+    marker.scale.y = 2.0 * radius;
+    marker.scale.z = height;
+    // 与 self_inflation 一致：跨过规划停顿，避免整块闪掉
+    marker.lifetime = rclcpp::Duration::from_seconds(2.0);
+
+    // 按俯仰角分档着色（第一版）
+    const double pitch_deg = std::abs(map->getBodyPitch()) * 180.0 / M_PI;
+    if (pitch_deg < 10.0)
+    {
+      marker.color.r = 0.35; marker.color.g = 0.80; marker.color.b = 0.85;
+    }
+    else if (pitch_deg < 20.0)
+    {
+      marker.color.r = 0.95; marker.color.g = 0.75; marker.color.b = 0.25;
+    }
+    else
+    {
+      marker.color.r = 0.92; marker.color.g = 0.42; marker.color.b = 0.30;
+    }
+    marker.color.a = 0.30;
+
+    // 两个倾斜圆柱：整个组件随机身旋转，长轴仍沿机体上方向
+    for (int i = 0; i < 2; ++i)
+    {
+      const double s = (i == 0) ? 1.0 : -1.0;
+      const Eigen::Vector3d c = odom_pos_ + s * off * fwd + zshift * up;
+      marker.id = 10 + i;
+      marker.pose.position.x = c(0);
+      marker.pose.position.y = c(1);
+      marker.pose.position.z = c(2);
+      body_pose_visual_pub_->publish(marker);
+    }
+
+    // 姿态轴线
+    {
+      visualization_msgs::msg::Marker axis;
+      axis.header = marker.header;
+      axis.ns = "body_pose_visual";
+      axis.id = 12;
+      axis.type = visualization_msgs::msg::Marker::LINE_STRIP;
+      axis.action = visualization_msgs::msg::Marker::ADD;
+      axis.pose.orientation.w = 1.0;
+      axis.scale.x = 0.015;
+      axis.color.r = 1.0;
+      axis.color.g = 0.55;
+      axis.color.b = 0.10;
+      axis.color.a = 1.0;
+      axis.lifetime = marker.lifetime;
+      const Eigen::Vector3d a = odom_pos_ - (off + radius) * fwd + zshift * up;
+      const Eigen::Vector3d b = odom_pos_ + (off + radius) * fwd + zshift * up;
+      geometry_msgs::msg::Point pa;
+      pa.x = a(0); pa.y = a(1); pa.z = a(2);
+      geometry_msgs::msg::Point pb;
+      pb.x = b(0); pb.y = b(1); pb.z = b(2);
+      axis.points.push_back(pa);
+      axis.points.push_back(pb);
+      body_pose_visual_pub_->publish(axis);
+    }
+
+    // 角度文字：20 Hz 定时器每 2 帧发一次 ≈ 10 Hz
+    if ((body_pose_visual_text_counter_++ % 2) == 0)
+    {
+      visualization_msgs::msg::Marker text;
+      text.header = marker.header;
+      text.ns = "body_pose_visual";
+      text.id = 13;
+      text.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+      text.action = visualization_msgs::msg::Marker::ADD;
+      text.pose.orientation.w = 1.0;
+      const Eigen::Vector3d c = odom_pos_ + 0.8 * up;
+      text.pose.position.x = c(0);
+      text.pose.position.y = c(1);
+      text.pose.position.z = c(2);
+      text.scale.z = 0.14;
+      text.color.r = 1.0;
+      text.color.g = 0.90;
+      text.color.b = 0.20;
+      text.color.a = 1.0;
+      text.lifetime = marker.lifetime;
+      char buf[128];
+      std::snprintf(buf, sizeof(buf), "pitch: %+.1f°  roll: %+.1f°",
+                    map->getBodyPitch() * 180.0 / M_PI,
+                    map->getBodyRoll() * 180.0 / M_PI);
+      text.text = buf;
+      body_pose_visual_pub_->publish(text);
+    }
   }
 
   // 切换状态（例如 GEN_NEW_TRAJ → EXEC_TRAJ），同时打印一行日志。

@@ -157,6 +157,8 @@ namespace scan_planner
     int continuously_called_times_{0};
     int replan_fail_count_{0};
     int max_replan_fail_count_{1000};
+    // 倾斜姿态可视化文字降频计数（20 Hz 定时器，每 2 帧发一次 ≈ 10 Hz）
+    int body_pose_visual_text_counter_{0};
     rclcpp::Time last_freeze_update_time_;
     // 当前局部轨迹的墙钟提交时刻（P19b：无进展看门狗门槛）
     rclcpp::Time traj_commit_wall_{0, 0, RCL_ROS_TIME};
@@ -239,6 +241,8 @@ namespace scan_planner
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr local_path_pub_;
     rclcpp::Publisher<scan_planner_msgs::msg::DataDisp>::SharedPtr data_disp_pub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr self_inflation_pub_;
+    // 倾斜双圆柱 + 姿态轴线 + 角度文字（独立话题/命名空间）
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr body_pose_visual_pub_;
     // 运行状态话题：只发 running / goal_reached（idle 不发）
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
 
@@ -271,6 +275,8 @@ namespace scan_planner
     void finishProcess();
     // 发布机器人自身外形（前后两个圆柱），在 RViz 里看得到
     void publishSelfInflationMarker();
+    // 发布倾斜双圆柱 / 姿态轴线 / 角度文字（仅观测，不参与控制）
+    void publishBodyPoseVisualization();
     void publishLocalPath(const UniformBspline &trajectory);
     double getOdomYaw() const;
     double estimateYawFromSegment(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const;
