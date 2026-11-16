@@ -24,6 +24,14 @@ closed_loop_controller:
     max_vyaw: 1.0
     # 距离终点小于这个值(米)且已走完轨迹，就发“停下”。
     finish_dist: 0.15
+    # 参考时刻最多超前实测进度多少秒（0 表示不跟随）
+    time_lead: 0.2
+    # 轨迹整体超时：收到后超过 duration + 该值仍未被替换 → 丢弃并停车（<=0 关闭）
+    traj_timeout_extra: 3.0
+    # 卡住判定：指令想动但实测几乎不动，持续该时长(秒) → 刹停并冻结轨迹时钟
+    stuck_cmd_eps: 0.15
+    stuck_speed_eps: 0.03
+    stuck_time: 1.0
 
 # ---- 开环控制器 open_loop_controller ----
 # 它不控制机器人，只把轨迹直接当成里程计发出去（理想执行）。

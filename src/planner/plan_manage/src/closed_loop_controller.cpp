@@ -56,6 +56,14 @@ public:
     max_vyaw_ = std::min(declare_parameter<double>("max_vyaw", 1.0), kMaxVYawLimit);
     // 到终点多近就算“到达”，可以停下
     finish_dist_ = declare_parameter<double>("finish_dist", 0.15);
+    // 参考时刻最多超前实测进度多少秒（0 表示不跟随）
+    time_lead_ = declare_parameter<double>("time_lead", 0.2);
+    // 轨迹整体超时：收到后超过 duration + 该值仍未被替换 → 丢弃并停车（<=0 关闭）
+    traj_timeout_extra_ = declare_parameter<double>("traj_timeout_extra", 3.0);
+    // 卡住判定：指令想动(>cmd_eps)但实测几乎不动(<speed_eps)持续 stuck_time 秒 → 刹停 + 冻结
+    stuck_cmd_eps_ = declare_parameter<double>("stuck_cmd_eps", 0.15);
+    stuck_speed_eps_ = declare_parameter<double>("stuck_speed_eps", 0.03);
+    stuck_time_ = declare_parameter<double>("stuck_time", 1.0);
 
     // 订阅规划器发布的轨迹
     bspline_sub_ = create_subscription<scan_planner_msgs::msg::Bspline>(
@@ -173,6 +181,8 @@ private:
     std_msgs::msg::Bool msg;
     // 填入 true/false
     msg.data = frozen;
+    // 【P19a】记下当前冻结状态（冻结期不计轨迹超时）
+    execution_frozen_state_ = frozen;
     // 发布
     execution_frozen_pub_->publish(msg);
   }
@@ -209,6 +219,8 @@ private:
     traj_duration_ = traj_[0].getTimeSum();
     // 记录轨迹编号（用来区分是不是新轨迹）
     traj_id_ = msg->traj_id;
+    // 【P2】记录收到这条轨迹的墙钟时刻（用于整体超时判定）
+    traj_recv_time_ = now();
     // 把“已执行时间”清零 —— 从新轨迹的起点重新开始跟踪
     exec_time_ = 0.0;
     last_update_time_ = now();
@@ -227,6 +239,8 @@ private:
     odom_pos_ << msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z;
     // 当前朝向（把四元数转成偏航角）
     odom_yaw_ = tf2::getYaw(msg->pose.pose.orientation);
+    // 【P5】实测平面速度（卡住判定用）
+    odom_speed_ = std::hypot(msg->twist.twist.linear.x, msg->twist.twist.linear.y);
     // 标记“已收到里程计”
     have_odom_ = true;
   }
@@ -244,6 +258,7 @@ private:
     {
       publishExecutionFrozen(true);
       last_update_time_ = now();
+      stuck_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
       return;
     }
     // 还没轨迹、或还没里程计 → 什么都不做，只发一个“停”和“未冻结”
@@ -252,6 +267,7 @@ private:
       publishExecutionFrozen(false);
       // 发停车指令
       publishStop();
+      stuck_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
       return;
     }
     // 当前时间
@@ -262,8 +278,28 @@ private:
       publishExecutionFrozen(true);
       publishStop();
       last_update_time_ = current_time;
+      stuck_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
       return;
     }
+    // 【P19a】冻结/未使能期间“墙钟年龄”没有意义：规划器会故意冻结轨迹时钟，
+    //   控制器按墙钟算会判它超时 → drop + stop，之后规划器还在等、控制器却没轨迹了。
+    //   所以冻结期间只把基准顺延，不计入超时；解冻后重新开始计时。
+    if (execution_frozen_state_ || !motion_enabled_)
+    {
+      traj_recv_time_ = current_time;
+    }
+    else if (traj_timeout_extra_ > 0.0 && traj_recv_time_.nanoseconds() != 0 &&
+             (current_time - traj_recv_time_).seconds() > traj_duration_ + traj_timeout_extra_)
+    {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                           "trajectory older than duration+%.1fs; drop it and stop", traj_timeout_extra_);
+      receive_traj_ = false;
+      publishExecutionFrozen(false);
+      publishStop();
+      stuck_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+      return;
+    }
+
     // 距上次计算过了多久
     double dt = (current_time - last_update_time_).seconds();
     // 时间差异常（时钟跳变/卡顿）→ 当作 0，不推进
@@ -285,13 +321,15 @@ private:
       publishStop(yaw_command);
       // 记住这次的时间（注意：exec_time_ 不推进）
       last_update_time_ = current_time;
+      stuck_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
       return;
     }
 
     // 朝向已对齐 → 解除冻结，允许规划器继续推进轨迹
     publishExecutionFrozen(false);
-    // 轨迹执行时间往前推进 dt
-    exec_time_ = std::min(traj_duration_, exec_time_ + dt);
+    // 【P3】参考时刻跟随实际进度：最多只超前实测投影 time_lead_ 秒
+    const double t_proj = projectOntoTrajClamped(odom_pos_, exec_time_);
+    exec_time_ = std::min(traj_duration_, std::min(exec_time_ + dt, t_proj + time_lead_));
     // 记住这次时间，供下一轮计算 dt（此时 exec_time_ 已经推进）
     last_update_time_ = current_time;
     // 用推进后的时刻重新取目标位置
@@ -322,11 +360,34 @@ private:
       command = geometry_msgs::msg::Twist();
     // 1 Hz 诊断（纯观测）：exec_time 与"实测位置在轨迹上的投影"的差 = 参考超前量
     {
-      const double t_proj = projectOntoTrajClamped(odom_pos_, exec_time_);
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
                            "[ctl-clock] exec_time=%.2f t_proj=%.2f lead=%.2f dur=%.2f pos_err=%.2f traj_id=%lld",
                            exec_time_, t_proj, exec_time_ - t_proj, traj_duration_,
                            pos_error.norm(), static_cast<long long>(traj_id_));
+    }
+
+    // ---- 卡住检测：指令想动但实测几乎不动，持续超过 stuck_time → 判卡住 ----
+    //   处理：刹停 + 发 freeze=true，让规划器把轨迹时钟一并暂停；不再满速顶
+    const bool intend_move = std::abs(command.linear.x) > stuck_cmd_eps_ ||
+                             std::abs(command.linear.y) > stuck_cmd_eps_;
+    const bool moving = odom_speed_ > stuck_speed_eps_;
+    if (intend_move && !moving)
+    {
+      if (stuck_since_.nanoseconds() == 0)
+        stuck_since_ = current_time;
+      if ((current_time - stuck_since_).seconds() > stuck_time_)
+      {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                             "Robot stuck (intend move but odom_speed=%.3f m/s); freeze reference",
+                             odom_speed_);
+        publishExecutionFrozen(true);
+        publishStop();
+        return;
+      }
+    }
+    else
+    {
+      stuck_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     }
 
     // 发布速度指令
@@ -353,6 +414,13 @@ private:
   rclcpp::Time last_update_time_{0, 0, RCL_ROS_TIME};
   double time_forward_, heading_error_threshold_, kp_pos_, kp_yaw_;
   double max_vx_, max_vy_, max_vyaw_, finish_dist_;
+  double time_lead_{0.2};
+  double traj_timeout_extra_{3.0};
+  rclcpp::Time traj_recv_time_{0, 0, RCL_ROS_TIME};
+  bool execution_frozen_state_{false};
+  double odom_speed_{0.0};
+  rclcpp::Time stuck_since_{0, 0, RCL_ROS_TIME};
+  double stuck_cmd_eps_{0.15}, stuck_speed_eps_{0.03}, stuck_time_{1.0};
 };
 }  // namespace scan_planner
 
