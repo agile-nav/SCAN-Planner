@@ -153,6 +153,8 @@ namespace scan_planner
     bool go2_execution_frozen_;
     // 外部使能（/motion_enabled，遥控器 START/B）：false 时冻结轨迹不规划不下发
     bool motion_enabled_{false};
+    // 重规划起点脱困：起点落在膨胀层里时，沿"起点→局部目标"方向最多前推这么多米
+    double start_escape_max_offset_{1.0};
     bool enable_fail_safe_, need_hover_stop_;
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};
@@ -278,6 +280,8 @@ namespace scan_planner
     void publishBodyPoseVisualization();
     void publishLocalPath(const UniformBspline &trajectory);
     double getOdomYaw() const;
+    // 重规划起点若落在膨胀层里，沿"起点→局部目标"方向前推到最近的自由格
+    bool pushStartPtOutOfInflation();
     double estimateYawFromSegment(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const;
     void updateLocalTrajTimeFreeze();
     // 收到新目标时调用：进入 running 并清掉 goal_reached/去抖状态

@@ -134,10 +134,22 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
     // 先把世界坐标转成格子坐标；超出搜索范围就直接失败
     if (!Coord2Index(start_pt, start_idx) || !Coord2Index(end_pt, end_idx))
         return false;
+    // 【P14】起终点落在同一格 → 这一段是退化的：A* 会“秒成功”却只返回 1 个点的路径，
+    // 调用方随即报 “A-star path has fewer than 2 points” 并丢掉这一段。直接判失败更诚实。
+    if (start_idx(0) == end_idx(0) && start_idx(1) == end_idx(1) && start_idx(2) == end_idx(2))
+    {
+        static int same_cell_cnt = 0;
+        if (++same_cell_cnt % 20 == 1)
+            RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                        "[Astar] start and end map to the same cell (%.2f,%.2f,%.2f); skip degenerate segment",
+                        start_pt(0), start_pt(1), start_pt(2));
+        return false;
+    }
 
     // 起点指向终点的方向（用来算朝向，也用来把点往外挪）
     Eigen::Vector3d start_to_end = end_pt - start_pt;
-    if (start_to_end.norm() < 1e-6)
+    const double seg_len = start_to_end.norm();   // 【P14】段长：用于限制“朝终点方向”的挪动距离
+    if (seg_len < 1e-6)
         return false;
     // 这条搜索路径的朝向 —— 查障碍时要带上朝向
     const double path_yaw = std::atan2(start_to_end(1), start_to_end(0));
@@ -147,22 +159,68 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
     int occ = checkOccupancy(Index2Coord(start_idx), path_yaw);
     if (occ)
     {
-        //ROS_WARN("Start point is insdide an obstacle.");
-        // 如果起点在障碍里：每次沿反方向退一格，直到退到空地上
-        do
-        {
-            start_pt -= start_to_end * step_size_;
-            if (!Coord2Index(start_pt, start_idx))
-                return false;
+        // 起点落在被占的格子里。最常见的原因是机器人自身位置就在自己的膨胀层内
+        // （脚边点云 / 贴身墙面）。旧实现只沿"背离终点"方向退格，这种情况会越退越深，
+        // 一直退出搜索池 → Coord2Index 失败 → INIT_ERR → 整条优化被放弃。
+        // 现在改成多方向脱困：先试朝终点方向，再试反方向，最后绕起点做环状搜索，
+        // 全部限制在 kMaxOffset 米以内。
+        constexpr double kMaxOffset = 1.5; // [m] 起点最多允许挪多远
+        const int k_max = std::max(1, static_cast<int>(std::ceil(kMaxOffset / step_size_)));
+        bool found = false;
+        Eigen::Vector3d escaped_pt = start_pt;
+        Vector3i escaped_idx = start_idx;
 
-            occ = checkOccupancy(Index2Coord(start_idx), path_yaw);
-            // 退到搜索范围外了 → 无解，返回失败
-            if (occ == -1)
-            {
-                RCLCPP_WARN(rclcpp::get_logger("path_searching"), "[Astar] Start point outside the map region.");
+        // 试一个候选点：必须落在搜索池内，且不在障碍里（-1 表示出地图，同样不可用）
+        auto try_candidate = [&](const Eigen::Vector3d &cand) -> bool {
+            Vector3i cand_idx;
+            if (!Coord2Index(cand, cand_idx)) // 出了搜索池
                 return false;
+            // 【P14】不要把起点挪到“终点所在的那一格”：否则就是上面那个退化情况
+            if (cand_idx(0) == end_idx(0) && cand_idx(1) == end_idx(1) && cand_idx(2) == end_idx(2))
+                return false;
+            if (checkOccupancy(Index2Coord(cand_idx), path_yaw) != 0)
+                return false;
+            escaped_pt = cand;
+            escaped_idx = cand_idx;
+            return true;
+        };
+
+        // (1) 先朝终点方向挪（机器人贴着自己膨胀层时，前方通常是空的）。
+        //     但最多只挪“段长的 80%” —— 否则短段会被挪到终点那一格，造成起终同格的退化。
+        const int k_fwd = std::min(k_max, static_cast<int>(std::floor(0.8 * seg_len / step_size_)));
+        for (int k = 1; k <= k_fwd && !found; ++k)
+            found = try_candidate(start_pt + start_to_end * (step_size_ * k));
+        // (2) 再朝反方向挪（保留旧行为，但加了距离上限）
+        for (int k = 1; k <= k_max && !found; ++k)
+            found = try_candidate(start_pt - start_to_end * (step_size_ * k));
+        // (3) 最后绕起点在水平面内做环状搜索
+        for (int k = 1; k <= k_max && !found; ++k)
+        {
+            for (int a = 0; a < 8 && !found; ++a)
+            {
+                const double ang = a * M_PI / 4.0;
+                const Eigen::Vector3d dir(std::cos(ang), std::sin(ang), 0.0);
+                found = try_candidate(start_pt + dir * (step_size_ * k));
             }
-        } while (occ);
+        }
+
+        if (!found)
+        {
+            RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                        "[Astar] No free start point within %.2f m of (%.2f, %.2f, %.2f)",
+                        kMaxOffset, start_pt(0), start_pt(1), start_pt(2));
+            return false;
+        }
+
+        // 脱困成功。偶尔打一条日志，便于统计"起点被推出膨胀层"的频率与距离
+        static int escape_cnt = 0;
+        if (++escape_cnt % 50 == 1)
+            RCLCPP_INFO(rclcpp::get_logger("path_searching"),
+                        "[Astar] start point pushed out of obstacle by %.2f m",
+                        (escaped_pt - start_pt).norm());
+
+        start_pt = escaped_pt;
+        start_idx = escaped_idx;
     }
 
     // 终点同理：如果落在障碍里就往前挪
