@@ -131,6 +131,10 @@ namespace scan_planner
     double stuck_progress_eps_{0.05};
     // 绝对上限(秒)：t_cur > 轨迹时长 + 它 才强制收尾，只防死循环
     double finish_timeout_extra_{30.0};
+    // 轨迹时钟最多超前实际投影进度多少秒（<=0 关闭，P4）
+    double traj_clock_max_lead_{0.3};
+    // 收尾时是否发一条“停在原地”轨迹让控制器刹停（P1）
+    bool stop_traj_on_finish_{true};
     // 到达且停稳持续多久才判为 goal_reached(秒)
     double status_stop_debounce_{1.0};
     // 心跳频率(Hz)：周期性重发当前状态；0 表示关闭
@@ -154,6 +158,8 @@ namespace scan_planner
     int replan_fail_count_{0};
     int max_replan_fail_count_{1000};
     rclcpp::Time last_freeze_update_time_;
+    // 当前局部轨迹的墙钟提交时刻（P19b：无进展看门狗门槛）
+    rclcpp::Time traj_commit_wall_{0, 0, RCL_ROS_TIME};
 
     Eigen::Vector3d odom_pos_, odom_vel_, odom_acc_; // odometry state
     Eigen::Quaterniond odom_orient_;

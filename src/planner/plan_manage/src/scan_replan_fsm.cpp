@@ -122,6 +122,10 @@ namespace scan_planner
     stuck_window_ = load_parameter<double>(node_, "fsm.finish_stuck_window", 3.0);
     stuck_progress_eps_ = load_parameter<double>(node_, "fsm.finish_progress_eps", 0.05);
     finish_timeout_extra_ = load_parameter<double>(node_, "fsm.finish_timeout_extra", 30.0);
+    // 收尾时是否发一条“停在原地”轨迹，让控制器立即刹停（P1）
+    stop_traj_on_finish_ = load_parameter<bool>(node_, "fsm.stop_traj_on_finish", true);
+    // 轨迹时钟最多超前实测投影进度多少秒（<=0 关闭，P4）
+    traj_clock_max_lead_ = load_parameter<double>(node_, "fsm.traj_clock_max_lead", 0.3);
 
     // ---------- 第3步：预设航点模式下，解析航点数组 ----------
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
@@ -736,24 +740,38 @@ namespace scan_planner
 
     // 取出当前局部轨迹数据
     LocalTrajData *info = &planner_manager_->local_data_;
-    // 若底盘冻结且轨迹已经开始 → 把轨迹的“开始时间”往后推 dt
-    if ((go2_execution_frozen_ || !motion_enabled_) && info->start_time_.seconds() > 1e-5)
-      // 效果：轨迹时钟暂停，机器人原地转向的时间不会“消耗”轨迹
-      info->start_time_ += rclcpp::Duration::from_seconds(dt);
+    // 轨迹还没开始 / 时长为 0 → 无事可做
+    if (info->start_time_.seconds() < 1e-5 || info->duration_ <= 1e-5)
+      return;
 
-    // 1 Hz 诊断（纯观测）：t_cur 与"实测位置投影 + 名义超前量"的关系
-    if (have_odom_ && info->duration_ > 1e-5)
+    // 【P4】轨迹时钟跟随实际进度：连续夹住，不允许 t_wall 比“实测投影进度”超前超过 max_lead。
+    //   为什么改 start_time_ 而不是各个 t_cur 调用点：t_cur 有 5 个消费者
+    //   （planFromCurrentTraj / setStartStateFromOdomOrCurrentTraj / checkCollisionCallback /
+    //    EXEC_TRAJ 的重规划冷却 / reboundReplan 的 Case B），改时钟本身一处生效。
+    const double t_wall = (now - info->start_time_).seconds();
+    double t_proj = t_wall;
+    if (have_odom_ && t_wall > 0.0)
+      t_proj = projectOdomToTrajParam(t_wall);
+
+    if (traj_clock_max_lead_ > 0.0 && have_odom_ && t_wall > 0.0)
     {
-      const double t_wall = (now - info->start_time_).seconds();
-      if (t_wall > 0.0)
-      {
-        const double t_proj = projectOdomToTrajParam(t_wall);
-        RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                             "[traj-clock] t_wall=%.2f t_proj=%.2f t_cur=%.2f lead=%.2f max_lead=%.2f dur=%.2f traj_id=%d",
-                             t_wall, t_proj, t_wall, t_wall - t_proj, 0.0, info->duration_,
-                             info->traj_id_);
-      }
+      const double lead = t_wall - t_proj;
+      if (lead > traj_clock_max_lead_)
+        info->start_time_ += rclcpp::Duration::from_seconds(lead - traj_clock_max_lead_);
     }
+
+    // 1 Hz 诊断：t_cur 与"实际投影进度 + 允许超前量"的关系
+    {
+      const double t_cur_now = (now - info->start_time_).seconds();
+      RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                           "[traj-clock] t_wall=%.2f t_proj=%.2f t_cur=%.2f lead=%.2f max_lead=%.2f dur=%.2f traj_id=%d",
+                           t_wall, t_proj, t_cur_now, t_cur_now - t_proj, traj_clock_max_lead_,
+                           info->duration_, info->traj_id_);
+    }
+
+    // 原有逻辑：底盘原地转向 / 外部未使能期间 → 冻结轨迹时钟
+    if (go2_execution_frozen_ || !motion_enabled_)
+      info->start_time_ += rclcpp::Duration::from_seconds(dt);
   }
 
   // 收到新目标时进入 running；若之前是 goal_reached，这里把它重置。
@@ -1446,8 +1464,16 @@ namespace scan_planner
       //   航点模式：保持原有"轨迹时长到"判据（本次不改）
       const bool time_done = t_cur > info->duration_ - 1e-2;
       const bool hard_cap = t_cur > info->duration_ + finish_timeout_extra_;
+      // 【P16】exec_no_progress_ 还要求“当前这条轨迹已执行 ≥ stuck_window_”：
+      //   刚换上一条新轨迹时不该被几秒前的旧判定直接判死。
+      // 【P19b】门槛用“墙钟自提交以来的秒数”，不能用 t_cur：
+      //   车卡住时 t_cur 被 P4 夹在 (t_proj + max_lead) ≈ 0.3 s，永远到不了 stuck_window(3 s)。
+      const double wall_since_commit = (traj_commit_wall_.nanoseconds() == 0)
+                                           ? 0.0
+                                           : (node_->now() - traj_commit_wall_).seconds();
+      const bool no_progress_valid = exec_no_progress_ && wall_since_commit >= stuck_window_;
       const bool segment_done =
-          isWaypointSequenceMode() ? time_done : (status_is_stop_ || exec_no_progress_ || hard_cap);
+          isWaypointSequenceMode() ? time_done : (status_is_stop_ || no_progress_valid || hard_cap);
       if (segment_done)
       {
         // 复位执行进展统计
@@ -1474,6 +1500,12 @@ namespace scan_planner
           active_waypoints_.clear();
           current_wp_ = 0;
         }
+
+        // 【P1】结束后通知控制器停车：否则 FSM 回到 WAIT_TARGET 后，控制器手上还握着最后
+        //   一条轨迹，会继续按 kp_pos*(pos_des-odom) 下发速度（实测“指令顶着、车不动”）。
+        //   发一条“停在原地”的退化轨迹，控制器立刻刹停。
+        if (stop_traj_on_finish_)
+          callEmergencyStop(odom_pos_);
 
         // 标记“目标已完成”
         have_target_ = false;
@@ -1814,6 +1846,18 @@ namespace scan_planner
     }
     // “新目标”标志用完即清（它只影响第一次规划）
     have_new_target_ = false;
+
+    // 【P16】新轨迹已生成 → 重置“无进展”看门狗的参考时刻与最近距离。
+    //   否则：之前卡住几秒（重规划连续失败、车没动）之后一旦规划成功，第一次 tick 就会
+    //   命中 exec_no_progress_，于是刚进 EXEC_TRAJ 就被强制结束。
+    // 【P19b】记录这条轨迹的墙钟提交时刻，供 segment_done 的墙钟门槛使用。
+    if (plan_success)
+    {
+      exec_progress_time_ = node_->now();
+      exec_best_dist_ = (end_pt_.head<2>() - odom_pos_.head<2>()).norm();
+      exec_no_progress_ = false;
+      traj_commit_wall_ = node_->now();
+    }
 
     // 打印规划结果
     cout << "final_plan_success=" << plan_success << endl;
