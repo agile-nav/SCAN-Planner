@@ -568,13 +568,20 @@ inline int GridMap::getOccupancy(Eigen::Vector3d pos) {
 //   ③ 前圆柱没事再查后圆柱
 // 返回 1=障碍 / 0=空 / -1=出图。注意：调用方常写 if(返回值)，所以 -1 也会被当成"会撞"。
 inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos, double yaw) {
-  Eigen::Vector3d heading(std::cos(yaw), std::sin(yaw), 0.0);
-  Eigen::Vector3d front = pos + mp_.double_cylinder_offset_ * heading;
-  Eigen::Vector3d rear = pos - mp_.double_cylinder_offset_ * heading;
+  // 机体俯仰：抬头为正。限幅 ±45°，避免极端姿态把探测点甩得太远。
+  const double p = std::clamp(body_pitch_, -0.7853981633974483, 0.7853981633974483);
+  const double cp = std::cos(p), sp = std::sin(p);
+  const double cy = std::cos(yaw), sy = std::sin(yaw);
 
-  int front_occ = getInflateOccupancyFromBuffer(front, md_.occupancy_buffer_inflate_);
+  // 探测点沿倾斜机体轴摆放（仅两个中心点，不补下缘点）
+  const Eigen::Vector3d axis(cp * cy, cp * sy, sp);
+  const double off = mp_.double_cylinder_offset_;
+
+  const Eigen::Vector3d front = pos + off * axis;
+  const int front_occ = getInflateOccupancyFromBuffer(front, md_.occupancy_buffer_inflate_);
   if (front_occ != 0) return front_occ;
 
+  const Eigen::Vector3d rear = pos - off * axis;
   return getInflateOccupancyFromBuffer(rear, md_.occupancy_buffer_inflate_);
 }
 
