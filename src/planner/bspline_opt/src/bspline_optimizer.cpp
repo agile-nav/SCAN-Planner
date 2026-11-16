@@ -196,7 +196,24 @@ namespace scan_planner
       // 用这段的起点/终点控制点作为 A* 的起终点
       Eigen::Vector3d in(init_points.col(segment_ids[i].first)), out(init_points.col(segment_ids[i].second));
       // 开始 A* 搜索
+      a_star_->setDiagContext(diag_rid_, static_cast<int>(i), diag_verbose_);
       ASTAR_RET ret = a_star_->AstarSearch(grid_map_->getResolution(), in, out);
+        if (ret != ASTAR_RET::SUCCESS)
+        {
+          // 【诊断】A* 失败一次打全：类型 / 段号 / 段长 / 两端坐标 / 两端是否在膨胀区(1=障碍 0=空 -1=出图)
+          const int id_in = segment_ids[i].first, id_out = segment_ids[i].second;
+          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+              "[A-star FAIL] type=%s seg(in_id=%d,out_id=%d) len=%.2fm | in=(%.2f,%.2f,%.2f) occ_in=%d | "
+              "out=(%.2f,%.2f,%.2f) occ_out=%d rid=%llu",
+              replanFailureToString(ret == ASTAR_RET::INIT_ERR ? ReplanFailure::ASTAR_INIT_ERR
+                                                               : ReplanFailure::ASTAR_NO_PATH),
+              id_in, id_out, (out - in).norm(),
+              in.x(), in.y(), in.z(),
+              grid_map_->getInflateOccupancy(in, estimateControlPointYaw(cps_.points, id_in)),
+              out.x(), out.y(), out.z(),
+              grid_map_->getInflateOccupancy(out, estimateControlPointYaw(cps_.points, id_out)),
+              static_cast<unsigned long long>(diag_rid_));
+        }
       if (ret == ASTAR_RET::SUCCESS)
       {
         // 取出 A* 找到的绕行路径
@@ -205,7 +222,8 @@ namespace scan_planner
         {
           // A* 返回的路径太短 → 这一段拿不到推出方向，但不必放弃整条优化
           RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
-                      "A-star path has fewer than 2 points; keep optimizing without a rebound direction");
+                      "A-star path has fewer than 2 points; keep optimizing without a rebound direction rid=%llu seg=%d",
+                      static_cast<unsigned long long>(diag_rid_), static_cast<int>(i));
           a_star_paths.push_back(std::vector<Eigen::Vector3d>());
           continue;
         }
@@ -993,7 +1011,23 @@ namespace scan_planner
         /*** a star search ***/
         Eigen::Vector3d in(cps_.points.col(segment_ids[i].first)), out(cps_.points.col(segment_ids[i].second));
         // 在这一段的起终点之间跑一次 A*
+        a_star_->setDiagContext(diag_rid_, static_cast<int>(segment_ids[i].first), diag_verbose_);
         ASTAR_RET ret = a_star_->AstarSearch(grid_map_->getResolution(), in, out);
+        if (ret != ASTAR_RET::SUCCESS)
+        {
+          // 【诊断】A* 失败一次打全：类型 / 段号 / 段长 / 两端坐标 / 两端是否在膨胀区(1=障碍 0=空 -1=出图)
+          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+              "[A-star FAIL] type=%s seg(in_id=%d,out_id=%d) len=%.2fm | in=(%.2f,%.2f,%.2f) occ_in=%d | "
+              "out=(%.2f,%.2f,%.2f) occ_out=%d rid=%llu",
+              replanFailureToString(ret == ASTAR_RET::INIT_ERR ? ReplanFailure::ASTAR_INIT_ERR
+                                                               : ReplanFailure::ASTAR_NO_PATH),
+              segment_ids[i].first, segment_ids[i].second, (out - in).norm(),
+              in.x(), in.y(), in.z(),
+              grid_map_->getInflateOccupancy(in, estimateControlPointYaw(cps_.points, segment_ids[i].first)),
+              out.x(), out.y(), out.z(),
+              grid_map_->getInflateOccupancy(out, estimateControlPointYaw(cps_.points, segment_ids[i].second)),
+              static_cast<unsigned long long>(diag_rid_));
+        }
         if (ret == ASTAR_RET::SUCCESS)
         {
           vector<Eigen::Vector3d> path = a_star_->getPath();
@@ -1276,12 +1310,14 @@ namespace scan_planner
             // 如果一开头就撞 → 前几个控制点就在障碍里，这条轨迹没法用，直接失败
             if (t <= bspline_interval_) // First 3 control points in obstacles!
             {
-              cout << cps_.points.col(1).transpose() << "\n"
-                   << cps_.points.col(2).transpose() << "\n"
-                   << cps_.points.col(3).transpose() << "\n"
-                   << cps_.points.col(4).transpose() << endl;
               RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
-                          "First three control points are in obstacles; t=%f", t);
+                          "First three control points are in obstacles; t=%.3f rid=%llu "
+                          "cp1=(%.2f,%.2f,%.2f) cp2=(%.2f,%.2f,%.2f) cp3=(%.2f,%.2f,%.2f) cp4=(%.2f,%.2f,%.2f)",
+                          t, static_cast<unsigned long long>(diag_rid_),
+                          cps_.points(0,1), cps_.points(1,1), cps_.points(2,1),
+                          cps_.points(0,2), cps_.points(1,2), cps_.points(2,2),
+                          cps_.points(0,3), cps_.points(1,3), cps_.points(2,3),
+                          cps_.points(0,4), cps_.points(1,4), cps_.points(2,4));
               if (last_failure_ == ReplanFailure::NONE) last_failure_ = ReplanFailure::START_IN_OBSTACLE;
               return false;
             }

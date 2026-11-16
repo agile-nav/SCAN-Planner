@@ -105,6 +105,11 @@ private:
 	double step_size_, inv_step_size_;
 	Eigen::Vector3d center_;
 	Eigen::Vector3i CENTER_IDX_, POOL_SIZE_;
+	// 【诊断】上一次搜索中，起点/终点因落在障碍里被挪动的距离(m)，0=没挪
+	double last_start_adjust_{0.0}, last_end_adjust_{0.0};
+	uint64_t diag_rid_{0};
+	int diag_seg_{-1};
+	bool diag_verbose_{false};
 	const double tie_breaker_ = 1.0 + 1.0 / 10000;
 
 	std::vector<GridNodePtr> gridPath_;
@@ -126,6 +131,8 @@ public:
 // 【核心】开始搜索。step_size 是格子边长（这里直接用地图像素分辨率），
 // start_pt / end_pt 是世界坐标里的起点和终点。
 	ASTAR_RET AstarSearch(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt);
+
+	void setDiagContext(uint64_t rid, int seg, bool verbose) { diag_rid_ = rid; diag_seg_ = seg; diag_verbose_ = verbose; }
 
 // 取出上一步搜到的路径（一串世界坐标点，从起点排到终点）。
 	std::vector<Eigen::Vector3d> getPath();

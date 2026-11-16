@@ -155,6 +155,9 @@ namespace scan_planner
     bool motion_enabled_{false};
     // 重规划起点脱困：起点落在膨胀层里时，沿"起点→局部目标"方向最多前推这么多米
     double start_escape_max_offset_{1.0};
+    // 诊断：每次重规划关联号；diag_verbose 控制成功/逐迭代日志（默认关）
+    uint64_t replan_rid_{0};
+    bool diag_verbose_{false};
     bool enable_fail_safe_, need_hover_stop_;
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};

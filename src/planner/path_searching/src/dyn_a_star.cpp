@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <string>
 
 using namespace std;
 using namespace Eigen;
@@ -156,6 +157,9 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
     start_to_end.normalize();
 
     // 检查起点是否正好落在障碍里
+    // 【诊断】清空上一次的起点/终点挪动距离
+    last_start_adjust_ = 0.0;
+    last_end_adjust_ = 0.0;
     int occ = checkOccupancy(Index2Coord(start_idx), path_yaw);
     if (occ)
     {
@@ -219,11 +223,13 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
                         "[Astar] start point pushed out of obstacle by %.2f m",
                         (escaped_pt - start_pt).norm());
 
+        last_start_adjust_ = (escaped_pt - start_pt).norm();
         start_pt = escaped_pt;
         start_idx = escaped_idx;
     }
 
     // 终点同理：如果落在障碍里就往前挪
+    const Eigen::Vector3d end_pt_input = end_pt;   // 【诊断】终点被挪动前的坐标
     occ = checkOccupancy(Index2Coord(end_idx), path_yaw);
     if (occ)
     {
@@ -244,6 +250,8 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         } while (occ);
     }
 
+    // 【诊断】记录终点被挪动的距离（0=没挪）
+    last_end_adjust_ = (end_pt - end_pt_input).norm();
     return true;
 }
 
@@ -272,7 +280,10 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     if (!ConvertToIndexAndAdjustStartEndPoints(start_pt, end_pt, start_idx, end_idx))
     {
         RCLCPP_ERROR(rclcpp::get_logger("path_searching"),
-                     "Unable to handle the initial or end point, force return!");
+                     "[Astar] INIT_ERR: start=(%.2f,%.2f,%.2f) adj_s=%.2fm end=(%.2f,%.2f,%.2f) adj_e=%.2fm pool=±%.2fm",
+                     start_pt(0), start_pt(1), start_pt(2), last_start_adjust_,
+                     end_pt(0), end_pt(1), end_pt(2), last_end_adjust_,
+                     POOL_SIZE_(0) * step_size_ * 0.5);
         // 起终点有问题 → 返回“初始化错误”
         return ASTAR_RET::INIT_ERR;
     }
@@ -334,6 +345,20 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     double tentative_gScore;
 
     int num_iter = 0;
+    // 【诊断】blocked_cnt：被障碍挡掉的邻居数；与 expanded 一起回答"为什么搜不到路"
+    int blocked_cnt = 0;
+    auto reportAstarFailure = [&](const char *why) {
+      RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                  "[Astar] %s: expanded=%d blocked=%d(%.0f%%) time=%.3fs pool=±%.2fm "
+                  "start=(%.2f,%.2f,%.2f) adj_s=%.2fm end=(%.2f,%.2f,%.2f) adj_e=%.2fm rid=%llu seg=%d",
+                  why, num_iter, blocked_cnt,
+                  num_iter > 0 ? 100.0 * blocked_cnt / num_iter : 0.0,
+                  std::chrono::duration<double>(std::chrono::steady_clock::now() - time_1).count(),
+                  POOL_SIZE_(0) * step_size_ * 0.5,
+                  start_pt(0), start_pt(1), start_pt(2), last_start_adjust_,
+                  end_pt(0), end_pt(1), end_pt(2), last_end_adjust_,
+                  static_cast<unsigned long long>(diag_rid_), diag_seg_);
+    };
     // 主循环：只要还有待扩展的格子就继续
     while (!openSet_.empty())
     {
@@ -355,6 +380,12 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
             //     ROS_WARN("Time consume in A star path finding is %f", (time_2 - time_1).toSec() );
             // 顺着来路倒推出整条路径
             gridPath_ = retrievePath(current);
+            if (diag_verbose_)
+              RCLCPP_INFO(rclcpp::get_logger("path_searching"),
+                          "[Astar] SUCCESS rid=%llu seg=%d expanded=%d blocked=%d time=%.3fs pool=±%.2fm path_pts=%zu",
+                          static_cast<unsigned long long>(diag_rid_), diag_seg_, num_iter, blocked_cnt,
+                          std::chrono::duration<double>(std::chrono::steady_clock::now() - time_1).count(),
+                          POOL_SIZE_(0) * step_size_ * 0.5, gridPath_.size());
             // 返回成功
             return ASTAR_RET::SUCCESS;
         }
@@ -402,6 +433,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                 // 邻居是障碍 → 走不通，跳过
                 if (checkOccupancy(Index2Coord(neighborPtr->index), neighbor_yaw))
                 {
+                    ++blocked_cnt;   // 【诊断】这个邻居被障碍挡掉了
                     continue;
                 }
 
@@ -437,6 +469,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
         {
             RCLCPP_WARN(rclcpp::get_logger("path_searching"),
                         "Failed in A-star path search: 0.2 second time limit exceeded");
+            reportAstarFailure("SEARCH_ERR(timeout 0.2s)");
             return ASTAR_RET::SEARCH_ERR;
         }
     }
@@ -450,6 +483,113 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
         RCLCPP_WARN(rclcpp::get_logger("path_searching"),
                     "A-star path search took %.3fs, iter=%d", elapsed, num_iter);
 
+    // 【诊断 P12】"为什么搜不到路"——把搜索平面**真实看到**的东西打出来（每 5 秒最多一张）。
+    //   与搜索完全一致：判定朝向 = 两端连线方向；每个 (x,y) 格的 z 按两端线性插值。
+    //   图上：. 空   # 占据   o 出图   S 起点   E 终点
+    {
+      static double last_dump_s = -1e9;
+      const double now_s =
+          std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+      if (now_s - last_dump_s > 5.0)
+      {
+        last_dump_s = now_s;
+        const double diag_yaw = std::atan2(end_pt(1) - start_pt(1), end_pt(0) - start_pt(0));
+        const Eigen::Vector2d s_xy = start_pt.head<2>(), e_xy = end_pt.head<2>();
+        const Eigen::Vector2d d_xy = e_xy - s_xy;
+        const double len2 = d_xy.squaredNorm();
+        auto plane_z = [&](const Eigen::Vector2d &q) -> double {
+          if (len2 < 1e-8)
+            return start_pt(2);
+          double r = (q - s_xy).dot(d_xy) / len2;
+          r = std::max(0.0, std::min(1.0, r));
+          return start_pt(2) + r * (end_pt(2) - start_pt(2));
+        };
+        int ring_occ = 0;
+        for (int dy = -1; dy <= 1; ++dy)
+          for (int dx = -1; dx <= 1; ++dx)
+            if (dx != 0 || dy != 0)
+            {
+              const Eigen::Vector3d q =
+                  end_pt + Eigen::Vector3d(dx * step_size_, dy * step_size_, 0.0);
+              if (checkOccupancy(q, std::atan2(static_cast<double>(dy), static_cast<double>(dx))) != 0)
+                ++ring_occ;
+            }
+        const int occ_s = checkOccupancy(Index2Coord(start_idx), diag_yaw);
+        const int occ_e = checkOccupancy(Index2Coord(end_idx), diag_yaw);
+        constexpr double CELL = 0.2;
+        constexpr int NR = 12; // ±2.4 m
+        // 【P13a】搜索"实际使用"的两端格子（经过脱困/推移之后）与原始点的差异
+        const Eigen::Vector3d s_adj = Index2Coord(start_idx);
+        const Eigen::Vector3d e_adj = Index2Coord(end_idx);
+        const int occ_sa = checkOccupancy(s_adj, diag_yaw);
+        const int occ_ea = checkOccupancy(e_adj, diag_yaw);
+        auto exploredAt = [&](int ix, int iy, int iz) -> bool {
+          if (ix < 0 || iy < 0 || iz < 0 || ix >= POOL_SIZE_(0) || iy >= POOL_SIZE_(1) || iz >= POOL_SIZE_(2))
+            return false;
+          return GridNodeMap_[ix][iy][iz]->rounds == rounds_;
+        };
+        int occ_ring_e_adj = 0, exp_ring3_e_adj = 0, exp_ring5_e_adj = 0;
+        for (int dy = -2; dy <= 2; ++dy)
+          for (int dx = -2; dx <= 2; ++dx)
+          {
+            if (dx == 0 && dy == 0)
+              continue;
+            if (std::abs(dx) <= 1 && std::abs(dy) <= 1)
+            {
+              const Eigen::Vector3d q = e_adj + Eigen::Vector3d(dx * step_size_, dy * step_size_, 0.0);
+              if (checkOccupancy(q, std::atan2(static_cast<double>(dy), static_cast<double>(dx))) != 0)
+                ++occ_ring_e_adj;
+              if (exploredAt(end_idx(0) + dx, end_idx(1) + dy, end_idx(2)))
+                ++exp_ring3_e_adj;
+            }
+            else if (exploredAt(end_idx(0) + dx, end_idx(1) + dy, end_idx(2)))
+              ++exp_ring5_e_adj;
+          }
+        const Eigen::Vector3d mid = (s_adj + e_adj) / 2.0;
+        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                    "[Astar] 平面占用图① 原始: start=(%.2f,%.2f,%.2f) occ=%d | end=(%.2f,%.2f,%.2f) occ=%d | Δz=%.2fm | 原始E周围8格被占=%d/8",
+                    start_pt(0), start_pt(1), start_pt(2), occ_s,
+                    end_pt(0), end_pt(1), end_pt(2), occ_e,
+                    end_pt(2) - start_pt(2), ring_occ);
+        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                    "[Astar] 平面占用图② 搜索实际用: Sa=(%.2f,%.2f,%.2f) occ=%d | Ea=(%.2f,%.2f,%.2f) occ=%d | 推移 Δs=%.2fm(%.2f,%.2f) Δe=%.2fm(%.2f,%.2f)",
+                    s_adj(0), s_adj(1), s_adj(2), occ_sa,
+                    e_adj(0), e_adj(1), e_adj(2), occ_ea,
+                    last_start_adjust_, s_adj(0) - start_pt(0), s_adj(1) - start_pt(1),
+                    last_end_adjust_, e_adj(0) - end_pt(0), e_adj(1) - end_pt(1));
+        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                    "[Astar] 平面占用图③ Ea 周围: 3x3被占=%d/8  3x3被搜索到=%d/8  5x5外圈被搜索到=%d/24 | expanded=%d blocked=%d pool=±%.2fm | 1格=0.20m .空 #占据 o出图 S/E=原始 s/e=搜索实际",
+                    occ_ring_e_adj, exp_ring3_e_adj, exp_ring5_e_adj, num_iter, blocked_cnt,
+                    POOL_SIZE_(0) * step_size_ * 0.5);
+        std::string map;
+        for (int iy = NR; iy >= -NR; --iy)
+        {
+          map += (iy % 3 == 0)
+                     ? ("   " + std::string(iy < 0 ? "-" : "+") + std::to_string(std::abs(iy) * 20) + "cm ")
+                     : std::string("       ");
+          for (int ix = -NR; ix <= NR; ++ix)
+          {
+            Eigen::Vector3d q(mid(0) + ix * CELL, mid(1) + iy * CELL, 0.0);
+            q(2) = plane_z(q.head<2>());
+            const int o = checkOccupancy(q, diag_yaw);
+            char c = (o < 0) ? 'o' : ((o > 0) ? '#' : '.');
+            if ((q.head<2>() - s_xy).norm() < CELL * 0.5)
+              c = 'S';
+            if ((q.head<2>() - e_xy).norm() < CELL * 0.5)
+              c = 'E';
+            if ((q.head<2>() - s_adj.head<2>()).norm() < CELL * 0.5)
+              c = 's';
+            if ((q.head<2>() - e_adj.head<2>()).norm() < CELL * 0.5)
+              c = 'e';
+            map += c;
+          }
+          map += "\n";
+        }
+        RCLCPP_WARN(rclcpp::get_logger("path_searching"), "%s", map.c_str());
+      }
+    }
+
+    reportAstarFailure("SEARCH_ERR(no path inside pool)");
     // 返回“搜索失败”
     return ASTAR_RET::SEARCH_ERR;
 }

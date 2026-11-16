@@ -129,6 +129,7 @@ namespace scan_planner
     traj_clock_max_lead_ = load_parameter<double>(node_, "fsm.traj_clock_max_lead", 0.3);
     // 起点脱困：起点落在膨胀层里时，沿"起点→局部目标"方向最多前推的距离 [m]
     start_escape_max_offset_ = load_parameter<double>(node_, "fsm.start_escape_max_offset", 1.0);
+    diag_verbose_ = load_parameter<bool>(node_, "fsm.diag_verbose", false);
 
     // ---------- 第3步：预设航点模式下，解析航点数组 ----------
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
@@ -2020,6 +2021,10 @@ namespace scan_planner
     // 第二步：起点脱困（需要“起点 → 局部目标”的方向，所以放在取到局部目标之后）。
     // 起点若落在膨胀层里，就推向最近的自由格，别让 A*/优化器从一个“本来就撞着”的点出发。
     pushStartPtOutOfInflation();
+
+    // 本次重规划的关联号：A* / 优化 / 可行性日志都用它串起来
+    ++replan_rid_;
+    if (planner_manager_) planner_manager_->setDiagContext(replan_rid_, diag_verbose_);
 
     // 第二步：让规划总管真正规划一条局部轨迹
     bool plan_success =

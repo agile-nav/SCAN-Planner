@@ -72,6 +72,10 @@ namespace scan_planner
 
     // 最近一次 reboundReplan 失败的原因
     ReplanFailure lastFailureReason() const { return last_failure_; }
+    void setDiagContext(uint64_t rid, bool verbose) {
+      diag_rid_ = rid; diag_verbose_ = verbose;
+      if (bspline_optimizer_rebound_) bspline_optimizer_rebound_->setDiagContext(rid, verbose);
+    }
 
   private:
     rclcpp::Node *node_{nullptr};
@@ -87,6 +91,8 @@ namespace scan_planner
 
     // 最近一次 reboundReplan 失败的原因（供状态话题使用）
     ReplanFailure last_failure_{ReplanFailure::NONE};
+    uint64_t diag_rid_{0};
+    bool diag_verbose_{false};
 
     // 把刚算出来的轨迹记录进 local_data_（开始时间、时长、轨迹本体等）
     void updateTrajInfo(const UniformBspline &position_traj, const rclcpp::Time time_now);
