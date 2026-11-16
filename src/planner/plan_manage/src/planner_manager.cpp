@@ -438,7 +438,9 @@ namespace scan_planner
     // checkFeasibility 返回 false 表示超限了；ratio 告诉我们超了几倍。
     if (!pos.checkFeasibility(ratio, false))
     {
-      cout << "Need to reallocate time." << endl;
+      RCLCPP_WARN(node_->get_logger(),
+                  "[diag] rid=%llu stage=feas event=static_infeasible ratio=%.3f v_lim=%.2f a_lim=%.2f tol=%.2f",
+                  static_cast<unsigned long long>(diag_rid_), ratio, pp_.max_vel_, pp_.max_acc_, pp_.feasibility_tolerance_);
 
       // 时间拉长后重新拟合出的控制点
       Eigen::MatrixXd optimal_control_points;
@@ -453,7 +455,11 @@ namespace scan_planner
     // 细化失败，或者轨迹仍然超速/超加速度 → 这条轨迹不安全
     if (!flag_step_2_success || !checkDynamicFeasibility(pos))
     {
-      // 打印蓝色警告并放弃（绝不把不安全的轨迹发出去）
+      RCLCPP_WARN(node_->get_logger(),
+                  "[diag] rid=%llu stage=feas event=%s ratio=%.3f v_lim=%.2f a_lim=%.2f tol=%.2f",
+                  static_cast<unsigned long long>(diag_rid_),
+                  flag_step_2_success ? "dynamic_infeasible" : "refine_unsafe",
+                  ratio, pp_.max_vel_, pp_.max_acc_, pp_.feasibility_tolerance_);
     last_failure_ = flag_step_2_success ? ReplanFailure::DYNAMIC_INFEASIBLE : ReplanFailure::REFINE_UNSAFE;
       RCLCPP_WARN(node_->get_logger(),
                   "[diag] rid=%llu stage=feas event=refine_unpublish reason=%s",
@@ -682,6 +688,8 @@ namespace scan_planner
     // std::cout << "ratio: " << ratio << std::endl;
     // 第一步：把轨迹时间拉长 ratio 倍，并重新采样/拟合，得到新控制点
     reparamBspline(traj, start_end_derivative, ratio, ctrl_pts, ts, t_inc);
+    RCLCPP_INFO(node_->get_logger(), "[diag] rid=%llu stage=feas event=refine ratio=%.3f ts=%.3f",
+                static_cast<unsigned long long>(diag_rid_), ratio, ts);
 
     // 用新控制点重建轨迹对象
     traj = UniformBspline(ctrl_pts, 3, ts);
@@ -747,8 +755,8 @@ namespace scan_planner
       if (vel.norm() > vel_limit)
       {
         RCLCPP_WARN(node_->get_logger(),
-                    "Dynamic feasibility failed: velocity at t=%.3f is %.3f > %.3f",
-                    tc, vel.norm(), vel_limit);
+                    "Dynamic feasibility failed: velocity at t=%.3f is %.3f > %.3f rid=%llu",
+                    tc, vel.norm(), vel_limit, static_cast<unsigned long long>(diag_rid_));
         return false;
       }
 
@@ -758,8 +766,8 @@ namespace scan_planner
       if (acc.norm() > acc_limit)
       {
         RCLCPP_WARN(node_->get_logger(),
-                    "Dynamic feasibility failed: acceleration at t=%.3f is %.3f > %.3f",
-                    tc, acc.norm(), acc_limit);
+                    "Dynamic feasibility failed: acceleration at t=%.3f is %.3f > %.3f rid=%llu",
+                    tc, acc.norm(), acc_limit, static_cast<unsigned long long>(diag_rid_));
         return false;
       }
     }

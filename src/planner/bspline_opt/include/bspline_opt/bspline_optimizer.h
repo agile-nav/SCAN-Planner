@@ -80,6 +80,8 @@ namespace scan_planner
     void setEnvironment(const GridMap::Ptr &env);
 // 读参数：各代价项的权重 lambda、安全距离 dist0、速度/加速度上限等。
     void setParam(rclcpp::Node *node);
+    // 【P15】A* 失败时是否用障碍法线兜底（false = 旧行为：这一段没有推出方向）
+    bool rebound_fallback_enable_{true};
     Eigen::MatrixXd BsplineOptimizeTraj(const Eigen::MatrixXd &points, const double &ts,
                                         const int &cost_function, int max_num_id, int max_time_id);
 
@@ -108,6 +110,8 @@ namespace scan_planner
 // 【第一步】检查初始轨迹哪些控制点碰到障碍，对碰撞段跑 A*，
 // 得到“该往哪个方向把控制点顶出去”，返回 A* 路径（仅作方向参考）。
     std::vector<std::vector<Eigen::Vector3d>> initControlPoints(Eigen::MatrixXd &init_points, bool flag_first_init = true);
+    // 【P15】A* 失败时用“障碍面 + 外法线”兜底给出推出方向
+    void synthesizeReboundFromObstacle(const std::pair<int, int> &seg);
 // 【第二步（Rebound）】用 L-BFGS 优化控制点：平滑 + 避障 + 可行性。
 // 注意：必须先调用 initControlPoints()。
     bool BsplineOptimizeTrajRebound(Eigen::MatrixXd &optimal_points, double ts); // must be called after initControlPoints()
