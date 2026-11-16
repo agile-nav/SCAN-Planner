@@ -1091,11 +1091,51 @@ void GridMap::sensorPoseCallback(const nav_msgs::msg::Odometry::ConstSharedPtr &
   updateSlidingMap(md_.ray_pos_);
 }
 
+// 更新平滑后的机体姿态（四元数球面插值指数平滑）。
+// body_pose 在真机上约 200 Hz；按实际 dt 计算 alpha，保持约 0.1 s 时间常数
+// （设计文档里的 alpha=0.25 是按 50 Hz 写的）。
+void GridMap::setBodyAttitude(const Eigen::Quaterniond &q_in)
+{
+  if (!q_in.coeffs().allFinite()) return;
+  const double norm = q_in.norm();
+  if (norm < 1e-6) return;
+  const Eigen::Quaterniond q = q_in.normalized();
+
+  const rclcpp::Time now = node_->now();
+  if (body_attitude_stamp_.nanoseconds() == 0)
+  {
+    body_q_ = q;  // 第一帧直接采用
+  }
+  else
+  {
+    double dt = (now - body_attitude_stamp_).seconds();
+    if (dt <= 0.0 || dt > 0.5) dt = 0.02;  // 时钟异常时按 ~50 Hz 兜底
+    constexpr double tau = 0.1;            // 约 0.1 s 时间常数
+    double alpha = 1.0 - std::exp(-dt / tau);
+    alpha = std::clamp(alpha, 0.01, 0.5);
+    body_q_ = body_q_.slerp(alpha, q);
+    body_q_.normalize();
+  }
+  body_attitude_stamp_ = now;
+
+  const Eigen::Matrix3d R = body_q_.toRotationMatrix();
+  const Eigen::Vector3d f = R.col(0);
+  body_pitch_ = std::asin(std::clamp(f.z(), -1.0, 1.0));
+  body_yaw_ = std::atan2(f.y(), f.x());
+  body_roll_ = std::atan2(R(2, 1), R(2, 2));
+}
+
 void GridMap::slidingMapFrameCallback(const nav_msgs::msg::Odometry::ConstSharedPtr &pose)
 {
   // 只记录一个位置，供发布 world→sliding_map 的坐标变换
   const geometry_msgs::msg::Point &pos = pose->pose.pose.position;
   md_.sliding_map_frame_pos_ = Eigen::Vector3d(pos.x, pos.y, pos.z);
+
+  // 用同一帧 body_pose 更新机体姿态（后续碰撞查询的俯仰修正用）
+  const auto &q_msg = pose->pose.pose.orientation;
+  Eigen::Quaterniond q(q_msg.w, q_msg.x, q_msg.y, q_msg.z);
+  if (q.coeffs().allFinite() && q.norm() > 1e-6)
+    setBodyAttitude(q);
 }
 
 // 激光模式的回调：把点云转成世界坐标，只保留地图附近的点，

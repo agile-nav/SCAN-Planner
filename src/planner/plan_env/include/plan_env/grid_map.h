@@ -289,6 +289,13 @@ public:
 // 返回 1=有障碍，0=空，-1=超出地图范围。
   inline int getInflateOccupancy(Eigen::Vector3d pos, double yaw);
 
+  // 更新/读取平滑后的机体姿态。setBodyAttitude 由 body_pose 回调调用。
+  void setBodyAttitude(const Eigen::Quaterniond &q);
+  double getBodyPitch() const { return body_pitch_; }
+  double getBodyRoll() const { return body_roll_; }
+  double getBodyYaw() const { return body_yaw_; }
+  const Eigen::Quaterniond &getBodyQuaternion() const { return body_q_; }
+
   // 把一个索引夹到地图边界内（越界时就近取边界）
   inline void boundIndex(Eigen::Vector3i& id);
   // 判断某格是否"从未被观测过"（未知）
@@ -330,6 +337,11 @@ private:
 // 参数与数据两个成员：mp_ 存参数，md_ 存运行时数据。
   MappingParameters mp_;
   MappingData md_;
+
+  // 平滑后的机体姿态：碰撞查询用 body_pitch_；可视化用四元数与 roll/yaw
+  Eigen::Quaterniond body_q_{Eigen::Quaterniond::Identity()};
+  double body_pitch_{0.0}, body_roll_{0.0}, body_yaw_{0.0};
+  rclcpp::Time body_attitude_stamp_{0, 0, RCL_ROS_TIME};
 
   // get depth image and sensor pose
   /* ---------- 传感器数据回调（收到话题/定时器时被调用） ---------- */
