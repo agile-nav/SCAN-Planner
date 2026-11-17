@@ -1631,6 +1631,15 @@ namespace scan_planner
           isWaypointSequenceMode() ? time_done : (status_is_stop_ || no_progress_valid || hard_cap);
       if (segment_done)
       {
+        RCLCPP_WARN(node_->get_logger(),
+                    "[diag] rid=%llu stage=fsm event=segment_done traj_id=%d "
+                    "status_stop=%d no_progress=%d hard_cap=%d exec_no_progress=%d "
+                    "wall=%.2fs t_cur=%.2f dur=%.2f best_dist=%.2f goal_dist=%.2f",
+                    static_cast<unsigned long long>(replan_rid_), info->traj_id_,
+                    static_cast<int>(status_is_stop_), static_cast<int>(no_progress_valid),
+                    static_cast<int>(hard_cap), static_cast<int>(exec_no_progress_),
+                    wall_since_commit, t_cur, info->duration_, exec_best_dist_,
+                    (end_pt_ - odom_pos_).norm());
         // 复位执行进展统计
         exec_progress_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
         exec_best_dist_ = 1e9;
