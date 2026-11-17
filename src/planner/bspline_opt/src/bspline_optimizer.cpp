@@ -130,16 +130,89 @@ namespace scan_planner
         }
       }
       if (best_dir.squaredNorm() < 1e-12)
+      {
+        RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                    "[P15] seg(%d,%d) cp=%d no free direction within %.2fm pos=(%.2f,%.2f,%.2f)",
+                    seg.first, seg.second, j, 0.8, cps_.points(0, j), cps_.points(1, j), cps_.points(2, j));
         continue;
+      }
       cps_.flag_temp[j] = true;
       cps_.base_point[j].push_back(best_base);
       cps_.direction[j].push_back(best_dir);
+      RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                  "[P15] seg(%d,%d) cp=%d base=(%.2f,%.2f,%.2f) dir=(%.2f,%.2f,%.2f) free_dist=%.2fm",
+                  seg.first, seg.second, j,
+                  best_base(0), best_base(1), best_base(2),
+                  best_dir(0), best_dir(1), best_dir(2),
+                  step * best_k);
       ++filled;
     }
     if (filled > 0)
       RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
                   "[P15] no A-star path for seg(%d,%d); synthesized %d obstacle-normal rebound directions",
                   seg.first, seg.second, filled);
+  }
+
+  // 【P20】前几个控制点由 B 样条边界固定，普通 L-BFGS 不会改动它们。
+  // 若它们本身落在膨胀层里，这里先在 3D 方向找最近自由点直接拉出，再重跑优化。
+  bool BsplineOptimizer::pullFirstControlPointsOut(int max_id)
+  {
+    if (!grid_map_ || cps_.points.cols() < 2)
+      return false;
+
+    const int limit = std::min(max_id, static_cast<int>(cps_.points.cols()) - 1);
+    const double step = grid_map_->getResolution();
+    const int k_max = std::max(1, static_cast<int>(std::ceil(0.8 / step)));
+    bool moved = false;
+
+    for (int j = 1; j <= limit; ++j)
+    {
+      const double yaw = estimateControlPointYaw(cps_.points, j);
+      const Eigen::Vector3d old_pt = cps_.points.col(j);
+      if (grid_map_->getInflateOccupancy(old_pt, yaw) == 0)
+        continue;
+
+      Eigen::Vector3d best_pt = old_pt;
+      bool found = false;
+      for (int k = 1; k <= k_max && !found; ++k)
+      {
+        for (int dx = -1; dx <= 1 && !found; ++dx)
+          for (int dy = -1; dy <= 1 && !found; ++dy)
+            for (int dz = -1; dz <= 1 && !found; ++dz)
+            {
+              if (dx == 0 && dy == 0 && dz == 0)
+                continue;
+              Eigen::Vector3d dir(dx, dy, dz);
+              dir.normalize();
+              const Eigen::Vector3d cand = old_pt + dir * (step * k);
+              if (grid_map_->getInflateOccupancy(cand, yaw) == 0)
+              {
+                best_pt = cand;
+                found = true;
+              }
+            }
+      }
+
+      if (!found)
+      {
+        RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                    "[P20] cp=%d still occupied; no free point within %.2fm pos=(%.2f,%.2f,%.2f)",
+                    j, 0.8, old_pt(0), old_pt(1), old_pt(2));
+        continue;
+      }
+
+      cps_.points.col(j) = best_pt;
+      cps_.flag_temp[j] = false;
+      cps_.base_point[j].clear();
+      cps_.direction[j].clear();
+      moved = true;
+      RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                  "[P20] pulled cp=%d out of inflation by %.2fm from (%.2f,%.2f,%.2f) to (%.2f,%.2f,%.2f)",
+                  j, (best_pt - old_pt).norm(),
+                  old_pt(0), old_pt(1), old_pt(2),
+                  best_pt(0), best_pt(1), best_pt(2));
+    }
+    return moved;
   }
 
 
@@ -259,7 +332,7 @@ namespace scan_planner
           const int id_in = segment_ids[i].first, id_out = segment_ids[i].second;
           RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
               "[A-star FAIL] type=%s seg(in_id=%d,out_id=%d) len=%.2fm | in=(%.2f,%.2f,%.2f) occ_in=%d | "
-              "out=(%.2f,%.2f,%.2f) occ_out=%d rid=%llu",
+              "out=(%.2f,%.2f,%.2f) occ_out=%d adj_s=%.2fm adj_e=%.2fm rid=%llu",
               replanFailureToString(ret == ASTAR_RET::INIT_ERR ? ReplanFailure::ASTAR_INIT_ERR
                                                                : ReplanFailure::ASTAR_NO_PATH),
               id_in, id_out, (out - in).norm(),
@@ -267,6 +340,7 @@ namespace scan_planner
               grid_map_->getInflateOccupancy(in, estimateControlPointYaw(cps_.points, id_in)),
               out.x(), out.y(), out.z(),
               grid_map_->getInflateOccupancy(out, estimateControlPointYaw(cps_.points, id_out)),
+              a_star_->getLastStartAdjust(), a_star_->getLastEndAdjust(),
               static_cast<unsigned long long>(diag_rid_));
         }
       if (ret == ASTAR_RET::SUCCESS)
@@ -1086,7 +1160,7 @@ namespace scan_planner
             // 【诊断】A* 失败一次打全：类型 / 段号 / 段长 / 两端坐标 / 两端是否在膨胀区(1=障碍 0=空 -1=出图)
             RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
                 "[A-star FAIL] type=%s seg(in_id=%d,out_id=%d) len=%.2fm | in=(%.2f,%.2f,%.2f) occ_in=%d | "
-                "out=(%.2f,%.2f,%.2f) occ_out=%d rid=%llu",
+                "out=(%.2f,%.2f,%.2f) occ_out=%d adj_s=%.2fm adj_e=%.2fm rid=%llu",
                 replanFailureToString(ret == ASTAR_RET::INIT_ERR ? ReplanFailure::ASTAR_INIT_ERR
                                                                  : ReplanFailure::ASTAR_NO_PATH),
                 seg.first, seg.second, (out - in).norm(),
@@ -1094,6 +1168,7 @@ namespace scan_planner
                 grid_map_->getInflateOccupancy(in, estimateControlPointYaw(cps_.points, seg.first)),
                 out.x(), out.y(), out.z(),
                 grid_map_->getInflateOccupancy(out, estimateControlPointYaw(cps_.points, seg.second)),
+                a_star_->getLastStartAdjust(), a_star_->getLastEndAdjust(),
                 static_cast<unsigned long long>(diag_rid_));
           }
           vector<Eigen::Vector3d> path;
@@ -1310,7 +1385,8 @@ namespace scan_planner
     auto t2 = t0;
     // restart_nums：重启次数；rebound_times：因发现新障碍而中断的次数
     int restart_nums = 0, rebound_times = 0;
-    ;
+    // 【P20】前几个固定控制点被占用时的有限重试次数
+    int first_cp_escape_tries = 0;
     bool flag_force_return, flag_occ, success;
     // 避障权重（重启时会翻倍，所以单独用一个变量）
     new_lambda2_ = lambda2_;
@@ -1326,6 +1402,7 @@ namespace scan_planner
       flag_force_return = false;
       flag_occ = false;
       success = false;
+      bool first_cp_retry = false;
 
       // 把控制点从矩阵“拉直”成一维数组（L-BFGS 只认一维数组）
       std::vector<double> q(variable_num_);
@@ -1372,17 +1449,34 @@ namespace scan_planner
           {
             //cout << "hit_obs, t=" << t << " P=" << traj.evaluateDeBoorT(t).transpose() << endl;
 
-            // 如果一开头就撞 → 前几个控制点就在障碍里，这条轨迹没法用，直接失败
+            // 如果一开头就撞 → 前几个控制点就在障碍里。
+            // 【P20】先尝试直接把前 2~3 个控制点拉出膨胀层，再重跑优化；
+            // 只有有限次仍失败，才判这条轨迹不可用。
             if (t <= bspline_interval_) // First 3 control points in obstacles!
             {
               RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
                           "First three control points are in obstacles; t=%.3f rid=%llu "
+                          "pitch=%.1fdeg roll=%.1fdeg "
                           "cp1=(%.2f,%.2f,%.2f) cp2=(%.2f,%.2f,%.2f) cp3=(%.2f,%.2f,%.2f) cp4=(%.2f,%.2f,%.2f)",
                           t, static_cast<unsigned long long>(diag_rid_),
+                          grid_map_->getBodyPitch() * 180.0 / M_PI,
+                          grid_map_->getBodyRoll() * 180.0 / M_PI,
                           cps_.points(0,1), cps_.points(1,1), cps_.points(2,1),
                           cps_.points(0,2), cps_.points(1,2), cps_.points(2,2),
                           cps_.points(0,3), cps_.points(1,3), cps_.points(2,3),
                           cps_.points(0,4), cps_.points(1,4), cps_.points(2,4));
+
+              if (first_cp_escape_tries < 3 && pullFirstControlPointsOut(3))
+              {
+                ++first_cp_escape_tries;
+                first_cp_retry = true;
+                RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                            "[P20] first control points occupied; pulled out and retry optimization (%d/3) rid=%llu",
+                            first_cp_escape_tries,
+                            static_cast<unsigned long long>(diag_rid_));
+                break;
+              }
+
               if (last_failure_ == ReplanFailure::NONE) last_failure_ = ReplanFailure::START_IN_OBSTACLE;
               return false;
             }
@@ -1390,6 +1484,14 @@ namespace scan_planner
             // 否则跳出检查，走下面的“重启”流程
             break;
           }
+        }
+
+        if (first_cp_retry)
+        {
+          flag_force_return = true;
+          force_stop_type_ = STOP_FOR_REBOUND;
+          ++rebound_times;
+          continue;
         }
 
         // 全程没有碰撞 → 这次优化成功

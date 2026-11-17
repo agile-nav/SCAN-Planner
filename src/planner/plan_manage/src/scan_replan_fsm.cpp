@@ -1943,13 +1943,34 @@ namespace scan_planner
       Eigen::Vector3d pos = info->position_traj_.evaluateDeBoorT(t);
       // 再取后面一点点位置，用两点连线方向估计机器人的朝向
       Eigen::Vector3d pos_next = info->position_traj_.evaluateDeBoorT(std::min(t + time_step, info->duration_));
+      const double hit_yaw = estimateYawFromSegment(pos, pos_next);
       // 问地图：机器人以这个朝向待在这里，会不会撞？
-      if (map->getInflateOccupancy(pos, estimateYawFromSegment(pos, pos_next)))
+      if (map->getInflateOccupancy(pos, hit_yaw))
       {
+        const double body_pitch = map->getBodyPitch();
+        const double body_roll = map->getBodyRoll();
+        const double self_yaw = getOdomYaw();
+        const double off = map->getDoubleCylinderOffset();
+        const double cp = std::cos(body_pitch), sp = std::sin(body_pitch);
+        const Eigen::Vector3d self_axis(cp * std::cos(self_yaw), cp * std::sin(self_yaw), sp);
+        const Eigen::Vector3d hit_axis(cp * std::cos(hit_yaw), cp * std::sin(hit_yaw), sp);
+        const Eigen::Vector3d self_front = odom_pos_ + off * self_axis;
+        const Eigen::Vector3d self_rear = odom_pos_ - off * self_axis;
+        const Eigen::Vector3d hit_front = pos + off * hit_axis;
+        const Eigen::Vector3d hit_rear = pos - off * hit_axis;
+        const int self_occ = map->getInflateOccupancy(odom_pos_, self_yaw);
         RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
-                             "[collision] ahead=%.2fs pos=(%.2f,%.2f,%.2f) self_occ=%d -> 先尝试重规划",
-                             t - t_cur, pos(0), pos(1), pos(2),
-                             map->getInflateOccupancy(odom_pos_, getOdomYaw()));
+                             "[collision] ahead=%.2fs pos=(%.2f,%.2f,%.2f) self_occ=%d "
+                             "pitch=%.1fdeg roll=%.1fdeg yaw=%.1fdeg hit_yaw=%.1fdeg "
+                             "self_front=(%.2f,%.2f,%.2f) self_rear=(%.2f,%.2f,%.2f) "
+                             "hit_front=(%.2f,%.2f,%.2f) hit_rear=(%.2f,%.2f,%.2f) -> 先尝试重规划",
+                             t - t_cur, pos(0), pos(1), pos(2), self_occ,
+                             body_pitch * 180.0 / M_PI, body_roll * 180.0 / M_PI,
+                             self_yaw * 180.0 / M_PI, hit_yaw * 180.0 / M_PI,
+                             self_front(0), self_front(1), self_front(2),
+                             self_rear(0), self_rear(1), self_rear(2),
+                             hit_front(0), hit_front(1), hit_front(2),
+                             hit_rear(0), hit_rear(1), hit_rear(2));
         // 参考 TF 缺失期间又检测到碰撞 → 直接急停（此时无法确认参考路径是否仍安全）
         if (navi_mode_ == NAVI_MODE::REFERENCE_PATH &&
             reference_tf_missing_since_.nanoseconds() != 0)

@@ -112,6 +112,8 @@ namespace scan_planner
     std::vector<std::vector<Eigen::Vector3d>> initControlPoints(Eigen::MatrixXd &init_points, bool flag_first_init = true);
     // 【P15】A* 失败时用“障碍面 + 外法线”兜底给出推出方向
     void synthesizeReboundFromObstacle(const std::pair<int, int> &seg);
+    // 【P20】前几个固定控制点被占用时，先尝试把它们直接拉出膨胀层再重优化
+    bool pullFirstControlPointsOut(int max_id = 3);
 // 【第二步（Rebound）】用 L-BFGS 优化控制点：平滑 + 避障 + 可行性。
 // 注意：必须先调用 initControlPoints()。
     bool BsplineOptimizeTrajRebound(Eigen::MatrixXd &optimal_points, double ts); // must be called after initControlPoints()

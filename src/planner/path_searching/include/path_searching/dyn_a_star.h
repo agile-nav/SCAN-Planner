@@ -133,6 +133,8 @@ public:
 	ASTAR_RET AstarSearch(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt);
 
 	void setDiagContext(uint64_t rid, int seg, bool verbose) { diag_rid_ = rid; diag_seg_ = seg; diag_verbose_ = verbose; }
+	double getLastStartAdjust() const { return last_start_adjust_; }
+	double getLastEndAdjust() const { return last_end_adjust_; }
 
 // 取出上一步搜到的路径（一串世界坐标点，从起点排到终点）。
 	std::vector<Eigen::Vector3d> getPath();

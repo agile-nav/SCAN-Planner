@@ -300,6 +300,7 @@ public:
   double getBodyPitch() const { return body_pitch_; }
   double getBodyRoll() const { return body_roll_; }
   double getBodyYaw() const { return body_yaw_; }
+  double getDoubleCylinderOffset() const { return mp_.double_cylinder_offset_; }
   const Eigen::Quaterniond &getBodyQuaternion() const { return body_q_; }
 
   // 把一个索引夹到地图边界内（越界时就近取边界）
