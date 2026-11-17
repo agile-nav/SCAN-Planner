@@ -1189,7 +1189,7 @@ namespace scan_planner
     // 坐标框架：参数里没配就用 world
     marker.header.frame_id = self_inflation_frame_id_.empty() ? "world" : self_inflation_frame_id_;
     // 时间戳
-    marker.header.stamp = node_->now();
+    marker.header.stamp = node_->now() - rclcpp::Duration::from_seconds(0.1);
     marker.ns = "self_inflation";
     // 形状选圆柱；动作是“添加/更新”
     marker.type = visualization_msgs::msg::Marker::CYLINDER;
@@ -1258,7 +1258,7 @@ namespace scan_planner
 
     visualization_msgs::msg::Marker marker;
     marker.header.frame_id = self_inflation_frame_id_.empty() ? "world" : self_inflation_frame_id_;
-    marker.header.stamp = node_->now();
+    marker.header.stamp = node_->now() - rclcpp::Duration::from_seconds(0.1);
     marker.ns = "body_pose_visual";
     marker.type = visualization_msgs::msg::Marker::CYLINDER;
     marker.action = visualization_msgs::msg::Marker::ADD;
