@@ -228,26 +228,63 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         start_idx = escaped_idx;
     }
 
-    // 终点同理：如果落在障碍里就往前挪
+    // 终点同理：如果落在障碍里，多方向脱困（与起点对称）
     const Eigen::Vector3d end_pt_input = end_pt;   // 【诊断】终点被挪动前的坐标
     occ = checkOccupancy(Index2Coord(end_idx), path_yaw);
     if (occ)
     {
-        //ROS_WARN("End point is insdide an obstacle.");
-        do
-        {
-            // 每次沿方向前进一格
-            end_pt += start_to_end * step_size_;
-            if (!Coord2Index(end_pt, end_idx))
-                return false;
+        constexpr double k_end_max_offset = 1.5; // [m] 终点最多允许挪多远
+        const int k_end_max = std::max(1, static_cast<int>(std::ceil(k_end_max_offset / step_size_)));
+        bool found = false;
+        Eigen::Vector3d escaped_end_pt = end_pt;
+        Vector3i escaped_end_idx = end_idx;
 
-            occ = checkOccupancy(Index2Coord(end_idx), path_yaw);
-            if (occ == -1)
-            {
-                RCLCPP_WARN(rclcpp::get_logger("path_searching"), "[Astar] End point outside the map region.");
+        auto try_end_candidate = [&](const Eigen::Vector3d &cand) -> bool {
+            Vector3i cand_idx;
+            if (!Coord2Index(cand, cand_idx)) // 出了搜索池
                 return false;
+            // 不要把终点挪到起点那一格，避免起终同格的退化
+            if (cand_idx == start_idx)
+                return false;
+            if (checkOccupancy(Index2Coord(cand_idx), path_yaw) != 0)
+                return false;
+            escaped_end_pt = cand;
+            escaped_end_idx = cand_idx;
+            return true;
+        };
+
+        // (1) 先往起点方向退（终点被包住时，通常最近自由格在来路）
+        for (int k = 1; k <= k_end_max && !found; ++k)
+            found = try_end_candidate(end_pt - start_to_end * (step_size_ * k));
+        // (2) 再向外推
+        for (int k = 1; k <= k_end_max && !found; ++k)
+            found = try_end_candidate(end_pt + start_to_end * (step_size_ * k));
+        // (3) 最后绕终点在水平面内做环状搜索
+        for (int k = 1; k <= k_end_max && !found; ++k)
+        {
+            for (int a = 0; a < 8 && !found; ++a)
+            {
+                const double ang = a * M_PI / 4.0;
+                const Eigen::Vector3d dir(std::cos(ang), std::sin(ang), 0.0);
+                found = try_end_candidate(end_pt + dir * (step_size_ * k));
             }
-        } while (occ);
+        }
+
+        if (!found)
+        {
+            RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                        "[Astar] No free end point within %.2f m of (%.2f, %.2f, %.2f)",
+                        k_end_max_offset, end_pt(0), end_pt(1), end_pt(2));
+            return false;
+        }
+
+        static int end_escape_cnt = 0;
+        if (++end_escape_cnt % 50 == 1)
+            RCLCPP_INFO(rclcpp::get_logger("path_searching"),
+                        "[Astar] end point pushed out of obstacle by %.2f m",
+                        (escaped_end_pt - end_pt).norm());
+        end_pt = escaped_end_pt;
+        end_idx = escaped_end_idx;
     }
 
     // 【诊断】记录终点被挪动的距离（0=没挪）
