@@ -47,7 +47,7 @@ scan_planner_node:
     # 单条射线最大作用距离(米)
     grid_map.max_ray_length: 6.0
     # 期望安全距离(米)
-    optimization.dist0: 0.1
+    optimization.dist0: 0.2
     # 机器人形态（实机调试后定稿，取代原先“按官方站立尺寸换算”的取值）
     grid_map.body_height: 0.0
     grid_map.double_cylinder_radius: 0.25
