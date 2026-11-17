@@ -63,6 +63,7 @@ void GridMap::initMap(rclcpp::Node *node)
   load_parameter(node_, "grid_map.obstacles_inflation_z_down", mp_.obstacles_inflation_z_down, -1.0);
   load_parameter(node_, "grid_map.double_cylinder_radius", mp_.double_cylinder_radius_, -1.0);
   load_parameter(node_, "grid_map.double_cylinder_offset", mp_.double_cylinder_offset_, 0.0);
+  load_parameter(node_, "grid_map.tilt_collision_enable", mp_.tilt_collision_enable_, true);
   // 【P11 自过滤】传感器周围 self_filter_radius 球内的点不写入地图；<=0 = 关闭
   load_parameter(node_, "grid_map.self_filter_radius", mp_.self_filter_radius_, 0.0);
   RCLCPP_INFO(node_->get_logger(), "[GridMap] self_filter_radius = %.2f m (<=0 关闭)", mp_.self_filter_radius_);

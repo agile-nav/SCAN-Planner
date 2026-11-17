@@ -105,6 +105,8 @@ struct MappingParameters {
 // 机器人形状参数：圆柱半径、前后两个圆柱中心离机器人中心的距离
   // 机器人被抽象成"前后两个圆柱"：radius 是圆柱半径，offset 是两圆心离中心的距离
   double double_cylinder_radius_, double_cylinder_offset_;
+  // true=碰撞查询探测点随 body pitch 倾斜；false=旧的水平双圆柱（A/B 开关）
+  bool tilt_collision_enable_{true};
   // 【P11 自过滤】传感器周围这个半径(m)的球内的点不写入地图——用于滤掉机器人自身
   // （腿/机身）的回波，否则它们会被当成障碍并膨胀，在脚下堆出一圈"障碍团"、
   // 把自由空间切成孤岛（A* 报 no path / 起点变成小口袋）。<=0 表示关闭
@@ -573,7 +575,9 @@ inline int GridMap::getOccupancy(Eigen::Vector3d pos) {
 // 返回 1=障碍 / 0=空 / -1=出图。注意：调用方常写 if(返回值)，所以 -1 也会被当成"会撞"。
 inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos, double yaw) {
   // 机体俯仰：抬头为正。限幅 ±45°，避免极端姿态把探测点甩得太远。
-  const double p = std::clamp(body_pitch_, -0.7853981633974483, 0.7853981633974483);
+  const double p = mp_.tilt_collision_enable_
+                       ? std::clamp(body_pitch_, -0.7853981633974483, 0.7853981633974483)
+                       : 0.0;
   const double cp = std::cos(p), sp = std::sin(p);
   const double cy = std::cos(yaw), sy = std::sin(yaw);
 

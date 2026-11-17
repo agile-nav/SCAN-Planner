@@ -100,6 +100,8 @@ scan_planner_node:
     grid_map.double_cylinder_radius: 0.25
     # 两个圆柱中心离机器人中心的距离(米)。所以圆柱中心分别在前后 0.18 米处。
     grid_map.double_cylinder_offset: 0.18
+    # true=探测点随 pitch 倾斜（新）；false=旧的水平双圆柱（A/B 用）
+    grid_map.tilt_collision_enable: true
     # 【P11 自过滤】传感器周围该半径(m)球内的点不写入地图；0=关闭
     grid_map.self_filter_radius: 0.0
     grid_map.body_height: 0.4
