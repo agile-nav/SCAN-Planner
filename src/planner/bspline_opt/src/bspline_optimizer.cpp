@@ -557,7 +557,9 @@ namespace scan_planner
     return a_star_paths;
   }
 
-  int BsplineOptimizer::earlyExit(void *func_data, const double *x, const double *g, const double fx, const double xnorm, const double gnorm, const double step, int n, int k, int ls)
+  int BsplineOptimizer::earlyExit(void *func_data, const double * /*x*/, const double * /*g*/,
+                                  const double /*fx*/, const double /*xnorm*/, const double /*gnorm*/,
+                                  const double /*step*/, int /*n*/, int /*k*/, int /*ls*/)
   {
     // earlyExit 回调：把 user data 转回优化器对象
     BsplineOptimizer *opt = reinterpret_cast<BsplineOptimizer *>(func_data);
@@ -1326,8 +1328,8 @@ namespace scan_planner
       success = false;
 
       // 把控制点从矩阵“拉直”成一维数组（L-BFGS 只认一维数组）
-      double q[variable_num_];
-      memcpy(q, cps_.points.data() + 3 * start_id, variable_num_ * sizeof(q[0]));
+      std::vector<double> q(variable_num_);
+      memcpy(q.data(), cps_.points.data() + 3 * start_id, variable_num_ * sizeof(double));
 
       // 配置 L-BFGS：记忆 16 步、最多 200 次迭代、梯度阈值 0.01
       lbfgs::lbfgs_parameter_t lbfgs_params;
@@ -1339,7 +1341,7 @@ namespace scan_planner
       /* ---------- optimize ---------- */
       t1 = std::chrono::steady_clock::now();
       // 开始求解：L-BFGS 每走一步都会回调 costFunctionRebound 来要代价和梯度
-      int result = lbfgs::lbfgs_optimize(variable_num_, q, &final_cost, BsplineOptimizer::costFunctionRebound, NULL, BsplineOptimizer::earlyExit, this, &lbfgs_params);
+      int result = lbfgs::lbfgs_optimize(variable_num_, q.data(), &final_cost, BsplineOptimizer::costFunctionRebound, NULL, BsplineOptimizer::earlyExit, this, &lbfgs_params);
       t2 = std::chrono::steady_clock::now();
       double time_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
       double total_time_ms = std::chrono::duration<double, std::milli>(t2 - t0).count();
@@ -1452,11 +1454,11 @@ namespace scan_planner
     variable_num_ = 3 * (end_id - start_id);
 
     // 一维变量数组
-    double q[variable_num_];
+    std::vector<double> q(variable_num_);
     double final_cost;
 
     // 把中间控制点拷进一维数组
-    memcpy(q, cps_.points.data() + 3 * start_id, variable_num_ * sizeof(q[0]));
+    memcpy(q.data(), cps_.points.data() + 3 * start_id, variable_num_ * sizeof(double));
 
     // 保存原始贴合权重（退出时要还原）
     double origin_lambda4 = lambda4_;
@@ -1473,7 +1475,7 @@ namespace scan_planner
       lbfgs_params.g_epsilon = 0.001;
 
       // 用 Refine 的代价函数求解（注意没有 earlyExit 回调）
-      int result = lbfgs::lbfgs_optimize(variable_num_, q, &final_cost, BsplineOptimizer::costFunctionRefine, NULL, NULL, this, &lbfgs_params);
+      int result = lbfgs::lbfgs_optimize(variable_num_, q.data(), &final_cost, BsplineOptimizer::costFunctionRefine, NULL, NULL, this, &lbfgs_params);
       // 求解状态检查
       if (result == lbfgs::LBFGS_CONVERGENCE ||
           result == lbfgs::LBFGSERR_MAXIMUMITERATION ||

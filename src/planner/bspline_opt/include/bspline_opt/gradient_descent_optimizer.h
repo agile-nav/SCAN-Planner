@@ -24,7 +24,7 @@ class GradientDescentOptimizer
 {
 
 public:
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 // 目标函数的类型定义：输入一组变量，返回“代价”并顺便填出“梯度”。
   typedef double (*objfunDef)(const Eigen::VectorXd &x, Eigen::VectorXd &grad, bool &force_return, void *data);

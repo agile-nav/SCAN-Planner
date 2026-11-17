@@ -735,7 +735,7 @@ namespace lbfgs
                                        double *s,
                                        double *stp,
                                        const double *xp,
-                                       const double *gp,
+                                       const double * /*gp*/,
                                        const double *stpmin,
                                        const double *stpmax,
                                        callback_data_t *cd,

@@ -1285,7 +1285,7 @@ void GridMap::publishMap()
   map_pub_->publish(cloud_msg);
 }
 
-void GridMap::publishMapInflate(bool all_info)
+void GridMap::publishMapInflate(bool /*all_info*/)
 {
 
   // 没有订阅者就跳过
