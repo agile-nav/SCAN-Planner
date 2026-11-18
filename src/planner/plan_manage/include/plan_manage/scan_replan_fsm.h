@@ -37,6 +37,7 @@
 #include <Eigen/Eigen>
 #include <Eigen/Geometry>
 #include <algorithm>
+#include <deque>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <iostream>
 #include <nav_msgs/msg/odometry.hpp>
@@ -187,9 +188,10 @@ namespace scan_planner
     bool force_escape_target_{false};
     // 后撤轨迹连续规划失败次数（达到上限后回到正常目标）
     int escape_attempts_{0};
-    // 控制器上报的执行停滞（P21）
-    bool controller_stalled_{false};
-    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr exec_stalled_sub_;
+    // 脱困后撤目标（沿实际走过路径回退得到）
+    Eigen::Vector3d escape_target_pt_{Eigen::Vector3d::Zero()};
+    // 最近实际走过的位姿历史（用于沿原路后撤）
+    std::deque<Eigen::Vector3d> odom_history_;
 
     Eigen::Vector3d odom_pos_, odom_vel_, odom_acc_; // odometry state
     Eigen::Quaterniond odom_orient_;
@@ -317,7 +319,8 @@ namespace scan_planner
     void updatePlannerStatus();
     void updateExecutionProgress();
     void motionEnabledCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg);
-    void execStalledCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg);
+    // 沿实际走过路径回退 distance 米，成功返回 true
+    bool getBackupPointAlongHistory(double distance, Eigen::Vector3d &pt) const;
     // 向 /local_planner/status 发布状态（空串不发布）
     void publishPlannerStatus(const std::string &state);
     // 把状态拼成 JSON（state / msgs）

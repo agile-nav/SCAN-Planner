@@ -193,10 +193,6 @@ namespace scan_planner
     go2_execution_frozen_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
         "planning/go2_execution_frozen", 10,
         std::bind(&SCANReplanFSM::go2ExecutionFrozenCallback, this, std::placeholders::_1));
-    // 控制器上报“参考时刻在走、实际投影不动”的执行停滞
-    exec_stalled_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
-        "planning/exec_stalled", 10,
-        std::bind(&SCANReplanFSM::execStalledCallback, this, std::placeholders::_1));
     // 任务控制：/mission/control（"pause" 清轨迹停住 / "resume" 重建并继续）；命令类话题，不锁存
     // 外部使能：/motion_enabled（遥控器 START/B）；使用默认 QoS（KEEP_LAST(10)+RELIABLE+VOLATILE，不锁存）
     //   注意：VOLATILE ⇒ 节点重启后拿不到“上一次的锁存值”，必须等发布端再次发 true。
@@ -710,6 +706,41 @@ namespace scan_planner
     odom_orient_.y() = msg->pose.pose.orientation.y;
     odom_orient_.z() = msg->pose.pose.orientation.z;
 
+    // 【P21】记录实际走过的路径，供卡住后沿原路后撤（比“当前朝向正后方”可靠）
+    {
+      constexpr double kHistoryStep = 0.03;  // 每 3 cm 记一个点
+      constexpr double kHistoryMax = 2.0;    // 最多保留 2 m
+      if (odom_history_.empty())
+      {
+        odom_history_.push_back(odom_pos_);
+      }
+      else
+      {
+        const double step = (odom_pos_ - odom_history_.back()).norm();
+        if (step > 0.5)
+        {
+          // 定位跳变/重置：旧历史不再可信
+          odom_history_.clear();
+          odom_history_.push_back(odom_pos_);
+        }
+        else if (step >= kHistoryStep)
+        {
+          odom_history_.push_back(odom_pos_);
+          double total = 0.0;
+          for (size_t i = odom_history_.size() - 1; i > 0; --i)
+          {
+            total += (odom_history_[i] - odom_history_[i - 1]).norm();
+            if (total > kHistoryMax)
+            {
+              odom_history_.erase(odom_history_.begin(),
+                                  odom_history_.begin() + static_cast<std::ptrdiff_t>(i - 1));
+              break;
+            }
+          }
+        }
+      }
+    }
+
     // 标记“已收到里程计”——这是状态机从 INIT 走出来的前提条件
     have_odom_ = true;
     // 预设航点模式：第一帧里程计到达后启动航点导航（只做一次）
@@ -823,7 +854,6 @@ namespace scan_planner
     escape_used_ = false;
     force_escape_target_ = false;
     escape_attempts_ = 0;
-    controller_stalled_ = false;
     if (!status_error_latched_)
       status_reasons_.clear();  // 锁存 error 后保留原因，供上报
     // 外部停止期间不发 running（状态话题保持 stopped）
@@ -900,17 +930,34 @@ namespace scan_planner
       escape_used_ = false;
     }
 
-    exec_no_progress_ = ((now - exec_progress_time_).seconds() >= stuck_window_ ||
-                         controller_stalled_) &&
+    exec_no_progress_ = (now - exec_progress_time_).seconds() >= stuck_window_ &&
                         odom_vel_.norm() < status_speed_tol_ &&
                         !go2_execution_frozen_;
   }
 
-  void SCANReplanFSM::execStalledCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg)
+  // 沿实际走过路径回退 distance 米，返回该点（保证是机器人真实走过的位置）
+  bool SCANReplanFSM::getBackupPointAlongHistory(double distance, Eigen::Vector3d &pt) const
   {
-    if (!msg)
-      return;
-    controller_stalled_ = msg->data;
+    if (distance <= 0.0 || odom_history_.size() < 2)
+      return false;
+
+    double acc = 0.0;
+    for (size_t i = odom_history_.size() - 1; i > 0; --i)
+    {
+      const Eigen::Vector3d &a = odom_history_[i];
+      const Eigen::Vector3d &b = odom_history_[i - 1];
+      const double seg = (a - b).norm();
+      if (seg < 1e-6)
+        continue;
+      if (acc + seg >= distance)
+      {
+        const double r = (distance - acc) / seg;
+        pt = a + r * (b - a);
+        return true;
+      }
+      acc += seg;
+    }
+    return false;
   }
 
   // 每个 tick 判定运行状态，按优先级发到 /local_planner/status：
@@ -1753,14 +1800,31 @@ namespace scan_planner
 
         if (!escape_used_)
         {
+          Eigen::Vector3d backup_pt;
+          if (getBackupPointAlongHistory(escape_distance_, backup_pt))
+          {
+            escape_target_pt_ = backup_pt;
+          }
+          else
+          {
+            // 历史不足（刚起步/被重置）：退回“当前朝向正后方”作为最后手段
+            const double yaw = getOdomYaw();
+            escape_target_pt_ = odom_pos_ -
+                                Eigen::Vector3d(std::cos(yaw), std::sin(yaw), 0.0) * escape_distance_;
+            escape_target_pt_(2) = odom_pos_(2);
+            RCLCPP_WARN(node_->get_logger(),
+                        "[FSM] history shorter than %.2fm; fallback to heading backup",
+                        escape_distance_);
+          }
           escape_used_ = true;
           stuck_retry_count_ = 0;
           force_escape_target_ = true;
           escape_attempts_ = 0;
           have_new_target_ = true;
           RCLCPP_WARN(node_->get_logger(),
-                      "[FSM] stuck (%s): retries exhausted, execute backup escape %.2fm",
-                      done_reason, escape_distance_);
+                      "[FSM] stuck (%s): retries exhausted, backup %.2fm along history to (%.2f,%.2f,%.2f)",
+                      done_reason, escape_distance_,
+                      escape_target_pt_(0), escape_target_pt_(1), escape_target_pt_(2));
           changeFSMExecState(GEN_NEW_TRAJ, "STUCK_ESCAPE");
           return;
         }
@@ -2180,9 +2244,8 @@ namespace scan_planner
     }
     if (escape)
     {
-      const double yaw = getOdomYaw();
-      local_target_pt_ = odom_pos_ - Eigen::Vector3d(std::cos(yaw), std::sin(yaw), 0.0) * escape_distance_;
-      local_target_pt_(2) = odom_pos_(2);
+      // 沿实际走过的历史路径回退得到的目标点（已由 STUCK_ESCAPE 计算好）
+      local_target_pt_ = escape_target_pt_;
       local_target_vel_.setZero();
       RCLCPP_WARN(node_->get_logger(),
                   "[FSM] stuck escape: backup %.2fm to (%.2f,%.2f,%.2f)",
@@ -2223,7 +2286,6 @@ namespace scan_planner
       exec_best_dist_ = (goal0.head<2>() - odom_pos_.head<2>()).norm();
       exec_best_tproj_ = 0.0;
       exec_no_progress_ = false;
-      controller_stalled_ = false;
       traj_commit_wall_ = node_->now();
       if (escape)
       {

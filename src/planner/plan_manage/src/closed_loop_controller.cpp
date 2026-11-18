@@ -77,8 +77,6 @@ public:
     cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 20);
     // 发布“冻结”信号：告诉规划器先别推进轨迹
     execution_frozen_pub_ = create_publisher<std_msgs::msg::Bool>("planning/go2_execution_frozen", 10);
-    // 上报“参考在走、实测不跟随”的执行停滞，供 FSM 触发重规划
-    exec_stalled_pub_ = create_publisher<std_msgs::msg::Bool>("planning/exec_stalled", 10);
     // 外部使能：/motion_enabled；false 时不下发 /cmd_vel；默认 QoS（KEEP_LAST(10)+RELIABLE+VOLATILE，不锁存）
     motion_enabled_sub_ = create_subscription<std_msgs::msg::Bool>(
         "motion_enabled", rclcpp::QoS(10),
@@ -189,17 +187,6 @@ private:
     execution_frozen_pub_->publish(msg);
   }
 
-  // 只在状态变化时发布，避免 10 ms 控制周期刷屏
-  void publishExecStalled(bool stalled)
-  {
-    if (stalled == last_stalled_)
-      return;
-    last_stalled_ = stalled;
-    std_msgs::msg::Bool msg;
-    msg.data = stalled;
-    exec_stalled_pub_->publish(msg);
-  }
-
   // 回调：收到规划器发来的新轨迹后，把它解析成 B 样条并保存，
   // 同时把“执行计时器”清零，表示要从这条新轨迹的起点重新开始跟踪。
   // 回调：收到规划器发来的新轨迹 → 解析并保存
@@ -237,8 +224,6 @@ private:
     // 把“已执行时间”清零 —— 从新轨迹的起点重新开始跟踪
     exec_time_ = 0.0;
     last_update_time_ = now();
-    stalled_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-    publishExecStalled(false);
     // 标记“已经有轨迹可跟踪了”
     receive_traj_ = true;
     // 打印日志
@@ -347,33 +332,6 @@ private:
     exec_time_ = std::min(traj_duration_, std::min(exec_time_ + dt, t_proj + time_lead_));
     // 记住这次时间，供下一轮计算 dt（此时 exec_time_ 已经推进）
     last_update_time_ = current_time;
-
-    // 【P21】参考时刻已经顶到 time_lead 上限，但实测投影不跟随、速度也很低：
-    //   说明规划轨迹和实际执行脱节（走不动/被卡住），上报给 FSM 触发重试。
-    //   注意：这里不冻结轨迹时钟，否则 FSM 的无进展看门狗会被一起压住。
-    const bool ref_ahead = (exec_time_ - t_proj) > 0.8 * time_lead_;
-    const bool moving_now = odom_speed_ > stuck_speed_eps_;
-    // 起步加速阶段也会短暂出现 lead，给足 2 s 再判停滞，避免误报
-    const double stall_hold = std::max(stuck_time_, 2.0);
-    if (ref_ahead && !moving_now && !execution_frozen_state_)
-    {
-      if (stalled_since_.nanoseconds() == 0)
-        stalled_since_ = current_time;
-      if ((current_time - stalled_since_).seconds() > stall_hold)
-      {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-                             "Robot not following trajectory (exec=%.2f t_proj=%.2f); report stalled",
-                             exec_time_, t_proj);
-        publishExecStalled(true);
-        publishStop();
-        return;
-      }
-    }
-    else
-    {
-      stalled_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-      publishExecStalled(false);
-    }
     // 用推进后的时刻重新取目标位置
     pos_des = traj_[0].evaluateDeBoorT(exec_time_);
     // 轨迹在前馈速度（直接取轨迹的一阶导）
@@ -438,7 +396,6 @@ private:
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr execution_frozen_pub_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr exec_stalled_pub_;
   rclcpp::Subscription<scan_planner_msgs::msg::Bspline>::SharedPtr bspline_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mission_control_sub_;
@@ -464,8 +421,6 @@ private:
   double odom_speed_{0.0};
   rclcpp::Time stuck_since_{0, 0, RCL_ROS_TIME};
   double stuck_cmd_eps_{0.15}, stuck_speed_eps_{0.03}, stuck_time_{1.0};
-  rclcpp::Time stalled_since_{0, 0, RCL_ROS_TIME};
-  bool last_stalled_{false};
 };
 }  // namespace scan_planner
 
