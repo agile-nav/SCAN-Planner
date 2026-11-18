@@ -553,6 +553,26 @@ namespace scan_planner
     return true;
   }
 
+  // 【P22】低速后撤：直线连接 start→target，固定时长（默认 3 s）。
+  //   不经过 A*、L-BFGS、checkFeasibility，避免 0.35 m 短轨迹被 ratio≈2.9 判死。
+  bool SCANPlannerManager::EscapeBackup(const Eigen::Vector3d &start,
+                                        const Eigen::Vector3d &target,
+                                        double duration)
+  {
+    constexpr int kPts = 8;  // 三次 B 样条，8 个控制点
+    const double ts = std::max(0.05, duration / double(kPts - 3));
+    Eigen::MatrixXd control_points(3, kPts);
+    for (int i = 0; i < kPts; ++i)
+    {
+      const double ratio = double(i) / double(kPts - 1);
+      control_points.col(i) = start + ratio * (target - start);
+    }
+
+    // 直接写入 local_data_，随后由 FSM 发布；控制器只跟踪，不再做规划检查
+    updateTrajInfo(UniformBspline(control_points, 3, ts), node_->now());
+    return true;
+  }
+
   // 用一串航点生成全局参考轨迹：
   // 太长的段会先加密打点，再按“距离/最大速度”估算各段耗时，最后用 min-snap 多项式连接。
   bool SCANPlannerManager::planGlobalTrajWaypoints(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel, const Eigen::Vector3d &start_acc,

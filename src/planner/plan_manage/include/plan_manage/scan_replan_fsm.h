@@ -182,12 +182,16 @@ namespace scan_planner
     double exec_best_tproj_{0.0};
     // 卡住重试计数（有实际进展/新目标时清零）
     int stuck_retry_count_{0};
-    // 是否已经用过一次脱困后撤
+    // 当前是否正在执行后撤轨迹
+    bool escape_active_{false};
+    // 是否已经用过后撤（无位移时会按不同距离重试）
     bool escape_used_{false};
-    // 下一次 callReboundReplan 是否强制用“后撤目标”
-    bool force_escape_target_{false};
-    // 后撤轨迹连续规划失败次数（达到上限后回到正常目标）
-    int escape_attempts_{0};
+    // 后撤策略序号：0=0.35m, 1=0.21m, 2=0.49m
+    int escape_strategy_{0};
+    // 后撤固定时长 [s]
+    double escape_duration_{3.0};
+    // 后撤起点（用于判断是否真的动了）
+    Eigen::Vector3d escape_start_pos_{Eigen::Vector3d::Zero()};
     // 脱困后撤目标（沿实际走过路径回退得到）
     Eigen::Vector3d escape_target_pt_{Eigen::Vector3d::Zero()};
     // 最近实际走过的位姿历史（用于沿原路后撤）
@@ -319,10 +323,14 @@ namespace scan_planner
     void updatePlannerStatus();
     void updateExecutionProgress();
     void motionEnabledCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg);
-    // 沿实际走过路径回退 distance 米，成功返回 true
-    bool getBackupPointAlongHistory(double distance, Eigen::Vector3d &pt) const;
-    // 准备一次“沿历史路径后撤”的脱困目标；已用过则返回 false
-    bool prepareStuckEscape(const char *reason);
+    // 沿实际走过路径回退 distance 米；used 返回实际回退距离
+    bool getBackupPointAlongHistory(double distance, Eigen::Vector3d &pt, double &used) const;
+    // 直接生成并发布一条低速后撤轨迹；成功返回 true
+    bool startBackupEscape(const char *reason);
+    // 当前段已到达局部目标：推进航点或结束本段
+    void completeCurrentSegment(const char *reason);
+    // 把 local_data_ 里的当前轨迹打包发布
+    void publishCurrentTrajectory();
     // 向 /local_planner/status 发布状态（空串不发布）
     void publishPlannerStatus(const std::string &state);
     // 把状态拼成 JSON（state / msgs）

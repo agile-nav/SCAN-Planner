@@ -127,6 +127,8 @@ namespace scan_planner
     max_stuck_retry_ = load_parameter<int>(node_, "fsm.max_stuck_retry", 3);
     // 重试用尽后的脱困后撤距离
     escape_distance_ = load_parameter<double>(node_, "fsm.escape_distance", 0.35);
+    // 后撤固定时长（低速直连轨迹，不走普通优化）
+    escape_duration_ = load_parameter<double>(node_, "fsm.escape_duration", 3.0);
     // 收尾时是否发一条“停在原地”轨迹，让控制器立即刹停（P1）
     stop_traj_on_finish_ = load_parameter<bool>(node_, "fsm.stop_traj_on_finish", true);
     // 轨迹时钟最多超前实测投影进度多少秒（<=0 关闭，P4）
@@ -645,6 +647,19 @@ namespace scan_planner
     // 成功 → 按当前状态切到“生成新轨迹”或“重新规划”
     if (success)
     {
+      // 【P23】新全局路径必须强制替换旧目标/旧失败状态，
+      //   否则 REPLAN_TRAJ 里的 close_to_goal 循环会继续沿用旧 end_pt_。
+      have_target_ = true;
+      have_new_target_ = true;
+      replan_fail_count_ = 0;
+      stuck_retry_count_ = 0;
+      escape_active_ = false;
+      escape_used_ = false;
+      escape_strategy_ = 0;
+      exec_no_progress_ = false;
+      exec_progress_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+      status_is_stop_ = false;
+
       // 目标变化 → 进入 running（重复路径不重置）
       if (status_new_goal)
         armPlannerStatus();
@@ -663,6 +678,11 @@ namespace scan_planner
       else if (exec_state_ == EXEC_TRAJ)
       {
         changeFSMExecState(REPLAN_TRAJ, "TRIG");
+      }
+      else if (exec_state_ == REPLAN_TRAJ || exec_state_ == GEN_NEW_TRAJ)
+      {
+        // 新路径到达时，REPLAN_TRAJ/GEN_NEW_TRAJ 里的旧失败循环必须退出
+        changeFSMExecState(GEN_NEW_TRAJ, "NEW_PATH");
       }
 
       // 打日志确认已接受参考路径
@@ -851,9 +871,9 @@ namespace scan_planner
     exec_best_tproj_ = 0.0;
     exec_no_progress_ = false;
     stuck_retry_count_ = 0;
+    escape_active_ = false;
     escape_used_ = false;
-    force_escape_target_ = false;
-    escape_attempts_ = 0;
+    escape_strategy_ = 0;
     if (!status_error_latched_)
       status_reasons_.clear();  // 锁存 error 后保留原因，供上报
     // 外部停止期间不发 running（状态话题保持 stopped）
@@ -866,8 +886,17 @@ namespace scan_planner
   // 外部使能回调：false → 冻结轨迹时钟、不规划、不发布；true → 从原处继续
   void SCANReplanFSM::motionEnabledCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg)
   {
-    if (!msg || msg->data == motion_enabled_)
+    if (!msg)
       return;
+    if (msg->data == motion_enabled_)
+    {
+      if (msg->data)
+      {
+        RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                             "START ignored: motion already enabled; publish a new /global_path to change target");
+      }
+      return;
+    }
     motion_enabled_ = msg->data;
     if (motion_enabled_)
       RCLCPP_INFO(node_->get_logger(), "motion_enabled=true: resume planning / cmd_vel");
@@ -928,6 +957,7 @@ namespace scan_planner
       // 只有真正前进才清零重试计数，避免“规划成功但原地不动”无限重试
       stuck_retry_count_ = 0;
       escape_used_ = false;
+      escape_strategy_ = 0;
     }
 
     exec_no_progress_ = (now - exec_progress_time_).seconds() >= stuck_window_ &&
@@ -936,8 +966,9 @@ namespace scan_planner
   }
 
   // 沿实际走过路径回退 distance 米，返回该点（保证是机器人真实走过的位置）
-  bool SCANReplanFSM::getBackupPointAlongHistory(double distance, Eigen::Vector3d &pt) const
+  bool SCANReplanFSM::getBackupPointAlongHistory(double distance, Eigen::Vector3d &pt, double &used) const
   {
+    used = 0.0;
     if (distance <= 0.0 || odom_history_.size() < 2)
       return false;
 
@@ -953,46 +984,97 @@ namespace scan_planner
       {
         const double r = (distance - acc) / seg;
         pt = a + r * (b - a);
+        used = distance;
         return true;
       }
       acc += seg;
     }
+
+    if (acc >= 0.10)
+    {
+      pt = odom_history_.front();
+      used = acc;
+      return true;
+    }
     return false;
   }
 
-  // 准备一次沿历史路径的后撤目标；返回 false 表示已经用过后撤
-  bool SCANReplanFSM::prepareStuckEscape(const char *reason)
+  bool SCANReplanFSM::startBackupEscape(const char *reason)
   {
-    if (escape_used_)
+    if (escape_active_ || escape_strategy_ >= 3)
       return false;
 
-    Eigen::Vector3d backup_pt;
-    if (getBackupPointAlongHistory(escape_distance_, backup_pt))
+    static const double kScale[3] = {1.0, 0.6, 1.4};
+    const double want = std::max(0.10, escape_distance_ * kScale[escape_strategy_ % 3]);
+
+    Eigen::Vector3d pt;
+    double used = 0.0;
+    if (getBackupPointAlongHistory(want, pt, used))
     {
-      escape_target_pt_ = backup_pt;
+      escape_target_pt_ = pt;
+      if (used + 1e-3 < want)
+      {
+        RCLCPP_WARN(node_->get_logger(),
+                    "[FSM] backup history only %.2fm (wanted %.2fm); using available history",
+                    used, want);
+      }
     }
     else
     {
-      // 历史不足（刚起步/被重置）：退回“当前朝向正后方”作为最后手段
       const double yaw = getOdomYaw();
       escape_target_pt_ = odom_pos_ -
-                          Eigen::Vector3d(std::cos(yaw), std::sin(yaw), 0.0) * escape_distance_;
+                          Eigen::Vector3d(std::cos(yaw), std::sin(yaw), 0.0) * want;
       escape_target_pt_(2) = odom_pos_(2);
+      used = want;
       RCLCPP_WARN(node_->get_logger(),
-                  "[FSM] history shorter than %.2fm; fallback to heading backup",
-                  escape_distance_);
+                  "[FSM] no usable history; fallback to heading backup %.2fm", used);
     }
 
+    if (!planner_manager_ ||
+        !planner_manager_->EscapeBackup(odom_pos_, escape_target_pt_, escape_duration_))
+      return false;
+
+    publishCurrentTrajectory();
+    escape_active_ = true;
     escape_used_ = true;
+    escape_start_pos_ = odom_pos_;
+    traj_commit_wall_ = node_->now();
     stuck_retry_count_ = 0;
-    force_escape_target_ = true;
-    escape_attempts_ = 0;
-    have_new_target_ = true;
+
     RCLCPP_WARN(node_->get_logger(),
-                "[FSM] stuck (%s): backup %.2fm along history to (%.2f,%.2f,%.2f)",
-                reason, escape_distance_,
+                "[FSM] stuck (%s): low-speed backup %.2fm in %.1fs to (%.2f,%.2f,%.2f)",
+                reason, used, escape_duration_,
                 escape_target_pt_(0), escape_target_pt_(1), escape_target_pt_(2));
+    changeFSMExecState(EXEC_TRAJ, "STUCK_ESCAPE");
     return true;
+  }
+
+  void SCANReplanFSM::publishCurrentTrajectory()
+  {
+    auto info = &planner_manager_->local_data_;
+    scan_planner_msgs::msg::Bspline bspline;
+    bspline.order = 3;
+    bspline.start_time = info->start_time_;
+    bspline.traj_id = info->traj_id_;
+
+    Eigen::MatrixXd pos_pts = info->position_traj_.getControlPoint();
+    bspline.pos_pts.reserve(pos_pts.cols());
+    for (int i = 0; i < pos_pts.cols(); ++i)
+    {
+      geometry_msgs::msg::Point pt;
+      pt.x = pos_pts(0, i);
+      pt.y = pos_pts(1, i);
+      pt.z = pos_pts(2, i);
+      bspline.pos_pts.push_back(pt);
+    }
+
+    Eigen::VectorXd knots = info->position_traj_.getKnot();
+    bspline.knots.reserve(knots.rows());
+    for (int i = 0; i < knots.rows(); ++i)
+      bspline.knots.push_back(knots(i));
+
+    bspline_pub_->publish(bspline);
+    publishLocalPath(info->position_traj_);
   }
 
   // 每个 tick 判定运行状态，按优先级发到 /local_planner/status：
@@ -1655,6 +1737,12 @@ namespace scan_planner
         }
         else
       {
+        // 已到局部目标：消费为到达，避免 GEN_NEW_TRAJ 自循环
+        if (status_reason_ == ReplanFailure::CLOSE_TO_GOAL)
+        {
+          completeCurrentSegment("CLOSE_TO_GOAL");
+          return;
+        }
         if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
         changeFSMExecState(GEN_NEW_TRAJ, "FSM");
       }
@@ -1700,6 +1788,12 @@ namespace scan_planner
         }
         else
       {
+        // 已到局部目标：这是“到达”，不是失败，不能继续无限 REPLAN
+        if (status_reason_ == ReplanFailure::CLOSE_TO_GOAL)
+        {
+          completeCurrentSegment("CLOSE_TO_GOAL");
+          return;
+        }
         // 失败 → 计数 +1，保持重规划状态继续尝试
         if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
         changeFSMExecState(REPLAN_TRAJ, "FSM");
@@ -1726,6 +1820,38 @@ namespace scan_planner
 
       // 当前时刻应该到达的位置
       Eigen::Vector3d pos = info->position_traj_.evaluateDeBoorT(t_cur);
+
+      // 【P22】后撤轨迹执行期间不做普通重规划，等它走完/超时再恢复
+      if (escape_active_)
+      {
+        const double escape_wall = (traj_commit_wall_.nanoseconds() == 0)
+                                       ? 0.0
+                                       : (time_now - traj_commit_wall_).seconds();
+        const bool done = t_cur >= info->duration_ - 0.05;
+        const bool timeout = escape_wall > info->duration_ + 2.0;
+        if (!done && !timeout)
+          return;
+
+        const double moved = (odom_pos_ - escape_start_pos_).norm();
+        escape_active_ = false;
+        escape_used_ = false;
+        if (moved < 0.05)
+        {
+          ++escape_strategy_;
+          RCLCPP_WARN(node_->get_logger(),
+                      "[FSM] backup produced only %.2fm movement; next strategy %d/3",
+                      moved, escape_strategy_);
+        }
+        else
+        {
+          escape_strategy_ = 0;
+          RCLCPP_INFO(node_->get_logger(),
+                      "[FSM] backup moved %.2fm; resume normal planning", moved);
+        }
+        have_new_target_ = true;
+        changeFSMExecState(GEN_NEW_TRAJ, "ESCAPE_DONE");
+        return;
+      }
 
       // 统计执行进展（只看物理量：实际距离 + 实际速度）
       updateExecutionProgress();
@@ -1833,11 +1959,8 @@ namespace scan_planner
           return;
         }
 
-        if (prepareStuckEscape(done_reason))
-        {
-          changeFSMExecState(GEN_NEW_TRAJ, "STUCK_ESCAPE");
+        if (startBackupEscape(done_reason))
           return;
-        }
 
         // 重试 + 后撤都失败 → 放弃本段
         stuck_retry_count_ = 0;
@@ -1924,23 +2047,49 @@ namespace scan_planner
 
   // 每轮主循环结束后的收尾：如果连续规划失败次数太多，就强制进入紧急停止。
   // 收尾检查：如果连续失败次数太多，就强制急停并等待新目标
-  void SCANReplanFSM::finishProcess()
+  // 当前段已经到达局部目标：按航点模式推进，或结束本段
+  void SCANReplanFSM::completeCurrentSegment(const char *reason)
   {
-    // 失败次数达到上限：先尝试沿历史路径后撤；后撤也用过才急停
-    if (replan_fail_count_ >= max_replan_fail_count_)
+    if (isWaypointSequenceMode() && current_wp_ + 1 < (int)active_waypoints_.size())
     {
-      replan_fail_count_ = 0;
-      if (have_target_ && prepareStuckEscape("planning_fail"))
+      current_wp_++;
+      if (planNextWaypoint())
       {
-        RCLCPP_WARN(node_->get_logger(),
-                    "Replan failed repeatedly; execute backup escape before giving up");
-        changeFSMExecState(GEN_NEW_TRAJ, "STUCK_ESCAPE");
+        changeFSMExecState(GEN_NEW_TRAJ, "NEXT_WAYPOINT");
         return;
       }
+      if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
+      changeFSMExecState(GEN_NEW_TRAJ, "NEXT_WAYPOINT_FAIL");
+      return;
+    }
+
+    if (isWaypointSequenceMode())
+    {
+      active_waypoints_.clear();
+      current_wp_ = 0;
+    }
+
+    if (stop_traj_on_finish_)
+      callEmergencyStop(odom_pos_);
+    have_target_ = false;
+    changeFSMExecState(WAIT_TARGET, reason);
+  }
+
+  void SCANReplanFSM::finishProcess()
+  {
+    // 失败次数达到上限：先尝试低速后撤；后撤策略也用尽才急停
+    if (replan_fail_count_ >= max_replan_fail_count_)
+    {
+      const int failed = replan_fail_count_;
+      replan_fail_count_ = 0;
+      RCLCPP_WARN(node_->get_logger(),
+                  "Replan failed %d times; try backup escape before giving up", failed);
+
+      if (have_target_ && startBackupEscape("planning_fail"))
+        return;
 
       RCLCPP_WARN(node_->get_logger(),
                   "Replan failed repeatedly; emergency stop and wait for a new target");
-      // 标记“需要悬停停下”；允许从急停恢复
       need_hover_stop_ = true;
       flag_escape_emergency_ = true;
       setStatusReason(ReplanFailure::MAX_REPLAN_FAIL);
@@ -2245,29 +2394,10 @@ namespace scan_planner
   {
     // 第一步：从全局轨迹上取“前方 planning_horizon 处”的点作为局部目标；
     // 参考路径模式下若拿不到参考系变换会返回 false，本轮规划直接放弃
-    // 【P21】脱困模式：即使全局参考暂时不可用，也要允许向后撤一步
-    bool escape = force_escape_target_;
-    if (escape && ++escape_attempts_ > 3)
-    {
-      force_escape_target_ = false;
-      escape = false;
-      RCLCPP_WARN(node_->get_logger(),
-                  "[FSM] stuck escape failed %d times; fall back to normal target",
-                  escape_attempts_ - 1);
-    }
-    if (!getLocalTarget() && !escape)
+    if (!getLocalTarget())
     {
       setStatusReason(last_target_failure_);
       return false;
-    }
-    if (escape)
-    {
-      // 沿实际走过的历史路径回退得到的目标点（已由 STUCK_ESCAPE 计算好）
-      local_target_pt_ = escape_target_pt_;
-      local_target_vel_.setZero();
-      RCLCPP_WARN(node_->get_logger(),
-                  "[FSM] stuck escape: backup %.2fm to (%.2f,%.2f,%.2f)",
-                  escape_distance_, local_target_pt_(0), local_target_pt_(1), local_target_pt_(2));
     }
 
 
@@ -2305,11 +2435,6 @@ namespace scan_planner
       exec_best_tproj_ = 0.0;
       exec_no_progress_ = false;
       traj_commit_wall_ = node_->now();
-      if (escape)
-      {
-        force_escape_target_ = false;
-        escape_attempts_ = 0;
-      }
     }
 
     // 打印规划结果（ROS 日志，带 rid）

@@ -54,6 +54,8 @@ namespace scan_planner
                        Eigen::Vector3d end_pt, Eigen::Vector3d end_vel, bool flag_polyInit, bool flag_randomPolyTraj);
     // 紧急停止：把轨迹收缩成一个“停在原地”的点（原地刹住）。
     bool EmergencyStop(Eigen::Vector3d stop_pos);
+    // 【P22】低速后撤：直接生成一条固定时长的直线 B 样条，不走普通优化/可行性检查。
+    bool EscapeBackup(const Eigen::Vector3d &start, const Eigen::Vector3d &target, double duration);
     // 规划“全局轨迹”：给定起点和终点，生成一条大方向轨迹（用多项式表示）。
     bool planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel, const Eigen::Vector3d &start_acc,
                         const Eigen::Vector3d &end_pos, const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc);

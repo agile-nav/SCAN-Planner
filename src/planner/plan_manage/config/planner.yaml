@@ -62,6 +62,8 @@ scan_planner_node:
     fsm.max_stuck_retry: 3
     # 重试用尽后的脱困后撤距离(m)
     fsm.escape_distance: 0.35
+    # 后撤固定时长(s)：低速直线后撤，不走普通优化
+    fsm.escape_duration: 3.0
     # 收尾时是否发一条“停在原地”轨迹，让控制器立即刹停（P1）
     fsm.stop_traj_on_finish: true
     # 轨迹时钟最多超前实测投影进度多少秒（<=0 关闭，P4）
