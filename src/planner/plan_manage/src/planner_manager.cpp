@@ -99,7 +99,7 @@ namespace scan_planner
     pp_.feasibility_tolerance_ = get_double("manager.feasibility_tolerance", 0.0);
     pp_.ctrl_pt_dist = get_double("manager.control_points_distance", -1.0);
     pp_.planning_horizon_ = get_double("manager.planning_horizon", 5.0);
-    pp_.max_time_stretch_ = get_double("optimization.max_time_stretch", 1.5);
+    pp_.max_time_stretch_ = get_double("optimization.max_time_stretch", 2.0);
     pp_.max_head_mismatch_ = get_double("optimization.max_head_mismatch", 0.30);
 
     // 轨迹编号从 0 开始
@@ -501,6 +501,22 @@ namespace scan_planner
 
     // 记录“细化”阶段耗时
     t_refine = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+
+    // 【P21】最终轨迹头部必须贴着规划起点。
+    //   P20 拉控制点后即使优化“成功”，曲线起点也可能已经偏出 0.4 m，
+    //   控制器会长期 t_proj=0，所以这里统一再检查一次。
+    {
+      const double head_err = (pos.evaluateDeBoorT(0.0).head<2>() - start_pt.head<2>()).norm();
+      if (pp_.max_head_mismatch_ > 0.0 && head_err > pp_.max_head_mismatch_)
+      {
+        RCLCPP_WARN(node_->get_logger(),
+                    "[diag] rid=%llu stage=feas event=final_head_mismatch err=%.2fm max=%.2f",
+                    static_cast<unsigned long long>(diag_rid_), head_err, pp_.max_head_mismatch_);
+        last_failure_ = ReplanFailure::REFINE_UNSAFE;
+        continuous_failures_count_++;
+        return false;
+      }
+    }
 
     // save planned results
     // 全部通过：把这条轨迹记录到 local_data_，本轮规划成功。

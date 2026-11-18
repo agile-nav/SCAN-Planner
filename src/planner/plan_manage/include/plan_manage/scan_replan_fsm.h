@@ -321,6 +321,8 @@ namespace scan_planner
     void motionEnabledCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg);
     // 沿实际走过路径回退 distance 米，成功返回 true
     bool getBackupPointAlongHistory(double distance, Eigen::Vector3d &pt) const;
+    // 准备一次“沿历史路径后撤”的脱困目标；已用过则返回 false
+    bool prepareStuckEscape(const char *reason);
     // 向 /local_planner/status 发布状态（空串不发布）
     void publishPlannerStatus(const std::string &state);
     // 把状态拼成 JSON（state / msgs）

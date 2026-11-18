@@ -237,7 +237,7 @@ namespace scan_planner
     double feasibility_tolerance_;        // permitted ratio of vel/acc exceeding limits
     double planning_horizon_;
     // 时间重分配上限：ratio 超过它说明几何路径本身不可执行，直接拒绝而不是无限拉长时间
-    double max_time_stretch_{1.5};
+    double max_time_stretch_{2.0};
     // 细化后轨迹起点与规划起点的最大允许偏差 [m]
     double max_head_mismatch_{0.30};
 

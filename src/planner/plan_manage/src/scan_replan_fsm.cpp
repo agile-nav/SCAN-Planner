@@ -93,7 +93,7 @@ namespace scan_planner
     // 是否允许自动从急停恢复
     enable_fail_safe_ = load_parameter<bool>(node_, "fsm.fail_safe", true);
     // 连续规划失败超过这个次数 → 强制急停
-    max_replan_fail_count_ = load_parameter<int>(node_, "fsm.max_replan_fail_count", 1000);
+    max_replan_fail_count_ = load_parameter<int>(node_, "fsm.max_replan_fail_count", 20);
     // 下面几个是机器人外形尺寸（用于画自身膨胀 + 碰撞检测）
     self_inflation_z_up_ = load_parameter<double>(node_, "grid_map.obstacles_inflation_z_up", 0.0);
     self_inflation_z_down_ = load_parameter<double>(node_, "grid_map.obstacles_inflation_z_down", 0.0);
@@ -960,6 +960,41 @@ namespace scan_planner
     return false;
   }
 
+  // 准备一次沿历史路径的后撤目标；返回 false 表示已经用过后撤
+  bool SCANReplanFSM::prepareStuckEscape(const char *reason)
+  {
+    if (escape_used_)
+      return false;
+
+    Eigen::Vector3d backup_pt;
+    if (getBackupPointAlongHistory(escape_distance_, backup_pt))
+    {
+      escape_target_pt_ = backup_pt;
+    }
+    else
+    {
+      // 历史不足（刚起步/被重置）：退回“当前朝向正后方”作为最后手段
+      const double yaw = getOdomYaw();
+      escape_target_pt_ = odom_pos_ -
+                          Eigen::Vector3d(std::cos(yaw), std::sin(yaw), 0.0) * escape_distance_;
+      escape_target_pt_(2) = odom_pos_(2);
+      RCLCPP_WARN(node_->get_logger(),
+                  "[FSM] history shorter than %.2fm; fallback to heading backup",
+                  escape_distance_);
+    }
+
+    escape_used_ = true;
+    stuck_retry_count_ = 0;
+    force_escape_target_ = true;
+    escape_attempts_ = 0;
+    have_new_target_ = true;
+    RCLCPP_WARN(node_->get_logger(),
+                "[FSM] stuck (%s): backup %.2fm along history to (%.2f,%.2f,%.2f)",
+                reason, escape_distance_,
+                escape_target_pt_(0), escape_target_pt_(1), escape_target_pt_(2));
+    return true;
+  }
+
   // 每个 tick 判定运行状态，按优先级发到 /local_planner/status：
   //   disabled(未使能) > paused(任务暂停) > idle(无目标/已到达) > error(锁存) > 到达判定
   // 状态发生切换时【立即发布】；同一状态才按 1Hz 心跳。
@@ -1798,33 +1833,8 @@ namespace scan_planner
           return;
         }
 
-        if (!escape_used_)
+        if (prepareStuckEscape(done_reason))
         {
-          Eigen::Vector3d backup_pt;
-          if (getBackupPointAlongHistory(escape_distance_, backup_pt))
-          {
-            escape_target_pt_ = backup_pt;
-          }
-          else
-          {
-            // 历史不足（刚起步/被重置）：退回“当前朝向正后方”作为最后手段
-            const double yaw = getOdomYaw();
-            escape_target_pt_ = odom_pos_ -
-                                Eigen::Vector3d(std::cos(yaw), std::sin(yaw), 0.0) * escape_distance_;
-            escape_target_pt_(2) = odom_pos_(2);
-            RCLCPP_WARN(node_->get_logger(),
-                        "[FSM] history shorter than %.2fm; fallback to heading backup",
-                        escape_distance_);
-          }
-          escape_used_ = true;
-          stuck_retry_count_ = 0;
-          force_escape_target_ = true;
-          escape_attempts_ = 0;
-          have_new_target_ = true;
-          RCLCPP_WARN(node_->get_logger(),
-                      "[FSM] stuck (%s): retries exhausted, backup %.2fm along history to (%.2f,%.2f,%.2f)",
-                      done_reason, escape_distance_,
-                      escape_target_pt_(0), escape_target_pt_(1), escape_target_pt_(2));
           changeFSMExecState(GEN_NEW_TRAJ, "STUCK_ESCAPE");
           return;
         }
@@ -1916,13 +1926,21 @@ namespace scan_planner
   // 收尾检查：如果连续失败次数太多，就强制急停并等待新目标
   void SCANReplanFSM::finishProcess()
   {
-    // 失败次数达到上限 → 强制进入急停
+    // 失败次数达到上限：先尝试沿历史路径后撤；后撤也用过才急停
     if (replan_fail_count_ >= max_replan_fail_count_)
     {
-      RCLCPP_WARN(node_->get_logger(),
-                  "Replan failed %d times; emergency stop and wait for a new target", replan_fail_count_);
-      // 计数清零；标记“需要悬停停下”；允许从急停恢复
       replan_fail_count_ = 0;
+      if (have_target_ && prepareStuckEscape("planning_fail"))
+      {
+        RCLCPP_WARN(node_->get_logger(),
+                    "Replan failed repeatedly; execute backup escape before giving up");
+        changeFSMExecState(GEN_NEW_TRAJ, "STUCK_ESCAPE");
+        return;
+      }
+
+      RCLCPP_WARN(node_->get_logger(),
+                  "Replan failed repeatedly; emergency stop and wait for a new target");
+      // 标记“需要悬停停下”；允许从急停恢复
       need_hover_stop_ = true;
       flag_escape_emergency_ = true;
       setStatusReason(ReplanFailure::MAX_REPLAN_FAIL);

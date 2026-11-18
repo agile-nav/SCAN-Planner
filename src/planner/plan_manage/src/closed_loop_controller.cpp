@@ -64,6 +64,8 @@ public:
     stuck_cmd_eps_ = declare_parameter<double>("stuck_cmd_eps", 0.15);
     stuck_speed_eps_ = declare_parameter<double>("stuck_speed_eps", 0.03);
     stuck_time_ = declare_parameter<double>("stuck_time", 1.0);
+    // 原地转向冻结的最长时间：超过后解除冻结，让 FSM 的无进展看门狗生效
+    freeze_timeout_ = declare_parameter<double>("freeze_timeout", 2.0);
 
     // 订阅规划器发布的轨迹
     bspline_sub_ = create_subscription<scan_planner_msgs::msg::Bspline>(
@@ -178,6 +180,9 @@ private:
   // 发布“冻结”信号（true=正在原地转向，请规划器暂停轨迹时钟）
   void publishExecutionFrozen(bool frozen)
   {
+    // 只在状态变化时发布，避免 10 ms 控制周期刷屏
+    if (execution_frozen_state_ == frozen)
+      return;
     std_msgs::msg::Bool msg;
     // 填入 true/false
     msg.data = frozen;
@@ -224,6 +229,8 @@ private:
     // 把“已执行时间”清零 —— 从新轨迹的起点重新开始跟踪
     exec_time_ = 0.0;
     last_update_time_ = now();
+    freeze_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    freeze_released_ = false;
     // 标记“已经有轨迹可跟踪了”
     receive_traj_ = true;
     // 打印日志
@@ -315,8 +322,30 @@ private:
     // 朝向差太多 → 先原地转向，不要往前走
     if (std::abs(yaw_error) > heading_error_threshold_)
     {
-      // 告诉规划器“我在转向，先暂停轨迹时钟”
-      publishExecutionFrozen(true);
+      // 冻结超时保护：原地转不过来时不能无限屏蔽 FSM 的无进展看门狗
+      if (!freeze_released_)
+      {
+        if (freeze_since_.nanoseconds() == 0)
+          freeze_since_ = current_time;
+        if ((current_time - freeze_since_).seconds() > freeze_timeout_)
+        {
+          freeze_released_ = true;
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                               "Heading freeze timeout (yaw_err=%.2f); release trajectory clock",
+                               yaw_error);
+        }
+      }
+
+      if (!freeze_released_)
+      {
+        // 告诉规划器“我在转向，先暂停轨迹时钟”
+        publishExecutionFrozen(true);
+      }
+      else
+      {
+        // 超时后不再冻结，让 FSM 的 no_progress 能触发；仍然只转向不前进
+        publishExecutionFrozen(false);
+      }
       // 只发转向、不前进
       publishStop(yaw_command);
       // 记住这次的时间（注意：exec_time_ 不推进）
@@ -327,6 +356,8 @@ private:
 
     // 朝向已对齐 → 解除冻结，允许规划器继续推进轨迹
     publishExecutionFrozen(false);
+    freeze_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    freeze_released_ = false;
     // 【P3】参考时刻跟随实际进度：最多只超前实测投影 time_lead_ 秒
     const double t_proj = projectOntoTrajClamped(odom_pos_, exec_time_);
     exec_time_ = std::min(traj_duration_, std::min(exec_time_ + dt, t_proj + time_lead_));
@@ -421,6 +452,9 @@ private:
   double odom_speed_{0.0};
   rclcpp::Time stuck_since_{0, 0, RCL_ROS_TIME};
   double stuck_cmd_eps_{0.15}, stuck_speed_eps_{0.03}, stuck_time_{1.0};
+  double freeze_timeout_{2.0};
+  rclcpp::Time freeze_since_{0, 0, RCL_ROS_TIME};
+  bool freeze_released_{false};
 };
 }  // namespace scan_planner
 

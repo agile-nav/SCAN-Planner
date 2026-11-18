@@ -32,6 +32,8 @@ closed_loop_controller:
     stuck_cmd_eps: 0.15
     stuck_speed_eps: 0.03
     stuck_time: 1.0
+    # 原地转向冻结的最长时间(秒)：超时后解除冻结，让 FSM 的无进展看门狗生效
+    freeze_timeout: 2.0
 
 # ---- 开环控制器 open_loop_controller ----
 # 它不控制机器人，只把轨迹直接当成里程计发出去（理想执行）。
