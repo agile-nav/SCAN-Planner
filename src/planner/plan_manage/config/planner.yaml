@@ -55,9 +55,13 @@ scan_planner_node:
     # 无进展窗口(秒)：这么久没有更靠近目标 + 已停 + 非原地转向 → 判为卡住
     fsm.finish_stuck_window: 3.0
     # 窗口内距离至少要比历史最小值再小这么多才算"有进展"(米)
-    fsm.finish_progress_eps: 0.05
+    fsm.finish_progress_eps: 0.10
     # 绝对上限(秒)：t_cur > 轨迹时长 + 它 才强制收尾，只防死循环
     fsm.finish_timeout_extra: 30.0
+    # 卡住后的有限重试次数（重试期内不清目标，不会掉到 WAIT_TARGET）
+    fsm.max_stuck_retry: 3
+    # 重试用尽后的脱困后撤距离(m)
+    fsm.escape_distance: 0.35
     # 收尾时是否发一条“停在原地”轨迹，让控制器立即刹停（P1）
     fsm.stop_traj_on_finish: true
     # 轨迹时钟最多超前实测投影进度多少秒（<=0 关闭，P4）
@@ -164,6 +168,11 @@ scan_planner_node:
     optimization.dist0: 0.2
     optimization.max_vel: 0.75
     optimization.max_acc: 1.5
+    # 时间重分配上限：超速/超加速度时最多把轨迹拉长多少倍；
+    # 超过就判不可执行并重规划，避免“拉长后永远追不上”
+    optimization.max_time_stretch: 1.5
+    # 细化后轨迹起点与规划起点的最大允许偏差(m)
+    optimization.max_head_mismatch: 0.30
     # 【P15】A* 失败时用“障碍面 + 外法线”兜底给出推出方向（false = 旧行为）
     optimization.rebound_fallback_enable: true
     # order：B 样条的阶数。3 表示三次 B 样条（常用值，一般不用改）

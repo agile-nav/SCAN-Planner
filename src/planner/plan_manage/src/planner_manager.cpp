@@ -99,6 +99,8 @@ namespace scan_planner
     pp_.feasibility_tolerance_ = get_double("manager.feasibility_tolerance", 0.0);
     pp_.ctrl_pt_dist = get_double("manager.control_points_distance", -1.0);
     pp_.planning_horizon_ = get_double("manager.planning_horizon", 5.0);
+    pp_.max_time_stretch_ = get_double("optimization.max_time_stretch", 1.5);
+    pp_.max_head_mismatch_ = get_double("optimization.max_head_mismatch", 0.30);
 
     // 轨迹编号从 0 开始
     local_data_.traj_id_ = 0;
@@ -446,6 +448,18 @@ namespace scan_planner
                   "[diag] rid=%llu stage=feas event=static_infeasible ratio=%.3f v_lim=%.2f a_lim=%.2f tol=%.2f",
                   static_cast<unsigned long long>(diag_rid_), ratio, pp_.max_vel_, pp_.max_acc_, pp_.feasibility_tolerance_);
 
+      // 【P21】时间拉长有上限。ratio 过大说明几何路径本身不可执行，
+      //   无限拉长只会得到“永远追不上”的慢轨迹，直接拒绝让 FSM 重试。
+      if (pp_.max_time_stretch_ > 0.0 && ratio > pp_.max_time_stretch_)
+      {
+        RCLCPP_WARN(node_->get_logger(),
+                    "[diag] rid=%llu stage=feas event=stretch_rejected ratio=%.3f max=%.2f",
+                    static_cast<unsigned long long>(diag_rid_), ratio, pp_.max_time_stretch_);
+        last_failure_ = ReplanFailure::DYNAMIC_INFEASIBLE;
+        continuous_failures_count_++;
+        return false;
+      }
+
       // 时间拉长后重新拟合出的控制点
       Eigen::MatrixXd optimal_control_points;
       // 超限就“重新分配时间”：把整条轨迹的时间拉长 ratio 倍（走慢一点），
@@ -453,7 +467,20 @@ namespace scan_planner
       flag_step_2_success = refineTrajAlgo(pos, start_end_derivatives, ratio, ts, optimal_control_points);
       // 细化成功 → 用细化后的轨迹替换原来的
       if (flag_step_2_success)
+      {
         pos = UniformBspline(optimal_control_points, 3, ts);
+        // 【P21】细化后的起点必须仍然贴着规划起点，否则控制器会长期 t_proj=0
+        const double head_err = (pos.evaluateDeBoorT(0.0).head<2>() - start_pt.head<2>()).norm();
+        if (pp_.max_head_mismatch_ > 0.0 && head_err > pp_.max_head_mismatch_)
+        {
+          RCLCPP_WARN(node_->get_logger(),
+                      "[diag] rid=%llu stage=feas event=head_mismatch err=%.2fm max=%.2f",
+                      static_cast<unsigned long long>(diag_rid_), head_err, pp_.max_head_mismatch_);
+          last_failure_ = ReplanFailure::REFINE_UNSAFE;
+          continuous_failures_count_++;
+          return false;
+        }
+      }
     }
 
     // 细化失败，或者轨迹仍然超速/超加速度 → 这条轨迹不安全

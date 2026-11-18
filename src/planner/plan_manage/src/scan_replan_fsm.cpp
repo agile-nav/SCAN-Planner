@@ -121,8 +121,12 @@ namespace scan_planner
     status_name_disabled_ = load_parameter<std::string>(node_, "fsm.status_name_disabled", "disabled");
     status_name_paused_ = load_parameter<std::string>(node_, "fsm.status_name_paused", "stopped");
     stuck_window_ = load_parameter<double>(node_, "fsm.finish_stuck_window", 3.0);
-    stuck_progress_eps_ = load_parameter<double>(node_, "fsm.finish_progress_eps", 0.05);
+    stuck_progress_eps_ = load_parameter<double>(node_, "fsm.finish_progress_eps", 0.10);
     finish_timeout_extra_ = load_parameter<double>(node_, "fsm.finish_timeout_extra", 30.0);
+    // 卡住后有限重试，重试期内不清目标
+    max_stuck_retry_ = load_parameter<int>(node_, "fsm.max_stuck_retry", 3);
+    // 重试用尽后的脱困后撤距离
+    escape_distance_ = load_parameter<double>(node_, "fsm.escape_distance", 0.35);
     // 收尾时是否发一条“停在原地”轨迹，让控制器立即刹停（P1）
     stop_traj_on_finish_ = load_parameter<bool>(node_, "fsm.stop_traj_on_finish", true);
     // 轨迹时钟最多超前实测投影进度多少秒（<=0 关闭，P4）
@@ -189,6 +193,10 @@ namespace scan_planner
     go2_execution_frozen_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
         "planning/go2_execution_frozen", 10,
         std::bind(&SCANReplanFSM::go2ExecutionFrozenCallback, this, std::placeholders::_1));
+    // 控制器上报“参考时刻在走、实际投影不动”的执行停滞
+    exec_stalled_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
+        "planning/exec_stalled", 10,
+        std::bind(&SCANReplanFSM::execStalledCallback, this, std::placeholders::_1));
     // 任务控制：/mission/control（"pause" 清轨迹停住 / "resume" 重建并继续）；命令类话题，不锁存
     // 外部使能：/motion_enabled（遥控器 START/B）；使用默认 QoS（KEEP_LAST(10)+RELIABLE+VOLATILE，不锁存）
     //   注意：VOLATILE ⇒ 节点重启后拿不到“上一次的锁存值”，必须等发布端再次发 true。
@@ -809,7 +817,13 @@ namespace scan_planner
     status_reason_ = ReplanFailure::NONE;
     exec_progress_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     exec_best_dist_ = 1e9;
+    exec_best_tproj_ = 0.0;
     exec_no_progress_ = false;
+    stuck_retry_count_ = 0;
+    escape_used_ = false;
+    force_escape_target_ = false;
+    escape_attempts_ = 0;
+    controller_stalled_ = false;
     if (!status_error_latched_)
       status_reasons_.clear();  // 锁存 error 后保留原因，供上报
     // 外部停止期间不发 running（状态话题保持 stopped）
@@ -842,22 +856,61 @@ namespace scan_planner
   void SCANReplanFSM::updateExecutionProgress()
   {
     const rclcpp::Time now = node_->now();
-    const double d = (end_pt_.head<2>() - odom_pos_.head<2>()).norm();
+    LocalTrajData *info = &planner_manager_->local_data_;
+
+    // 【P21】用“局部目标距离”而不是全局终点距离：
+    //   全局目标可能在 8 m 外，局部轨迹只有 4 m，用全局距离做 5 cm 级判据太粗。
+    const Eigen::Vector3d goal = (local_target_pt_.head<2>().squaredNorm() > 1e-6)
+                                     ? local_target_pt_
+                                     : end_pt_;
+    const double d = (goal.head<2>() - odom_pos_.head<2>()).norm();
 
     if (exec_progress_time_.nanoseconds() == 0)
     {
       exec_progress_time_ = now;
       exec_best_dist_ = d;
+      exec_best_tproj_ = 0.0;
     }
+
+    bool progressed = false;
     if (d < exec_best_dist_ - stuck_progress_eps_)
     {
       exec_best_dist_ = d;
-      exec_progress_time_ = now;
+      progressed = true;
     }
 
-    exec_no_progress_ = (now - exec_progress_time_).seconds() >= stuck_window_ &&
+    // 【P21】轨迹投影进度：真正衡量“这条轨迹有没有在走”。
+    //   只有实际投影向前推进超过 0.02 s 才算有进展。
+    if (info->duration_ > 1e-5)
+    {
+      const double t_hint = std::max(0.0, (now - info->start_time_).seconds());
+      const double t_proj = projectOdomToTrajParam(t_hint);
+      if (t_proj > exec_best_tproj_ + 0.02)
+      {
+        exec_best_tproj_ = t_proj;
+        progressed = true;
+      }
+    }
+
+    if (progressed)
+    {
+      exec_progress_time_ = now;
+      // 只有真正前进才清零重试计数，避免“规划成功但原地不动”无限重试
+      stuck_retry_count_ = 0;
+      escape_used_ = false;
+    }
+
+    exec_no_progress_ = ((now - exec_progress_time_).seconds() >= stuck_window_ ||
+                         controller_stalled_) &&
                         odom_vel_.norm() < status_speed_tol_ &&
                         !go2_execution_frozen_;
+  }
+
+  void SCANReplanFSM::execStalledCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg)
+  {
+    if (!msg)
+      return;
+    controller_stalled_ = msg->data;
   }
 
   // 每个 tick 判定运行状态，按优先级发到 /local_planner/status：
@@ -1643,7 +1696,9 @@ namespace scan_planner
         // 复位执行进展统计
         exec_progress_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
         exec_best_dist_ = 1e9;
+        exec_best_tproj_ = 0.0;
         exec_no_progress_ = false;
+
         // 还有下一个航点 → 继续前往
         if (isWaypointSequenceMode() && current_wp_ + 1 < (int)active_waypoints_.size())
         {
@@ -1658,24 +1713,65 @@ namespace scan_planner
           return;
         }
 
-        // 没有下一个航点了 → 清空航点列表
+        // 航点模式走到最后一个航点 → 按原逻辑结束
         if (isWaypointSequenceMode())
         {
           active_waypoints_.clear();
           current_wp_ = 0;
+          if (stop_traj_on_finish_)
+            callEmergencyStop(odom_pos_);
+          have_target_ = false;
+          changeFSMExecState(WAIT_TARGET, "FSM");
+          return;
         }
 
-        // 【P1】结束后通知控制器停车：否则 FSM 回到 WAIT_TARGET 后，控制器手上还握着最后
-        //   一条轨迹，会继续按 kp_pos*(pos_des-odom) 下发速度（实测“指令顶着、车不动”）。
-        //   发一条“停在原地”的退化轨迹，控制器立刻刹停。
+        // 【P21】非航点模式：把“到达”和“卡住”分开处理。
+        //   到达 → 正常结束；
+        //   卡住/超时 → 有限重试，重试期内绝不清目标。
+        if (status_is_stop_)
+        {
+          if (stop_traj_on_finish_)
+            callEmergencyStop(odom_pos_);
+          have_target_ = false;
+          changeFSMExecState(WAIT_TARGET, "FSM");
+          return;
+        }
+
+        const char *done_reason = no_progress_valid ? "no_progress" : (hard_cap ? "hard_cap" : "unknown");
+
+        if (stuck_retry_count_ < max_stuck_retry_)
+        {
+          ++stuck_retry_count_;
+          RCLCPP_WARN(node_->get_logger(),
+                      "[FSM] stuck (%s): retry %d/%d traj_id=%d wall=%.2fs t_cur=%.2f dur=%.2f",
+                      done_reason, stuck_retry_count_, max_stuck_retry_,
+                      info->traj_id_, wall_since_commit, t_cur, info->duration_);
+          // GEN_NEW_TRAJ 内部会重新从 odom 取起点状态
+          changeFSMExecState(GEN_NEW_TRAJ, "STUCK_RETRY");
+          return;
+        }
+
+        if (!escape_used_)
+        {
+          escape_used_ = true;
+          stuck_retry_count_ = 0;
+          force_escape_target_ = true;
+          escape_attempts_ = 0;
+          have_new_target_ = true;
+          RCLCPP_WARN(node_->get_logger(),
+                      "[FSM] stuck (%s): retries exhausted, execute backup escape %.2fm",
+                      done_reason, escape_distance_);
+          changeFSMExecState(GEN_NEW_TRAJ, "STUCK_ESCAPE");
+          return;
+        }
+
+        // 重试 + 后撤都失败 → 放弃本段
+        stuck_retry_count_ = 0;
+        escape_used_ = false;
         if (stop_traj_on_finish_)
           callEmergencyStop(odom_pos_);
-
-        // 标记“目标已完成”
         have_target_ = false;
-
-        // 回到 WAIT_TARGET 等新目标
-        changeFSMExecState(WAIT_TARGET, "FSM");
+        changeFSMExecState(WAIT_TARGET, "STUCK_GIVEUP");
         return;
       }
       // 离终点已经很近 → 不必重规划，继续走完
@@ -2067,10 +2163,30 @@ namespace scan_planner
   {
     // 第一步：从全局轨迹上取“前方 planning_horizon 处”的点作为局部目标；
     // 参考路径模式下若拿不到参考系变换会返回 false，本轮规划直接放弃
-    if (!getLocalTarget())
+    // 【P21】脱困模式：即使全局参考暂时不可用，也要允许向后撤一步
+    bool escape = force_escape_target_;
+    if (escape && ++escape_attempts_ > 3)
+    {
+      force_escape_target_ = false;
+      escape = false;
+      RCLCPP_WARN(node_->get_logger(),
+                  "[FSM] stuck escape failed %d times; fall back to normal target",
+                  escape_attempts_ - 1);
+    }
+    if (!getLocalTarget() && !escape)
     {
       setStatusReason(last_target_failure_);
       return false;
+    }
+    if (escape)
+    {
+      const double yaw = getOdomYaw();
+      local_target_pt_ = odom_pos_ - Eigen::Vector3d(std::cos(yaw), std::sin(yaw), 0.0) * escape_distance_;
+      local_target_pt_(2) = odom_pos_(2);
+      local_target_vel_.setZero();
+      RCLCPP_WARN(node_->get_logger(),
+                  "[FSM] stuck escape: backup %.2fm to (%.2f,%.2f,%.2f)",
+                  escape_distance_, local_target_pt_(0), local_target_pt_(1), local_target_pt_(2));
     }
 
 
@@ -2100,9 +2216,20 @@ namespace scan_planner
     if (plan_success)
     {
       exec_progress_time_ = node_->now();
-      exec_best_dist_ = (end_pt_.head<2>() - odom_pos_.head<2>()).norm();
+      // 与 updateExecutionProgress 使用同一把尺子：局部目标距离
+      const Eigen::Vector3d goal0 = (local_target_pt_.head<2>().squaredNorm() > 1e-6)
+                                        ? local_target_pt_
+                                        : end_pt_;
+      exec_best_dist_ = (goal0.head<2>() - odom_pos_.head<2>()).norm();
+      exec_best_tproj_ = 0.0;
       exec_no_progress_ = false;
+      controller_stalled_ = false;
       traj_commit_wall_ = node_->now();
+      if (escape)
+      {
+        force_escape_target_ = false;
+        escape_attempts_ = 0;
+      }
     }
 
     // 打印规划结果（ROS 日志，带 rid）

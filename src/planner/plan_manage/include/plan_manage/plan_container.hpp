@@ -236,6 +236,10 @@ namespace scan_planner
     double ctrl_pt_dist;                  // distance between adjacient B-spline control points
     double feasibility_tolerance_;        // permitted ratio of vel/acc exceeding limits
     double planning_horizon_;
+    // 时间重分配上限：ratio 超过它说明几何路径本身不可执行，直接拒绝而不是无限拉长时间
+    double max_time_stretch_{1.5};
+    // 细化后轨迹起点与规划起点的最大允许偏差 [m]
+    double max_head_mismatch_{0.30};
 
     /* processing time */
     // 下面是各阶段的耗时统计（仅用于调试/性能观察，不影响规划结果）

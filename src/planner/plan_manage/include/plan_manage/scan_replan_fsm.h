@@ -134,6 +134,10 @@ namespace scan_planner
     double stuck_progress_eps_{0.05};
     // 绝对上限(秒)：t_cur > 轨迹时长 + 它 才强制收尾，只防死循环
     double finish_timeout_extra_{30.0};
+    // 卡住后有限重试次数；重试期内不清目标
+    int max_stuck_retry_{3};
+    // 重试用尽后的脱困后撤距离 [m]
+    double escape_distance_{0.35};
     // 轨迹时钟最多超前实际投影进度多少秒（<=0 关闭，P4）
     double traj_clock_max_lead_{0.3};
     // 收尾时是否发一条“停在原地”轨迹让控制器刹停（P1）
@@ -173,6 +177,19 @@ namespace scan_planner
     rclcpp::Time last_freeze_update_time_;
     // 当前局部轨迹的墙钟提交时刻（P19b：无进展看门狗门槛）
     rclcpp::Time traj_commit_wall_{0, 0, RCL_ROS_TIME};
+    // 轨迹投影进度的历史最好值（P21：无进展判据）
+    double exec_best_tproj_{0.0};
+    // 卡住重试计数（有实际进展/新目标时清零）
+    int stuck_retry_count_{0};
+    // 是否已经用过一次脱困后撤
+    bool escape_used_{false};
+    // 下一次 callReboundReplan 是否强制用“后撤目标”
+    bool force_escape_target_{false};
+    // 后撤轨迹连续规划失败次数（达到上限后回到正常目标）
+    int escape_attempts_{0};
+    // 控制器上报的执行停滞（P21）
+    bool controller_stalled_{false};
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr exec_stalled_sub_;
 
     Eigen::Vector3d odom_pos_, odom_vel_, odom_acc_; // odometry state
     Eigen::Quaterniond odom_orient_;
@@ -300,6 +317,7 @@ namespace scan_planner
     void updatePlannerStatus();
     void updateExecutionProgress();
     void motionEnabledCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg);
+    void execStalledCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg);
     // 向 /local_planner/status 发布状态（空串不发布）
     void publishPlannerStatus(const std::string &state);
     // 把状态拼成 JSON（state / msgs）
