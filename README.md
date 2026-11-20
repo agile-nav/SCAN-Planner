@@ -34,6 +34,15 @@ source install/setup.bash
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release -DUSE_GPU=ON
 ```
 仓库不再链接自带的 x86_64 架构 GLFW 动态库，GPU 构建依赖系统安装的 GLFW、GLEW 和 OpenGL 相关包。
+GPU 渲染使用 **OpenGL 3.3 core**（内置 shader 也是 `#version 330 core`），不需要 4.6 驱动；
+在无 GPU 的机器上可用 Mesa 软件渲染（`LIBGL_ALWAYS_SOFTWARE=1`）验证。
+
+> 空地图（`obstacle_number:=0`）下 GPU 后端不会初始化点云渲染器，但仍会发布
+> `sensor_pose`（`/quad_0/lidar_pose`），规划器可以在自由空间中正常工作。
+> 需要同时验证 GPU 后端时：
+> ```bash
+> USE_GPU=true tools/sim_check.sh
+> ```
 
 ## 快速启动
 
@@ -75,7 +84,7 @@ RViz2 配置已适配 ROS 2 Humble：Go2 的 RobotModel 使用现有的 `meshes/
 
 `navi_mode:=3` 的参考路径可以带自己的坐标系（例如 `map`）：规划器会通过 TF 把它换算到建图坐标系（`grid_map.frame_id`，默认 `world`）。换算所需的 TF 长时间缺失、或参考系发生明显跳变（定位修正）时，规划器会安全停机并触发重规划，相关阈值见 `fsm.reference_tf_*` 参数。该模式下规划器还会把当前局部轨迹发布到 `/local_path` 话题，便于观察或录制。
 
-控制器模式分为 `open_loop`（开环）和 `closed_loop`（闭环）两种。本次移植保留的核心启动参数包括：`is_real_world`、`navi_mode`、`sensor_type`、`controller_mode`、`use_gpu`、`use_pcd_map`、`pcd_map_file`、`reference_path_file` 和 `auto_enable`（仿真默认自动放开 `/motion_enabled`；真机忽略该参数，始终等外部使能）。
+控制器模式分为 `open_loop`（开环）和 `closed_loop`（闭环）两种。本次移植保留的核心启动参数包括：`is_real_world`、`navi_mode`、`sensor_type`、`controller_mode`、`use_gpu`、`use_pcd_map`、`pcd_map_file`、`reference_path_file`、`auto_enable`（仿真默认自动放开 `/motion_enabled`；真机忽略该参数，始终等外部使能）和 `obstacle_number`（随机地图障碍数量，默认 500；自检用 0 得到确定性空地图）。
 
 当 `use_pcd_map:=true` 时，必须提供已有的 PCD 点云地图文件：
 
@@ -159,9 +168,19 @@ ros2 launch scan_planner run.launch.py robot:=none is_real_world:=false navi_mod
 | 腿部关节命名 | `FL/FR/RL/RR_hip/thigh/calf_joint` | 同左 | 同左 |
 | 碰撞 offset / radius | 0.18 / 0.25 | 0.175 / 0.234 | 0.175 / 0.277 |
 | 竖直膨胀 z_up / z_down | 0.1 / 0.1 | 通用默认 | 通用默认 |
-| 话题 `robot_topics` | 真机 super_lio 实测 | 待按实际驱动栈核对 | 待按实际驱动栈核对 |
+| 话题 `robot_topics` | 真机 super_lio 实测 | 已预留 cmd_vel/motion_enabled/depth，按实际驱动栈核对 | 同左 |
 
 ### 仿真自检清单（三机型各跑一次）
+
+推荐直接跑闭环自检脚本（自动拉起 `navi_mode:=3` 的仿真栈，用 3 m 平地短路 + 空地图，
+检查模型身份、TF、规划闭环、关节动画、`self_inflation` 半径/偏移/高度）：
+
+```bash
+tools/sim_check.sh            # a2 / go2 / go2w 全跑
+tools/sim_check.sh go2        # 只跑一个
+```
+
+也可以按下面的清单手动看：
 
 | # | 检查项 | 怎么看 |
 |---|---|---|
