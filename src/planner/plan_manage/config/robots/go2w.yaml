@@ -1,8 +1,8 @@
 robot:
   name: go2w
   description_package: go2w_description
-  model_file: xacro/robot.xacro
-  model_args: ["use_gazebo:=false"]
+  model_file: urdf/go2w_description.urdf
+  model_args: []
   root_link: base
 
 # ============================================================================
@@ -18,8 +18,10 @@ robot:
 #   ros2 launch scan_planner run.launch.py robot:=go2w
 #
 # 【与 Go2 的差异】
-#   Go2-W 多了轮子，车体更宽（43 cm）、更高（50 cm），但纵向长度相同（70 cm），
-#   所以“前后两圆柱”的半径更大、偏移更小；速度上限较低（2.5 m/s）。
+#   官方 URDF（unitree_ros/robots/go2w_description）含 12 个腿关节 +
+#   4 个轮关节（FL/FR/RL/RR_foot_joint，continuous）；车体更宽（43 cm）、
+#   更高（50 cm），纵向长度相同（70 cm）。规划器仍用“前后两圆柱”近似，
+#   半径更大、偏移更小；速度上限较低（2.5 m/s）。
 # ============================================================================
 scan_planner_node:
   ros__parameters:
@@ -68,6 +70,17 @@ go2_kinematic_sim:
   ros__parameters:
     max_vx: 1.0
 
+go2_gait_publisher:
+  ros__parameters:
+    # 4 个轮关节：只在 RViz 里做视觉转动，不影响规划闭环
+    wheel_joint_names:
+      - FL_foot_joint
+      - FR_foot_joint
+      - RL_foot_joint
+      - RR_foot_joint
+    # 7 英寸轮胎半径约 0.09 m；只用于把线速度换算成视觉角速度
+    wheel_radius: 0.09
+
 # 以下不是节点参数，由 run.launch.py 读取使用
 robot_topics:
   # 真机话题名：按 Go2-W 上实际运行的 LIO 输出核对/修改
@@ -90,3 +103,5 @@ robot_topics:
 #   ros__parameters:
 #     sensor_mount_xyz: [0.0, 0.0, 0.0]
 #     sensor_mount_rpy: [-1.570796, 0.0, -1.570796]
+
+# 暂无 Gazebo 物理资产；robot_gazebo.launch.py 会明确提示不支持。

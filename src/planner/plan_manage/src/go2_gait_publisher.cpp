@@ -12,6 +12,8 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -41,6 +43,11 @@ public:
     hip_swing_ = declare_parameter<double>("hip_swing", 0.08);
     thigh_swing_ = declare_parameter<double>("thigh_swing", 0.32);
     calf_swing_ = declare_parameter<double>("calf_swing", 0.42);
+    // 轮关节（Go2-W 用）：为空时保持原来的 12 腿关节行为。
+    // 只做视觉转动，不参与规划/控制。
+    wheel_joint_names_ = declare_parameter<std::vector<std::string>>(
+        "wheel_joint_names", std::vector<std::string>{});
+    wheel_radius_ = declare_parameter<double>("wheel_radius", 0.0);
 
     // 订阅里程计：用它的速度决定腿摆多大
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
@@ -59,7 +66,10 @@ public:
         "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
         "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
         "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint"};
-    // 预备好角度和角速度数组（长度 12）
+    // Go2-W 的 4 个轮关节追加在 12 个腿关节之后
+    for (const auto &name : wheel_joint_names_)
+      joint_msg_.name.push_back(name);
+    // 预备好角度和角速度数组（12 腿 + 可选轮）
     joint_msg_.position.resize(joint_msg_.name.size(), 0.0);
     joint_msg_.velocity.resize(joint_msg_.name.size(), 0.0);
   }
@@ -93,6 +103,7 @@ private:
     }
     // 优先用消息里的速度；它太小就改用位置差算出的速度
     horizontal_speed_ = twist_speed > min_walk_speed_ ? twist_speed : pose_speed;
+    signed_speed_ = vx;
     last_odom_x_ = x;
     last_odom_y_ = y;
     last_odom_time_ = stamp;
@@ -131,8 +142,9 @@ private:
     fillLeg(3, phase + kPi, ratio, false);
     fillLeg(6, phase + kPi, ratio, true);
     fillLeg(9, phase, ratio, false);
+    updateWheels(stamp);
     joint_msg_.header.stamp = stamp;
-    // 发布这一帧的 12 个关节角（小跑步态）
+    // 发布这一帧的关节角（12 腿 + 可选轮）
     joint_pub_->publish(joint_msg_);
   }
 
@@ -150,9 +162,31 @@ private:
       joint_msg_.position[i] = stance[i];
       joint_msg_.velocity[i] = 0.0;
     }
+    updateWheels(stamp);
     joint_msg_.header.stamp = stamp;
     // 发布这一帧关节角
     joint_pub_->publish(joint_msg_);
+  }
+
+  // 轮关节只做视觉转动：用机体前进速度 / 轮半径积分出轮角。
+  void updateWheels(const rclcpp::Time &stamp)
+  {
+    if (wheel_joint_names_.empty()) return;
+    double dt = 0.0;
+    if (has_wheel_time_) dt = (stamp - last_wheel_time_).seconds();
+    last_wheel_time_ = stamp;
+    has_wheel_time_ = true;
+    if (dt < 0.0 || dt > 0.5) dt = 0.0;
+    const bool moving =
+        std::abs(signed_speed_) > min_walk_speed_ && wheel_radius_ > 1e-6;
+    const double omega = moving ? signed_speed_ / wheel_radius_ : 0.0;
+    if (moving) wheel_angle_ += omega * dt;
+    const size_t first_wheel = joint_msg_.name.size() - wheel_joint_names_.size();
+    for (size_t i = 0; i < wheel_joint_names_.size(); ++i)
+    {
+      joint_msg_.position[first_wheel + i] = wheel_angle_;
+      joint_msg_.velocity[first_wheel + i] = omega;
+    }
   }
 
   // 给一条腿（髋/大腿/小腿三个关节）计算并填入摆动角度。
@@ -193,7 +227,11 @@ private:
   double horizontal_speed_{0.0}, last_odom_x_{0.0}, last_odom_y_{0.0};
   double gait_frequency_{2.2}, min_walk_speed_{0.05}, max_walk_speed_{1.0};
   double hip_swing_{0.08}, thigh_swing_{0.32}, calf_swing_{0.42};
-  bool always_trot_{false}, has_odom_{false}, has_prev_pose_{false};
+  std::vector<std::string> wheel_joint_names_;
+  double wheel_radius_{0.0}, wheel_angle_{0.0}, signed_speed_{0.0};
+  rclcpp::Time last_wheel_time_{0, 0, RCL_ROS_TIME};
+  bool always_trot_{false}, has_odom_{false}, has_prev_pose_{false},
+      has_wheel_time_{false};
 };
 }  // namespace scan_planner
 

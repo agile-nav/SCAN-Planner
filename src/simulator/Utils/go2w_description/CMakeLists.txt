@@ -1,10 +1,15 @@
+# ============================================================================
+# 文件：src/simulator/Utils/go2w_description/CMakeLists.txt
+#
+# 本包没有 C++ 代码，只安装官方 URDF 与 DAE 网格。
+# 模型来源：unitreerobotics/unitree_ros 的 robots/go2w_description
+# ============================================================================
 cmake_minimum_required(VERSION 3.8)
 project(go2w_description)
 
 find_package(ament_cmake REQUIRED)
 
-# 与 go2_description 相同的“有什么就装什么”策略
-foreach(directory config dae launch meshes urdf xacro worlds)
+foreach(directory dae urdf)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${directory}")
     install(DIRECTORY ${directory} DESTINATION share/${PROJECT_NAME})
   endif()

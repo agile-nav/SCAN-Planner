@@ -188,6 +188,7 @@ def _setup(context):
     planner_profile_params = _profile_params(profile, "scan_planner_node")
     controller_profile_params = _profile_params(profile, "closed_loop_controller")
     sim_profile_params = _profile_params(profile, "go2_kinematic_sim")
+    gait_profile_params = _profile_params(profile, "go2_gait_publisher")
     planner_overrides = {
         **common,
         "fsm.navi_mode": navi_mode,
@@ -335,7 +336,7 @@ def _setup(context):
                     executable="go2_gait_publisher",
                     name="go2_gait_publisher",
                     output="screen",
-                    parameters=[common_yaml, common],
+                    parameters=[common_yaml, gait_profile_params, common],
                     remappings=[("body_pose", body_pose)],
                 ),
     # ---- 拉起仿真环境 ----

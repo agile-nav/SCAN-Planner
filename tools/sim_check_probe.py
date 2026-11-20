@@ -3,10 +3,10 @@
 # 文件：tools/sim_check_probe.py —— 仿真闭环自检探针（被 tools/sim_check.sh 调用）
 #
 # 在仿真栈已经拉起后，检查：
-#   ① 模型身份   ：/robot_description 的 <robot name=...> 与机型一致，12 个腿关节
+#   ① 模型身份   ：/robot_description 的 <robot name=...> 与机型一致，12 个腿关节（Go2-W 另含 4 轮）
 #   ② TF         ：world -> base 可查
 #   ③ 规划闭环   ：收到 planning/bspline、状态进入 running、机器人实际位移足够
-#   ④ 关节动画   ：/joint_states 有 12 个腿关节
+#   ④ 关节动画   ：/joint_states 有 12 个腿关节（Go2-W 共 16）
 #   ⑤ 碰撞几何   ：/self_inflation 的前后圆柱半径/偏移/高度与机型档案一致
 #
 # 用法：python3 sim_check_probe.py <机型名> <档案 yaml 路径>
@@ -130,10 +130,17 @@ def main():
         match = re.search(r'<robot[^>]*name="([^"]+)"', p.desc)
         model_name = match.group(1) if match else ""
     leg_joints = len(re.findall(r'name="[A-Z]{2}_(?:hip|thigh|calf)_joint"', p.desc or ""))
-    ok1 = ok1 and model_name == ROBOT and leg_joints == 12
+    wheel_joints = len(re.findall(
+        r'<joint name="[A-Z]{2}_foot_joint" type="continuous"', p.desc or ""))
+    expected_wheels = 4 if ROBOT == "go2w" else 0
+    ok1 = (ok1 and model_name == ROBOT and leg_joints == 12
+           and wheel_joints == expected_wheels)
+    detail1 = f"name={model_name}, 腿关节={leg_joints}"
+    if expected_wheels or wheel_joints:
+        detail1 += f", 轮关节={wheel_joints}"
     results.append(("① 模型身份",
-                    f"OK  name={model_name}, 腿关节={leg_joints}" if ok1
-                    else f"FAIL name={model_name or '?'}, 腿关节={leg_joints}"))
+                    f"OK  {detail1}" if ok1
+                    else f"FAIL {detail1}"))
 
     # ② TF world -> base
     results.append(("② TF world->base",
@@ -162,10 +169,14 @@ def main():
     p.spin_for(2.0)
     names = list(p.joints.name) if p.joints else []
     leg = [n for n in names if n.endswith(("_hip_joint", "_thigh_joint", "_calf_joint"))]
-    ok4 = len(leg) == 12
-    results.append(("④ /joint_states 12 关节",
-                    f"OK  {len(leg)} 个腿关节" if ok4
-                    else f"FAIL 只收到 {len(names)} 个关节 {names[:4]}"))
+    wheel = [n for n in names if n.endswith("_foot_joint")]
+    ok4 = len(leg) == 12 and len(wheel) == expected_wheels
+    detail4 = f"{len(leg)} 个腿关节"
+    if expected_wheels or wheel:
+        detail4 += f" + {len(wheel)} 个轮关节"
+    results.append(("④ /joint_states",
+                    f"OK  {detail4}" if ok4
+                    else f"FAIL 收到 {len(names)} 个关节 {names[:4]}"))
 
     # ⑤ 碰撞几何：前后两个圆柱的半径/偏移/高度（取时间戳最接近的一对）
     ok5 = False

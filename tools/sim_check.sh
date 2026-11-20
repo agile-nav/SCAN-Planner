@@ -4,9 +4,9 @@
 #
 # 逐个机型拉起“参考路径”仿真栈（is_real_world:=false navi_mode:=3 robot:=<机型>），
 # 然后用 tools/sim_check_probe.py 做闭环自检：
-#   ① 模型身份与 12 腿关节   ② TF world->base
+#   ① 模型身份（12 腿；Go2-W 另含 4 轮）   ② TF world->base
 #   ③ 规划闭环（收到轨迹 + running + 实际位移）
-#   ④ /joint_states 12 关节  ⑤ self_inflation 半径/偏移/高度与档案一致
+#   ④ /joint_states（12 腿；Go2-W 16 关节）  ⑤ self_inflation 与档案一致
 #
 # 用法：
 #   tools/sim_check.sh              # 三个机型都跑（a2 go2 go2w）
