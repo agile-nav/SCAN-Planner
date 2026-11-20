@@ -145,8 +145,10 @@ def _setup(context):
         sensor_pose = profile_topics.get("sensor_pose", "/lio/imu/odom")
         cloud = profile_topics.get("cloud", "/lio/cloud_world")
         depth = profile_topics.get("depth", "/camera/aligned_depth_to_color/image_raw")
+        cmd_vel = profile_topics.get("cmd_vel", "/cmd_vel")
+        motion_enabled = profile_topics.get("motion_enabled", "/motion_enabled")
         cloud_is_world = bool(profile_topics.get("cloud_is_world", True))
-        need_extrinsic = True
+        need_extrinsic = bool(profile_topics.get("need_extrinsic", True))
         intrinsics = {
             "grid_map.cx": 317.19183349609375,
             "grid_map.cy": 256.4806823730469,
@@ -158,6 +160,8 @@ def _setup(context):
         sensor_pose = "/quad_0/camera_pose" if sensor_type == "depth" else "/quad_0/lidar_pose"
         cloud = "/quad_0/cloud"
         depth = "/quad_0/depth"
+        cmd_vel = "/quad_0/cmd_vel"
+        motion_enabled = "/motion_enabled"
         cloud_is_world = True
         need_extrinsic = False
         intrinsics = {}
@@ -197,6 +201,7 @@ def _setup(context):
                 ("sensor_pose", sensor_pose),
                 ("cloud", cloud),
                 ("depth", depth),
+                ("motion_enabled", motion_enabled),
                 ("move_base_simple/goal", "/move_base_simple/goal"),
                 # navi_mode=3 的输入：外部给的全局路径（真机上是 global_planner 发出的）
                 ("initial_path", "/global_path"),
@@ -257,7 +262,8 @@ def _setup(context):
                             {"motion_enabled_default": motion_default}],
                 remappings=[
                     ("body_pose", body_pose),
-                    ("cmd_vel", "/cmd_vel" if is_real else "/quad_0/cmd_vel"),
+                    ("cmd_vel", cmd_vel),
+                    ("motion_enabled", motion_enabled),
                 ],
             )
         )
@@ -338,6 +344,7 @@ def _setup(context):
                             "map_size_x",
                             "map_size_y",
                             "map_size_z",
+                            "obstacle_number",
                             "use_sim_time",
                         )
                     }.items(),
@@ -365,6 +372,8 @@ def generate_launch_description():
             DeclareLaunchArgument("map_size_x", default_value="40.0"),
             DeclareLaunchArgument("map_size_y", default_value="40.0"),
             DeclareLaunchArgument("map_size_z", default_value="5.0"),
+            # 随机地图障碍数量；自检脚本可置 0 得到确定性空地图
+            DeclareLaunchArgument("obstacle_number", default_value="500"),
             DeclareLaunchArgument("init_x", default_value=""),
             DeclareLaunchArgument("init_y", default_value=""),
             DeclareLaunchArgument("init_z", default_value=""),

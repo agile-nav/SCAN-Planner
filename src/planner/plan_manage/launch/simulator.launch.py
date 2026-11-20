@@ -38,6 +38,8 @@ def _setup(context):
     map_x = float(LaunchConfiguration("map_size_x").perform(context))
     map_y = float(LaunchConfiguration("map_size_y").perform(context))
     map_z = float(LaunchConfiguration("map_size_z").perform(context))
+    # 随机地图的障碍数量；自检时可置 0 得到“确定性空地图”
+    obstacle_number = int(LaunchConfiguration("obstacle_number").perform(context))
 
     if use_pcd_map and (not pcd_map_file or not os.path.isfile(pcd_map_file)):
         raise RuntimeError(
@@ -87,6 +89,7 @@ def _setup(context):
                         "x_length": int(map_x),
                         "y_length": int(map_y),
                         "z_length": int(map_z),
+                        "obstacle_number": obstacle_number,
                     },
                 ],
                 remappings=[("mock_map", "/map_generator/global_cloud")],
@@ -161,6 +164,7 @@ def generate_launch_description():
             DeclareLaunchArgument("map_size_x", default_value="40.0"),
             DeclareLaunchArgument("map_size_y", default_value="40.0"),
             DeclareLaunchArgument("map_size_z", default_value="5.0"),
+            DeclareLaunchArgument("obstacle_number", default_value="500"),
             DeclareLaunchArgument("use_sim_time", default_value="false"),
             OpaqueFunction(function=_setup),
         ]

@@ -109,6 +109,12 @@ if(BUILD_TESTING)
     test/test_reference_path_publisher_unit.py
     PYTHON_EXECUTABLE /usr/bin/python3
     ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
+  # 机型档案完整性：字段齐全、几何自洽、A2 实机定稿值不被误改
+  ament_add_pytest_test(
+    test_robot_profiles
+    test/test_robot_profiles.py
+    PYTHON_EXECUTABLE /usr/bin/python3
+    ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
   set(ENV{PYTEST_DISABLE_PLUGIN_AUTOLOAD} "${_pytest_disable_plugin_autoload}")
 
   # 两个启动测试：把发布器 / 规划器真正起起来，验证动态 TF 下的行为

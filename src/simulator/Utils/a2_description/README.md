@@ -31,8 +31,8 @@ ros2 launch scan_planner run.launch.py is_real_world:=false navi_mode:=1 \
 - `base`（虚拟根，1 mm 方块）→ `base_link`（机身，19.65 kg）
   → `{FL,FR,RL,RR}_hip → _thigh → _calf → _foot`（每腿 3 个旋转关节 + 1 个固定脚）
   → `camera_link` / `front_lidar_link` / `rear_lidar_link`（传感器 frame）
-- 12 个可动关节；关节名与 Go2 不同，因此 `go2_gait_publisher` 不会驱动它——
-  在仿真里 A2 呈现为**静态站姿**（对照碰撞 footprint 足够）。
+- 12 个可动关节；关节命名（`FL/FR/RL/RR_hip|thigh|calf_joint`）与关节轴朝向
+  都与 Go2 一致，因此 `go2_gait_publisher` 可以直接驱动它，仿真里 A2 的腿会跟着走。
 
 ## 注意
 

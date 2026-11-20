@@ -29,7 +29,17 @@ scan_planner_node:
     grid_map.double_cylinder_offset: 0.175
     # 站立高度 0.40 m（官方机械规格）。该值会加到参考路径的 z 上
     # （外部给的是地面高度）；若你的路径 z 已包含机身高度，改成 0.0。
+    # 注意：严格说这里应填「机身中心离地高度」（按 xacro 腿长/站立关节角约 0.33 m），
+    # 0.40 是整机高度；拿到实机实测值后建议替换。
     grid_map.body_height: 0.40
+
+    # 自身点云过滤半径(米)：真机激光会打到自己的腿/机身，必须滤掉。
+    # 0=关闭；这是初始值，请按实机点云核对（A2 实测为 0.45）。
+    grid_map.self_filter_radius: 0.40
+    # 竖直膨胀（参数名与论文 d_up/d_down 相反）：保护区间 [h_c-z_up, h_c+z_down]。
+    # 初始沿用通用默认，需按实测传感器离地高度 + 台阶指标核对。
+    grid_map.obstacles_inflation_z_up: 0.1
+    grid_map.obstacles_inflation_z_down: 0.4
 
     # ---- 速度上限 ----
     # 官方最高 2.5~3.7 m/s（视型号），但那是硬件极限；规划速度上限按
@@ -52,7 +62,15 @@ robot_topics:
   body_pose: /lio/robo/odom
   sensor_pose: /lio/imu/odom
   cloud: /lio/cloud_world
+  # 深度相机（sensor_type:=depth 时使用）
+  depth: /camera/aligned_depth_to_color/image_raw
+  # 速度指令话题：若使用 go2_ros2_sdk / unitree_ros2 的 cmd_vel 桥，按实际话题改
+  cmd_vel: /cmd_vel
+  # 外部使能：遥控器 START/B 发布 true/false；驱动栈不同可按实际话题改
+  motion_enabled: /motion_enabled
   # 点云是否已经在世界系下
   cloud_is_world: true
+  # sensor_pose 若已是激光/相机本体位姿，改成 false；是 IMU 位姿则保持 true
+  need_extrinsic: true
   # 初始位置 [x, y, z]；不写则按 navi_mode 取默认值
   # init: [-19.0, 1.0, 0.25]

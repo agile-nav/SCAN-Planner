@@ -78,7 +78,15 @@ robot_topics:
   body_pose: /lio/robo/odom
   sensor_pose: /lio/imu/odom
   cloud: /lio/cloud_world
+  # 深度相机（sensor_type:=depth 时使用）
+  depth: /camera/aligned_depth_to_color/image_raw
+  # 速度指令话题：控制器的 cmd_vel 会重映射到这里
+  cmd_vel: /cmd_vel
+  # 外部使能：遥控器 START/B 发布 true/false；驱动栈不同可按实际话题改
+  motion_enabled: /motion_enabled
   # 该点云已经在世界系下，不需要再做外参变换
   cloud_is_world: true
+  # sensor_pose 是 IMU 位姿，需要叠加激光安装外差
+  need_extrinsic: true
   # 初始位置 [x, y, z]；命令行 init_x/init_y/init_z 仍可覆盖
   init: [-5.5, 5.5, 0.5]

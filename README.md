@@ -75,7 +75,7 @@ RViz2 配置已适配 ROS 2 Humble：Go2 的 RobotModel 使用现有的 `meshes/
 
 `navi_mode:=3` 的参考路径可以带自己的坐标系（例如 `map`）：规划器会通过 TF 把它换算到建图坐标系（`grid_map.frame_id`，默认 `world`）。换算所需的 TF 长时间缺失、或参考系发生明显跳变（定位修正）时，规划器会安全停机并触发重规划，相关阈值见 `fsm.reference_tf_*` 参数。该模式下规划器还会把当前局部轨迹发布到 `/local_path` 话题，便于观察或录制。
 
-控制器模式分为 `open_loop`（开环）和 `closed_loop`（闭环）两种。本次移植保留的核心启动参数包括：`is_real_world`、`navi_mode`、`sensor_type`、`controller_mode`、`use_gpu`、`use_pcd_map`、`pcd_map_file` 和 `reference_path_file`。
+控制器模式分为 `open_loop`（开环）和 `closed_loop`（闭环）两种。本次移植保留的核心启动参数包括：`is_real_world`、`navi_mode`、`sensor_type`、`controller_mode`、`use_gpu`、`use_pcd_map`、`pcd_map_file`、`reference_path_file` 和 `auto_enable`（仿真默认自动放开 `/motion_enabled`；真机忽略该参数，始终等外部使能）。
 
 当 `use_pcd_map:=true` 时，必须提供已有的 PCD 点云地图文件：
 
@@ -127,19 +127,19 @@ ros2 launch scan_planner run.launch.py robot:=go2w
 ros2 launch scan_planner run.launch.py robot:=none is_real_world:=false navi_mode:=1
 ```
 
-当前仓库自带三份档案。碰撞几何**三机型统一公式**（两圆并集 == 站立投影矩形，判据 `offset ≤ radius`）：
-
-```
-offset = L/4
-radius = hypot(L/4, W/2)        # 不加额外余量
-```
+当前仓库自带三份档案。Go2 / Go2-W 的碰撞几何按**两圆并集 == 站立投影矩形**换算
+（`offset = L/4`、`radius = hypot(L/4, W/2)`）；**A2 采用实机调试定稿值**，不再按官方尺寸换算：
 
 | 档案 | 官方站立 L×W×H | offset / radius | z_up / z_down | body_height |
 |---|---|---|---|---|
-| `a2.yaml` | 0.82 × 0.44 × 0.57 m（最大台阶 0.30） | 0.205 / **0.301** | **0.16 / 0.24** | 0.0（实机实测口径） |
+| `a2.yaml` | 0.82 × 0.44 × 0.57 m（最大台阶 0.30） | **0.18 / 0.25**（实机定稿） | **0.1 / 0.1** | 0.0（实机实测口径） |
 | `go2.yaml` | 0.70 × 0.31 × 0.40 m | 0.175 / **0.234** | 沿用通用默认 | 0.40 |
 | `go2w.yaml` | 0.70 × 0.43 × 0.50 m | 0.175 / **0.277** | 沿用通用默认 | 0.50 |
 
+> A2 的 `0.25 / 0.18` 是实机反复调试后的值：比按 0.82×0.44 换算出的 `0.301 / 0.205`
+> 更小，四角不再完全覆盖，但能显著减少“贴墙/过窄通道”误报。修改这几个值后需**重启节点**
+> （膨胀偏移表在 `initMap()` 里构建）。
+>
 > `go2 / go2w` 的 `z_up / z_down` 需要「实测传感器离地高度 h_c + 官方台阶指标」才能定，
 > 在拿到之前沿用通用默认（0.1 / 0.4）。
 
@@ -157,8 +157,8 @@ radius = hypot(L/4, W/2)        # 不加额外余量
 | URDF 根节点 | `base` | `base` | `base` |
 | `_ROBOT_MODELS` 表项 | ✅ | ✅ | ✅ |
 | 腿部关节命名 | `FL/FR/RL/RR_hip/thigh/calf_joint` | 同左 | 同左 |
-| 碰撞 offset / radius | 0.205 / 0.301 | 0.175 / 0.234 | 0.175 / 0.277 |
-| 竖直膨胀 z_up / z_down | 0.16 / 0.24 | 通用默认 | 通用默认 |
+| 碰撞 offset / radius | 0.18 / 0.25 | 0.175 / 0.234 | 0.175 / 0.277 |
+| 竖直膨胀 z_up / z_down | 0.1 / 0.1 | 通用默认 | 通用默认 |
 | 话题 `robot_topics` | 真机 super_lio 实测 | 待按实际驱动栈核对 | 待按实际驱动栈核对 |
 
 ### 仿真自检清单（三机型各跑一次）
@@ -176,6 +176,14 @@ radius = hypot(L/4, W/2)        # 不加额外余量
 > ros2 launch scan_planner run.launch.py is_real_world:=false navi_mode:=1 robot:=a2
 > ```
 > 注意：改变膨胀半径/偏移后需**重启节点**才生效（膨胀偏移表在 `initMap()` 里构建）。
+
+> **关于 `/motion_enabled`**：规划器和控制器默认要求外部使能（真机=遥控器 START / 按 B）。
+> 仿真没有这个遥控器，`run.launch.py` 的 `auto_enable:=true`（默认）会在仿真下自动放开；
+> 真机始终需要外部发布 `/motion_enabled=true` 才会规划、才会发 `/cmd_vel`。
+> 需要手动控制时：
+> ```bash
+> ros2 topic pub --once /motion_enabled std_msgs/msg/Bool "{data: true}"
+> ```
 
 新增机型只需复制一份档案（例如 `go2.yaml`）与一个描述包，改掉数值、`robot_topics` 和
 `_ROBOT_MODELS` 一行，启动时换成 `robot:=go2`。档案名不存在时启动会直接报错并列出当前可用的档案。

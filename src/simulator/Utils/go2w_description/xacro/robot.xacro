@@ -14,7 +14,7 @@ use_gazebo 为 false → 只用于 RViz 显示（规划器启动时用的就是�
 【结构层次】
 base（虚拟根）→ trunk（躯干）→ { imu_link, front_camera, 四条腿 }
 ============================================================================ -->
-<robot name="go2" xmlns:xacro="http://www.ros.org/wiki/xacro">
+<robot name="go2w" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
     <xacro:arg name="DEBUG" default="false"/>
     <!-- 开关：是否生成 Gazebo 仿真相关的部分 -->
