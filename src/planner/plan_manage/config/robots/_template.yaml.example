@@ -1,0 +1,124 @@
+# ============================================================================
+# 文件：config/robots/_template.yaml.example —— 新增机型的示范档案
+#
+# 【怎么用】
+#   1. 复制成 <机型>.yaml，例如：
+#        cp _template.yaml.example myrobot.yaml
+#   2. 把 robot.name / description_package / model_file 改成新机型；
+#   3. 按注释填几何、速度、真机话题；
+#   4. 跑校验：
+#        colcon test --packages-select scan_planner --ctest-args -R robot_profiles
+#        ros2 launch scan_planner robot_view.launch.py robot:=myrobot
+#        ros2 launch scan_planner run.launch.py robot:=myrobot is_real_world:=false
+#
+# 【注意】
+#   本文件后缀是 .yaml.example，不会出现在 `robot:=` 的可选机型里，
+#   也不能直接作为参数文件传给节点。必须先复制成 .yaml 并填真实值。
+#
+# 【叠加顺序】
+#   common.yaml -> 本机型档案 -> 命令行/launch 覆盖
+# ============================================================================
+
+# ---- 1. 模型元数据（仿真用）----
+robot:
+  # 必须和文件名去掉 .yaml 后一致（例如 myrobot.yaml -> myrobot）
+  name: myrobot
+  # 提供 URDF/xacro 的 ROS 2 包名
+  description_package: myrobot_description
+  # 相对 description_package 的 share 目录；纯 URDF 也可以
+  model_file: urdf/myrobot.urdf
+  # 传给 xacro 的额外参数；没有就写 []
+  model_args: []
+  # 模型根 link，必须与 TF 约定一致
+  root_link: base
+
+# ---- 2. 规划器参数（仿真 + 真机共用）----
+scan_planner_node:
+  ros__parameters:
+    # 目标来源：1=外部目标，2=航点文件，3=参考路径
+    fsm.navi_mode: 3
+
+    # 规划视野（米）：必须 <= min(local_update_range) - double_cylinder_radius
+    fsm.planning_horizon: 4.5
+
+    # 机器人碰撞近似：前后两个圆柱
+    # 要求 offset <= radius，且两圆并集覆盖站立投影矩形
+    grid_map.double_cylinder_radius: 0.25
+    grid_map.double_cylinder_offset: 0.18
+
+    # body_height 的语义：
+    #   参考路径给的是地面高度时，填“机身中心离地高度”；
+    #   若外部路径 z 已包含机身高度，填 0.0。
+    grid_map.body_height: 0.0
+
+    # 自身点云过滤半径（米）；真机激光会打到自己的腿/轮/机身
+    grid_map.self_filter_radius: 0.45
+
+    # 竖直膨胀：保护区间 [h_c - z_up, h_c + z_down]
+    grid_map.obstacles_inflation_z_up: 0.1
+    grid_map.obstacles_inflation_z_down: 0.4
+
+    # 深度相机内参（sensor_type:=depth 且真机时使用）
+    # 不写就沿用 common.yaml 的仿真相机默认值；真机请按实际相机标定填写。
+    # grid_map.cx: 0.0
+    # grid_map.cy: 0.0
+    # grid_map.fx: 0.0
+    # grid_map.fy: 0.0
+
+    # 激光/相机外参（xyz 米 / rpy 弧度）；不写沿用 common.yaml 默认值
+    # grid_map.lidar_extrinsic_xyz: [0.0, 0.0, 0.0]
+    # grid_map.lidar_extrinsic_rpy: [0.0, 0.0, 0.0]
+    # grid_map.depth_extrinsic_xyz: [0.0, 0.0, 0.0]
+    # grid_map.depth_extrinsic_rpy: [0.0, 0.0, 0.0]
+
+    # 速度上限（规划器内部）
+    manager.max_vel: 1.0
+    optimization.max_vel: 1.0
+
+closed_loop_controller:
+  ros__parameters:
+    max_vx: 1.0
+
+go2_kinematic_sim:
+  ros__parameters:
+    max_vx: 1.0
+
+# ---- 3. 仿真视觉步态（可选）----
+# 如果新机型也是 12 个腿关节，默认即可；
+# 如果是轮足，把 4 个轮关节名填进来（只做视觉转动，不参与规划）。
+# go2_gait_publisher:
+#   ros__parameters:
+#     wheel_joint_names: [FL_foot_joint, FR_foot_joint, RL_foot_joint, RR_foot_joint]
+#     wheel_radius: 0.09
+
+# ---- 4. 真机话题（仅 is_real_world:=true 使用）----
+robot_topics:
+  body_pose: /lio/robo/odom
+  sensor_pose: /lio/imu/odom
+  cloud: /lio/cloud_world
+  depth: /camera/aligned_depth_to_color/image_raw
+  cmd_vel: /cmd_vel
+  motion_enabled: /motion_enabled
+  # 点云是否已经在世界系下
+  cloud_is_world: true
+  # sensor_pose 是 IMU 位姿时 true；已经是激光/相机本体位姿时 false
+  need_extrinsic: true
+  # 初始位置 [x, y, z]；不写按 navi_mode 默认
+  # init: [0.0, 0.0, 0.0]
+
+# ---- 5. 仿真传感器安装位姿（可选）----
+# 不写沿用 common.yaml 的默认值；按实际安装改。
+# pcl_render_node:
+#   ros__parameters:
+#     sensor_mount_xyz: [0.0, 0.0, 0.0]
+#     sensor_mount_rpy: [-1.570796, 0.0, -1.570796]
+
+# ---- 6. Gazebo 物理仿真（可选）----
+# 只有 description 包提供 world/bridge/controller 资产时才填；
+# 没有这一段时 robot_gazebo.launch.py 会明确报错。
+# gazebo:
+#   world: worlds/empty.sdf
+#   bridge_config: config/bridge.yaml
+#   controllers: [joint_state_broadcaster, joint_trajectory_controller]
+#   spawn_name: myrobot
+#   xacro_args: ["use_gazebo:=true"]

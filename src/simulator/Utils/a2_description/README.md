@@ -5,7 +5,7 @@
 单独查看模型与关节：
 
 ```bash
-ros2 launch a2_description a2_rviz.launch.py
+ros2 launch scan_planner robot_view.launch.py robot:=a2
 ```
 
 在仿真的规划流程里使用（`robot:=a2` 同时套用 A2 机型档案与 A2 模型）：

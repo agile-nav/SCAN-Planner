@@ -1,7 +1,7 @@
 # ============================================================================
 # 文件：src/simulator/Utils/a2_description/launch/a2.rviz
 #
-# 检查 A2 模型用的 RViz2 显示配置（由 a2_rviz.launch.py 加载）。
+# A2 专用 RViz2 显示配置（可选；通用入口是 scan_planner/launch/robot_view.launch.py）。
 # ============================================================================
 Panels:
   - Class: rviz_common/Displays

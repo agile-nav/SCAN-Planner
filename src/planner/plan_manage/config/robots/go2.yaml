@@ -96,3 +96,11 @@ robot_topics:
 #   ros__parameters:
 #     sensor_mount_xyz: [0.0, 0.0, 0.0]
 #     sensor_mount_rpy: [-1.570796, 0.0, -1.570796]
+
+# Gazebo 物理仿真资产（robot_gazebo.launch.py 读取；主仿真 run.launch.py 不使用）
+gazebo:
+  world: worlds/empty.sdf
+  bridge_config: config/bridge.yaml
+  controllers: [joint_state_broadcaster, joint_trajectory_controller]
+  spawn_name: go2
+  xacro_args: ["use_gazebo:=true"]

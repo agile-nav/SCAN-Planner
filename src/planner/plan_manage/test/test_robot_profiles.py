@@ -8,12 +8,14 @@
 
 import math
 import os
+import re
 
 import pytest
 import yaml
 
 PROFILE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "robots"))
 COMMON_YAML = os.path.abspath(os.path.join(PROFILE_DIR, "..", "common.yaml"))
+TEMPLATE_YAML = os.path.join(PROFILE_DIR, "_template.yaml.example")
 REPO_ROOT = os.path.abspath(os.path.join(PROFILE_DIR, "..", "..", "..", "..", ".."))
 ROBOTS = ("a2", "go2", "go2w")
 
@@ -219,3 +221,71 @@ def test_common_sensor_mount_present():
     for key in ("sensor_mount_xyz", "sensor_mount_rpy"):
         assert key in params, f"common.yaml pcl_render_node 缺少 {key}"
         assert len(params[key]) == 3
+
+
+@pytest.mark.parametrize("robot", ROBOTS)
+def test_gazebo_metadata_if_present(robot):
+    """gazebo: 段是可选能力；写了就必须指向真实存在的资产。"""
+    profile = load_profile(robot)
+    gazebo = profile.get("gazebo")
+    if gazebo is None:
+        return
+    for key in ("world", "bridge_config", "controllers", "spawn_name", "xacro_args"):
+        assert key in gazebo, f"{robot}: gazebo 缺少 {key}"
+    assert isinstance(gazebo["controllers"], list)
+    assert isinstance(gazebo["xacro_args"], list)
+    meta = profile["robot"]
+    base = os.path.join(REPO_ROOT, "src", "simulator", "Utils",
+                        meta["description_package"])
+    for key in ("world", "bridge_config"):
+        assert os.path.isfile(os.path.join(base, gazebo[key])), (
+            f"{robot}: gazebo 资产不存在: {gazebo[key]}")
+
+
+def test_go2w_official_urdf_has_wheels():
+    """Go2-W 必须是官方 16 自由度模型：12 腿 + 4 轮。"""
+    profile = load_profile("go2w")
+    meta = profile["robot"]
+    path = os.path.join(REPO_ROOT, "src", "simulator", "Utils",
+                        meta["description_package"], meta["model_file"])
+    with open(path, "r", encoding="utf-8") as handle:
+        text = handle.read()
+    assert '<robot name="go2w">' in text
+    legs = re.findall(
+        r'<joint name="[A-Z]{2}_(?:hip|thigh|calf)_joint" type="revolute"', text)
+    wheels = re.findall(r'<joint name="[A-Z]{2}_foot_joint" type="continuous"', text)
+    assert len(legs) == 12, f"Go2-W 腿关节数不是 12: {len(legs)}"
+    assert len(wheels) == 4, f"Go2-W 轮关节数不是 4: {len(wheels)}"
+
+
+def test_go2w_wheel_joint_names_match_urdf():
+    """档案里给步态节点的轮关节名必须和官方 URDF 一致。"""
+    profile = load_profile("go2w")
+    meta = profile["robot"]
+    path = os.path.join(REPO_ROOT, "src", "simulator", "Utils",
+                        meta["description_package"], meta["model_file"])
+    with open(path, "r", encoding="utf-8") as handle:
+        text = handle.read()
+    urdf_wheels = set(re.findall(
+        r'<joint name="([A-Z]{2}_foot_joint)" type="continuous"', text))
+    params = profile["go2_gait_publisher"]["ros__parameters"]
+    assert set(params["wheel_joint_names"]) == urdf_wheels
+
+
+def test_template_profile_is_complete():
+    """新增机型模板必须覆盖 robot / 规划器 / 真机话题三部分。"""
+    assert os.path.isfile(TEMPLATE_YAML), "缺少新增机型模板 _template.yaml.example"
+    with open(TEMPLATE_YAML, "r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    assert data["robot"]["name"] == "myrobot"
+    params = data["scan_planner_node"]["ros__parameters"]
+    for key in ("fsm.planning_horizon", "grid_map.double_cylinder_radius",
+                "grid_map.double_cylinder_offset", "grid_map.body_height",
+                "grid_map.self_filter_radius",
+                "grid_map.obstacles_inflation_z_up",
+                "grid_map.obstacles_inflation_z_down"):
+        assert key in params, f"模板缺少 {key}"
+    topics = data["robot_topics"]
+    for key in ("body_pose", "sensor_pose", "cloud", "depth", "cmd_vel",
+                "motion_enabled", "cloud_is_world", "need_extrinsic"):
+        assert key in topics, f"模板缺少 robot_topics.{key}"

@@ -123,6 +123,8 @@ ros2 launch scan_planner run.launch.py \
 - `scan_planner_node` / `closed_loop_controller` / `go2_kinematic_sim`：各节点的参数覆盖
 - `robot_topics`：不是节点参数，由启动文件读取，用来生成真机话题重映射与初始位置
 
+新增机型：复制 `config/robots/_template.yaml.example` 为 `<机型>.yaml`，按注释填写。模板后缀是 `.yaml.example`，不会被 `robot:=` 误选；字段分类和最小必填项见 `config/robots/README.md`。
+
 ```bash
 # 用 A2 档案（真机默认就是它，不写 robot:= 也一样）
 ros2 launch scan_planner run.launch.py robot:=a2
@@ -160,8 +162,8 @@ ros2 launch scan_planner run.launch.py robot:=none is_real_world:=false navi_mod
 | 要配的东西 | A2 | Go2 | Go2-W |
 |---|---|---|---|
 | 机型档案 | `config/robots/a2.yaml` | `go2.yaml` | `go2w.yaml` |
-| 描述包 | `a2_description` | `go2_description` | `go2w_description`（由 Go2 派生） |
-| 模型文件 | `urdf/a2.urdf` | `xacro/robot.xacro` | `xacro/robot.xacro` |
+| 描述包 | `a2_description` | `go2_description` | `go2w_description`（Unitree 官方 URDF） |
+| 模型文件 | `urdf/a2.urdf` | `xacro/robot.xacro` | `urdf/go2w_description.urdf` |
 | URDF 根节点 | `base` | `base` | `base` |
 | 机型元数据 `robot`（描述包/模型/xacro 参数） | ✅ | ✅ | ✅ |
 | 腿部关节命名 | `FL/FR/RL/RR_hip/thigh/calf_joint` | 同左 | 同左 |
@@ -189,7 +191,7 @@ tools/sim_check.sh go2        # 只跑一个
 | ① | 模型显示 | RViz 里能看到该机型外形（`robot_description` 生成成功、无 xacro 报错） |
 | ② | TF `world -> base` | `ros2 run tf2_ros tf2_echo world base`（由 `go2_kinematic_sim` 广播；模型根节点必须是 `base`） |
 | ③ | 跟速度走 | `ros2 topic pub -r 10 /cmd_vel ...` 后 base 位置会动 |
-| ④ | 腿部动画 + 碰撞模型 | `/joint_states` 有 12 个关节（A2/Go2/Go2-W 命名一致）；`/self_inflation` 两个双圆柱可见 |
+| ④ | 腿部动画 + 碰撞模型 | `/joint_states` 有 12 个腿关节；Go2-W 另含 4 个轮关节（共 16）；`/self_inflation` 两个双圆柱可见 |
 
 > ⚠️ **仿真默认不叠加任何档案**，跑的是通用默认参数（radius 0.25 / offset 0.18 / z 0.1 / 0.4）。
 > 要在仿真里验证某机型的碰撞模型，必须显式带上档案：
@@ -258,13 +260,15 @@ colcon test-result --verbose
 Go2 四足机器人物理模型基于 Gazebo Fortress、`ros_gz_sim` 和 `gz_ros2_control` 构建，对外提供 12 关节的 `joint_trajectory_controller`、`/joint_states` 话题、IMU 数据、四个足端接触力话题以及 `/clock` 时钟话题：
 
 ```bash
-ros2 launch go2_description go2_sim.launch.py
+ros2 launch scan_planner robot_gazebo.launch.py robot:=go2
 ```
+
+`robot_gazebo` 目前只支持 Go2（A2 没有 Gazebo 资产；Go2-W 官方 URDF 还没有 Gazebo 插件）。
 
 如需在不启动物理仿真时查看模型，可运行：
 
 ```bash
-ros2 launch go2_description go2_rviz.launch.py
+ros2 launch scan_planner robot_view.launch.py robot:=go2
 ```
 旧版 Gazebo Classic 的轨迹/力可视化插件、外力插件以及宇树 ROS 1 专用插件已不在本 ROS 2 仿真版本中提供。
 

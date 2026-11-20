@@ -108,3 +108,5 @@ robot_topics:
 #   ros__parameters:
 #     sensor_mount_xyz: [0.0, 0.0, 0.0]
 #     sensor_mount_rpy: [-1.570796, 0.0, -1.570796]
+
+# 暂无 Gazebo 物理资产；robot_gazebo.launch.py 会明确提示不支持。
