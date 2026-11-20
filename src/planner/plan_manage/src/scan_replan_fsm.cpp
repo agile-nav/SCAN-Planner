@@ -20,6 +20,7 @@
 #include <plan_manage/scan_replan_fsm.h>
 #include <plan_manage/reference_path_utils.h>
 #include <plan_manage/reference_frame_utils.h>
+#include <plan_manage/replan_retry.h>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -137,6 +138,12 @@ namespace scan_planner
     stop_traj_on_finish_ = load_parameter<bool>(node_, "fsm.stop_traj_on_finish", true);
     // 轨迹时钟最多超前实测投影进度多少秒（<=0 关闭，P4）
     traj_clock_max_lead_ = load_parameter<double>(node_, "fsm.traj_clock_max_lead", 0.3);
+    // 重规划重试节流：连续失败后按 min×2^n 退避，封顶 max（enable=false 关闭）
+    replan_retry_enable_ = load_parameter<bool>(node_, "fsm.replan_retry_enable", true);
+    replan_retry_min_ = load_parameter<double>(node_, "fsm.replan_retry_min", 0.2);
+    replan_retry_max_ = load_parameter<double>(node_, "fsm.replan_retry_max", 1.0);
+    if (replan_retry_min_ < 0.0 || replan_retry_max_ < replan_retry_min_)
+      throw std::runtime_error("fsm.replan_retry_min/max must be non-negative and min <= max");
     // 起点脱困：起点落在膨胀层里时，沿"起点→局部目标"方向最多前推的距离 [m]
     start_escape_max_offset_ = load_parameter<double>(node_, "fsm.start_escape_max_offset", 1.0);
     // [replan-geom] 节流(ms)；0=不节流
@@ -506,6 +513,8 @@ namespace scan_planner
     RCLCPP_INFO(node_->get_logger(), "[navi_mode=%d] Planning to waypoint %d/%zu: [%.2f, %.2f, %.2f]",
                 navi_mode_, current_wp_ + 1, active_waypoints_.size(), end_pt_(0), end_pt_(1), end_pt_(2));
 
+    // 新航点：清除重试退避，第一次尝试立即进行
+    resetPlanRetry();
     return true;
   }
 
@@ -890,6 +899,8 @@ namespace scan_planner
   // 收到新目标时进入 running；若之前是 goal_reached，这里把它重置。
   void SCANReplanFSM::armPlannerStatus()
   {
+    // 新目标：清除重试退避，第一次尝试立即进行
+    resetPlanRetry();
     status_have_goal_ = true;
     status_is_stop_ = false;
     status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
@@ -936,6 +947,7 @@ namespace scan_planner
     if (motion_enabled_ && !have_target_ && last_global_path_ && !last_global_path_->poses.empty())
     {
       RCLCPP_INFO(node_->get_logger(), "motion enabled: planning from cached /global_path");
+      resetPlanRetry();
       pathCallback(last_global_path_);
       changeFSMExecState(GEN_NEW_TRAJ, "MOTION_ENABLE");
     }
@@ -1030,6 +1042,8 @@ namespace scan_planner
 
   bool SCANReplanFSM::startBackupEscape(const char *reason)
   {
+    // 进入脱困流程：清除重试退避，脱困结束后立即尝试正常规划
+    resetPlanRetry();
     if (escape_active_ || escape_strategy_ >= 3)
       return false;
 
@@ -1384,6 +1398,8 @@ namespace scan_planner
   {
     externally_stopped_ = false;
     status_is_stop_ = false;  // 恢复后重新判定是否到达
+    // 恢复：清除重试退避，立即尝试规划
+    resetPlanRetry();
     if (!status_error_latched_)
       status_reasons_.clear();  // 锁存 error 后保留原因，供上报
     if (last_global_path_ && !last_global_path_->poses.empty())
@@ -1643,6 +1659,47 @@ namespace scan_planner
     return std::pair<int, FSM_EXEC_STATE>(continuously_called_times_, exec_state_);
   }
 
+  // 【重试节流】本拍是否允许再尝试一次规划。
+  //   失败后 FSM 会留在原状态（GEN_NEW_TRAJ / REPLAN_TRAJ），主循环 10 ms 一拍就再来一次，
+  //   而两次之间位置/地图/目标都没变，注定失败。间隔按连续失败次数翻倍：
+  //   min×2^(fails-1)，封顶 max，成功清零（0.2 → 0.4 → 0.8 → 1.0 …）。
+  //   具体算法在 plan_manage/replan_retry.h（有独立单测）。
+  bool SCANReplanFSM::planAttemptAllowed()
+  {
+    if (!replan_retry_enable_)
+      return true;
+    if (last_plan_attempt_.nanoseconds() == 0)
+      return true;
+    const double elapsed = (node_->now() - last_plan_attempt_).seconds();
+    return replanRetryAllowed(true, elapsed, plan_retry_fails_,
+                              replan_retry_min_, replan_retry_max_);
+  }
+
+  void SCANReplanFSM::notePlanAttempt()
+  {
+    last_plan_attempt_ = node_->now();
+  }
+
+  void SCANReplanFSM::notePlanResult(bool ok)
+  {
+    if (ok)
+    {
+      plan_retry_fails_ = 0;
+      // 成功后不保留冷却：下一次（例如安全重规划）应立即允许
+      last_plan_attempt_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+    }
+    else
+    {
+      plan_retry_fails_ = std::min(plan_retry_fails_ + 1, 100);
+    }
+  }
+
+  void SCANReplanFSM::resetPlanRetry()
+  {
+    plan_retry_fails_ = 0;
+    last_plan_attempt_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+  }
+
   // 打印当前状态名（调试用）。
   void SCANReplanFSM::printFSMExecState()
   {
@@ -1734,6 +1791,12 @@ namespace scan_planner
     // ---- 状态 GEN_NEW_TRAJ：生成一条全新轨迹 ----
     case GEN_NEW_TRAJ:
     {
+      // 【重试节流】同一状态下连续重试时，至少隔 replan_retry_min..max 秒再试一次。
+      //   失败后 FSM 会留在本状态，主循环 10 ms 一拍就再来一次；不节流就是每秒十几次
+      //   注定失败的重规划。用 break 让本拍的收尾逻辑照跑。
+      if (!planAttemptAllowed())
+        break;
+      notePlanAttempt();
       // 先确定起点（默认里程计；有轨迹时用轨迹上的速度/加速度）
       setStartStateFromOdomOrCurrentTraj();
 
@@ -1756,6 +1819,7 @@ namespace scan_planner
       {
 
         replan_fail_count_ = 0;
+        notePlanResult(true);
         changeFSMExecState(EXEC_TRAJ, "FSM");
         // 允许后续从急停中恢复
         flag_escape_emergency_ = true;
@@ -1770,6 +1834,8 @@ namespace scan_planner
           setStatusReason(ReplanFailure::EMERGENCY_TF_JUMP_FAIL);
           callEmergencyStop(odom_pos_);
           flag_escape_emergency_ = false;
+          // 进入 TF 跳变急停：清除重试退避，故障解除后立即恢复
+          resetPlanRetry();
           changeFSMExecState(EMERGENCY_STOP, "TF_JUMP_FAIL");
         }
         else
@@ -1777,10 +1843,12 @@ namespace scan_planner
         // 已到局部目标：消费为到达，避免 GEN_NEW_TRAJ 自循环
         if (status_reason_ == ReplanFailure::CLOSE_TO_GOAL)
         {
+          notePlanResult(true);
           completeCurrentSegment("CLOSE_TO_GOAL");
           return;
         }
         if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
+        notePlanResult(false);
         changeFSMExecState(GEN_NEW_TRAJ, "FSM");
       }
       }
@@ -1791,6 +1859,10 @@ namespace scan_planner
     // ---- 状态 REPLAN_TRAJ：重新规划 ----
     case REPLAN_TRAJ:
     {
+      // 【重试节流】同 GEN_NEW_TRAJ：失败后不要 10 ms 一拍地重试注定失败的重规划。
+      if (!planAttemptAllowed())
+        break;
+      notePlanAttempt();
       // 从当前轨迹出发重新规划；若是参考系跳变触发的重规划，
       // 则以当前实测状态为起点（旧轨迹的预测状态已失效）
       bool success;
@@ -1809,6 +1881,7 @@ namespace scan_planner
         reference_jump_replan_ = false;
         // 成功 → 进入执行状态
         replan_fail_count_ = 0;
+        notePlanResult(true);
         changeFSMExecState(EXEC_TRAJ, "FSM");
       }
       else
@@ -1821,6 +1894,8 @@ namespace scan_planner
           setStatusReason(ReplanFailure::EMERGENCY_TF_JUMP_FAIL);
           callEmergencyStop(odom_pos_);
           flag_escape_emergency_ = false;
+          // 进入 TF 跳变急停：清除重试退避，故障解除后立即恢复
+          resetPlanRetry();
           changeFSMExecState(EMERGENCY_STOP, "TF_JUMP_FAIL");
         }
         else
@@ -1828,11 +1903,13 @@ namespace scan_planner
         // 已到局部目标：这是“到达”，不是失败，不能继续无限 REPLAN
         if (status_reason_ == ReplanFailure::CLOSE_TO_GOAL)
         {
+          notePlanResult(true);
           completeCurrentSegment("CLOSE_TO_GOAL");
           return;
         }
         // 失败 → 计数 +1，保持重规划状态继续尝试
         if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
+        notePlanResult(false);
         changeFSMExecState(REPLAN_TRAJ, "FSM");
       }
       }
@@ -2040,6 +2117,8 @@ namespace scan_planner
           reference_tf_stop_ = false;
           reference_jump_replan_ = false;
           have_new_target_ = true;
+          // 故障已解除：清除重试退避，立即恢复规划
+          resetPlanRetry();
           changeFSMExecState(GEN_NEW_TRAJ, "TF_RECOVERED");
         }
         break;
@@ -2087,6 +2166,8 @@ namespace scan_planner
   // 当前段已经到达局部目标：按航点模式推进，或结束本段
   void SCANReplanFSM::completeCurrentSegment(const char *reason)
   {
+    // 进入新一段：清除重试退避，第一次尝试立即进行
+    resetPlanRetry();
     if (isWaypointSequenceMode() && current_wp_ + 1 < (int)active_waypoints_.size())
     {
       current_wp_++;
@@ -2747,8 +2828,30 @@ namespace scan_planner
     const double max_vel = planner_manager_->pp_.max_vel_;
     const double max_acc = planner_manager_->pp_.max_acc_;
     const double duration = planner_manager_->global_data_.global_duration_;
+    // 【地图一致性】前视距离不能超过局部地图真正可信的范围：
+    //   滑动地图只有 sliding_map_size（半宽 5 m），局部更新范围更小；
+    //   若 planning_horizon 取 7.5 m，前视点必然落在图外，
+    //   getInflateOccupancy 会返回 -1（被所有调用方当作障碍），
+    //   于是每一轮都要走“局部目标调整”的兜底分支。
+    // 这里按 local_update_range 夹紧，并对未来新增机型自动生效。
+    double horizon = planning_horizon_;
+    if (planner_manager_ && planner_manager_->grid_map_)
+    {
+      const Eigen::Vector3d range = planner_manager_->grid_map_->getLocalUpdateRange();
+      const double usable = std::min(range(0), range(1)) - self_double_cylinder_radius_;
+      if (usable > 0.5)
+        horizon = std::min(horizon, usable);
+    }
+    horizon = std::max(0.5, horizon);
+    if (horizon + 1e-6 < planning_horizon_)
+    {
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                           "[getLocalTarget] planning_horizon %.2f m exceeds local map range; "
+                           "clamped to %.2f m",
+                           planning_horizon_, horizon);
+    }
     // 采样步长：把规划视野长度分成 20 份
-    double t_step = max_vel > 1e-6 ? planning_horizon_ / 20.0 / max_vel : 0.01;
+    double t_step = max_vel > 1e-6 ? horizon / 20.0 / max_vel : 0.01;
     t_step = std::max(t_step, 0.01);
 
     // 先在全局轨迹上找“离起点最近”的时刻 t_proj，避免轨迹回绕时取错段
@@ -2783,7 +2886,7 @@ namespace scan_planner
       Eigen::Vector3d pos_t = planner_manager_->global_data_.getPosition(t);
       total_dist += (pos_t - prev_pos).norm();
       // 一旦距离达到规划视野长度 → 就把这个点作为局部目标
-      if (total_dist >= planning_horizon_)
+      if (total_dist >= horizon)
       {
         local_target_pt_ = toWorld(pos_t);
         target_t = t;
@@ -2798,6 +2901,19 @@ namespace scan_planner
     // 小工具：查询某个点是否被障碍占据（查询时带上朝向）
     auto targetOccupancy = [&](const Eigen::Vector3d &pt) {
       return planner_manager_->grid_map_->getInflateOccupancy(pt, estimateYawFromSegment(odom_pos_, pt));
+    };
+
+    // 替代点不能贴着机器人：否则 reboundReplan 会按 CLOSE_TO_GOAL 早退，
+    // 形成“目标太近 → 不规划 → 目标仍太近”的自锁。
+    // 全局终点本身即使很近也是合法到达，不受这个下限约束。
+    const double min_target_dist =
+        std::max(0.30, 2.0 * planner_manager_->pp_.ctrl_pt_dist);
+    auto acceptableTarget = [&](const Eigen::Vector3d &pt, double t) {
+      if (targetOccupancy(pt) != 0)
+        return false;
+      if (t >= duration - 1e-3)
+        return true;
+      return (pt - start_pt_).head<2>().norm() >= min_target_dist;
     };
 
     // 如果局部目标恰好落在障碍里 → 前后各找一个“能站人”的点代替
@@ -2818,7 +2934,7 @@ namespace scan_planner
         {
           Eigen::Vector3d pt = toWorld(planner_manager_->global_data_.getPosition(t_forward));
           // 找到一个空点 → 采用它并结束搜索
-          if (targetOccupancy(pt) == 0)
+          if (acceptableTarget(pt, t_forward))
           {
             local_target_pt_ = pt;
             adjusted_t = t_forward;
@@ -2832,7 +2948,7 @@ namespace scan_planner
         if (t_backward >= std::max(0.0, t_proj))
         {
           Eigen::Vector3d pt = toWorld(planner_manager_->global_data_.getPosition(t_backward));
-          if (targetOccupancy(pt) == 0)
+          if (acceptableTarget(pt, t_backward))
           {
             local_target_pt_ = pt;
             adjusted_t = t_backward;

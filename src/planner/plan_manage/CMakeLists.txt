@@ -101,6 +101,10 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_reference_frame_utils geometry_msgs)
   target_link_libraries(test_reference_frame_utils Eigen3::Eigen)
 
+  # 重试退避的纯函数单测：失败次数 -> 等待间隔，以及闸门判定
+  ament_add_gtest(test_replan_retry test/test_replan_retry.cpp)
+  target_include_directories(test_replan_retry PRIVATE include)
+
   # Python 单测临时关掉 pytest 插件自动加载，避免环境里的第三方插件干扰
   set(_pytest_disable_plugin_autoload "$ENV{PYTEST_DISABLE_PLUGIN_AUTOLOAD}")
   set(ENV{PYTEST_DISABLE_PLUGIN_AUTOLOAD} "1")

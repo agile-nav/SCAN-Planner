@@ -332,6 +332,9 @@ public:
   // 取出地图原点与尺寸
   void getRegion(Eigen::Vector3d& ori, Eigen::Vector3d& size);
   inline double getResolution();
+  // 局部更新范围的半边长（米）：超出这个范围的格子会被清空/不再可信。
+  // 规划器用它把前视距离限制在地图实际可分辨的区域内。
+  inline Eigen::Vector3d getLocalUpdateRange();
   Eigen::Vector3d getOrigin();
   int getVoxelNum();
 
@@ -690,5 +693,8 @@ inline void GridMap::inflatePoint(const Eigen::Vector3i& pt, int inf_step_xy, in
 
 // 取地图分辨率（米/格）
 inline double GridMap::getResolution() { return mp_.resolution_; }
+
+// 取局部更新范围的半边长（米）
+inline Eigen::Vector3d GridMap::getLocalUpdateRange() { return mp_.local_update_range_; }
 
 #endif

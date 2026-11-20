@@ -22,8 +22,11 @@ scan_planner_node:
     fsm.thresh_replan: 1.0
     # 离终点小于这个距离(米)就不用再重规划了，直接走完
     fsm.thresh_no_replan: 0.1
-    # 规划视野(米)：每次只规划前方这么远，取这个距离处的点作为局部目标
-    fsm.planning_horizon: 7.5
+    # 规划视野(米)：每次只规划前方这么远，取这个距离处的点作为局部目标。
+    # 必须 <= 滑动地图半宽 - 圆柱半径（默认 10 m 图 → 半宽 5 m）；
+    # 7.5 m 会落到局部地图外，前视点被 getInflateOccupancy 当成障碍。
+    # getLocalTarget 里还会按 local_update_range 再夹一次，这里是配置层的默认。
+    fsm.planning_horizon: 4.5
     # 若“撞上障碍”预计发生在这个时间(秒)之内，且来不及重规划，就紧急停止
     fsm.emergency_time: 1.0
     # 是否允许紧急停止后自动恢复（速度降到很低时重新尝试规划）
@@ -71,6 +74,10 @@ scan_planner_node:
     fsm.stop_traj_on_finish: true
     # 轨迹时钟最多超前实测投影进度多少秒（<=0 关闭，P4）
     fsm.traj_clock_max_lead: 0.3
+    # 重规划重试节流：连续失败后按 min×2^n 退避，封顶 max（秒）；enable=false 每拍都试
+    fsm.replan_retry_enable: true
+    fsm.replan_retry_min: 0.2
+    fsm.replan_retry_max: 1.0
     # 重规划起点脱困(m)：起点若落在膨胀层里（机器人自身位置常在自己的膨胀层内），
     # 沿"起点→局部目标"方向最多前推这么多米去找第一个自由格；0=关闭
     fsm.start_escape_max_offset: 1.0

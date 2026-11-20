@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 PROFILE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "robots"))
+PLANNER_YAML = os.path.abspath(os.path.join(PROFILE_DIR, "..", "planner.yaml"))
 ROBOTS = ("a2", "go2", "go2w")
 
 REQUIRED_PARAMS = (
@@ -22,6 +23,7 @@ REQUIRED_PARAMS = (
     "grid_map.obstacles_inflation_z_up",
     "grid_map.obstacles_inflation_z_down",
     "grid_map.body_height",
+    "fsm.planning_horizon",
 )
 REQUIRED_TOPICS = (
     "body_pose",
@@ -41,6 +43,19 @@ def load_profile(robot):
 
 def params_of(robot):
     return load_profile(robot).get("scan_planner_node", {}).get("ros__parameters", {}) or {}
+
+
+def default_params():
+    """planner.yaml 的通用默认值。档案里没写的键按它解析（launch 也是这个叠加顺序）。"""
+    with open(PLANNER_YAML, "r", encoding="utf-8") as handle:
+        params = (yaml.safe_load(handle) or {}).get("scan_planner_node", {}).get("ros__parameters", {})
+    return params or {}
+
+
+def effective_params(robot):
+    params = dict(default_params())
+    params.update(params_of(robot))
+    return params
 
 
 def topics_of(robot):
@@ -102,3 +117,25 @@ def test_go2_profiles_follow_coverage_formula(robot, length, width):
     assert float(params["grid_map.double_cylinder_offset"]) == pytest.approx(length / 4.0, abs=1e-3)
     assert float(params["grid_map.double_cylinder_radius"]) == pytest.approx(
         math.hypot(length / 4.0, width / 2.0), abs=2e-3)
+
+
+@pytest.mark.parametrize("robot", ROBOTS)
+def test_planning_horizon_fits_local_map(robot):
+    """前视距离必须落在局部地图可信范围内。
+
+    否则前视点会落到图外，getInflateOccupancy 返回 -1（被当作障碍），
+    每轮规划都要走“局部目标兜底”，既浪费又容易选到过近的目标。
+    """
+    params = effective_params(robot)
+    horizon = float(params["fsm.planning_horizon"])
+    radius = float(params["grid_map.double_cylinder_radius"])
+    range_x = float(params["grid_map.local_update_range_x"])
+    range_y = float(params["grid_map.local_update_range_y"])
+    size_x = float(params["grid_map.sliding_map_size_x"])
+    size_y = float(params["grid_map.sliding_map_size_y"])
+
+    assert 0.0 < horizon <= min(range_x, range_y) - radius + 1e-9, (
+        f"{robot}: planning_horizon={horizon} 超出局部更新范围 "
+        f"(range={min(range_x, range_y)}, radius={radius})")
+    assert range_x <= size_x / 2.0 + 1e-9 and range_y <= size_y / 2.0 + 1e-9, (
+        f"{robot}: local_update_range 不能超过滑动地图半宽")
