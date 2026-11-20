@@ -16,6 +16,9 @@ jobs:
         with:
           required-ros-distributions: humble
 
+      - name: Docs audit
+        run: python3 tools/docs_audit.py
+
       - name: Install dependencies
         shell: bash
         run: |

@@ -25,6 +25,10 @@ endif()
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 find_package(ament_cmake REQUIRED)
+
+# 仿真烟测默认不跑：它要起完整仿真栈，耗时长且依赖 DDS/运行时环境。
+# 需要时用 -DENABLE_SIM_TESTS=ON 构建，再 colcon test --ctest-args -L sim。
+option(ENABLE_SIM_TESTS "Enable simulation smoke tests in CTest" OFF)
 find_package(ament_index_cpp REQUIRED)
 find_package(bspline_opt REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -130,6 +134,15 @@ if(BUILD_TESTING)
   add_launch_test(test/test_reference_path_publisher_launch.py TIMEOUT 30)
   add_launch_test(test/test_dynamic_reference_tf_launch.py TIMEOUT 35)
 
+  # 可选：把 empty_3m 仿真烟测挂进 CTest（默认关闭，避免拖慢日常 colcon test）。
+  if(ENABLE_SIM_TESTS)
+    add_test(NAME sim_check_empty_3m
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/sim_check.sh
+                     --scenario empty_3m)
+    set_tests_properties(sim_check_empty_3m PROPERTIES
+                         LABELS sim
+                         TIMEOUT 600)
+  endif()
 endif()
 
 ament_package()

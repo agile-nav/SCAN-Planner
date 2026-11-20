@@ -64,7 +64,8 @@ obstacle_bbox / obstacle_bboxes / min_clearance / min_yaw_change / map_size_*`�
 2. TF `world -> base` 存在。
 3. 规划器收到 `/planning/bspline`、状态进入 `running`、机器人产生实际位移；
    场景给了 `goal_x/goal_y` 时，还要求最终到终点距离 <= `goal_tol`；
-   场景给了 `obstacle_bbox` 时，还要求轨迹与障碍物的最小间隙 >= `min_clearance`。
+   场景给了 `obstacle_bbox(es)` 时，还要求轨迹与障碍物的最小间隙 >= `min_clearance`；
+   场景给了 `min_yaw_change` 时，还要求累计路径转向角达标。
 4. `/joint_states` 的腿/轮关节数量符合机型。
 5. `/self_inflation` 前后双圆柱的半径/偏移/高度与机型档案一致。
 
@@ -76,8 +77,9 @@ obstacle_bbox / obstacle_bboxes / min_clearance / min_yaw_change / map_size_*`�
   （GPU 模式还需 `opengl_render_node` 和可用的 GL 3.3 上下文）。
 - 脚本会 source 本工作区 `install/setup.bash`；如果依赖包在别的
   workspace，也会尝试 `$HOME/nav_ws/install/setup.bash`。
-- 当前自检场景是 **3 m 平地短路 + 空地图**，用于验证“模型/关节/TF/规划闭环/
-  碰撞几何”这条主链路，不覆盖长距离、障碍绕行、复杂地形和轮地打滑。
+- `empty_3m` 是快速烟测；`straight_10m`/`corridor_obstacle`/
+  `narrow_passage`/`turning`/`multi_obstacle` 覆盖长距离、绕障、窄通道和转弯。
+- 所有场景仍是**运动学仿真**：不验证轮地接触、打滑、腿支撑等动力学行为。
 
 ## 通用模型 / Gazebo launch
 
@@ -109,6 +111,15 @@ gazebo:
   controllers: [joint_state_broadcaster, joint_trajectory_controller]
   spawn_name: go2
   xacro_args: ["use_gazebo:=true"]
+```
+
+## 可选 CTest
+
+`sim_check` 默认不挂进 `colcon test`，避免拖慢日常测试。需要时可以显式开启：
+
+```bash
+colcon build --symlink-install --cmake-args -DENABLE_SIM_TESTS=ON
+colcon test --ctest-args -L sim
 ```
 
 ## CI

@@ -208,8 +208,9 @@ tools/sim_check.sh go2        # 只跑一个
 > ros2 topic pub --once /motion_enabled std_msgs/msg/Bool "{data: true}"
 > ```
 
-新增机型只需复制一份档案（例如 `go2.yaml`）与一个描述包，改掉数值、`robot_topics` 和
-`_ROBOT_MODELS` 一行，启动时换成 `robot:=go2`。档案名不存在时启动会直接报错并列出当前可用的档案。
+新增机型只需复制一份档案（例如 `go2.yaml`）与一个描述包，改掉数值、`robot_topics`
+和 `robot` 元数据（描述包/模型文件），启动时换成 `robot:=<机型>`。档案名不存在时
+启动会直接报错并列出当前可用的档案。
 
 
 ROS 2 参数名称使用点号分隔，例如 `grid_map.resolution`。预设路径点是由 xyz 三元组组成的浮点数组：
