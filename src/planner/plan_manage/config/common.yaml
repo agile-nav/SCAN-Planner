@@ -102,6 +102,8 @@ scan_planner_node:
     fsm.replan_retry_enable: true
     fsm.replan_retry_min: 0.2
     fsm.replan_retry_max: 1.0
+    # 脱困后撤的累计次数上限：防止「重试→后撤→重试」无限循环（0=不限制）
+    fsm.max_escape_total: 6
     # 重规划起点脱困(m)：起点若落在膨胀层里（机器人自身位置常在自己的膨胀层内），
     # 沿"起点→局部目标"方向最多前推这么多米去找第一个自由格；0=关闭
     fsm.start_escape_max_offset: 1.0
@@ -192,7 +194,9 @@ scan_planner_node:
     # B 样条相邻控制点的间距(米)：越小轨迹越灵活，但计算量越大
     manager.control_points_distance: 0.2
     manager.feasibility_tolerance: 0.5
-    manager.planning_horizon: 7.5
+    # 规划视野(米)：用于判断"初始路径是否异常过长"。必须与 fsm.planning_horizon 一致，
+    # 否则两者的"视野"语义不同，行为难以预期。
+    manager.planning_horizon: 4.5
     # A* 搜索池：XY 边长(格) + Z 深度(格)，池子以每段中点为中心
     #   160×0.05=8 m（XY ±4.0 m）；100×0.05=5 m（Z ±2.5 m）；约 123 MB
     manager.a_star_pool_size: 160

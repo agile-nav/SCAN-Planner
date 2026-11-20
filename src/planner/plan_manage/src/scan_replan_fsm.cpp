@@ -78,6 +78,17 @@ namespace scan_planner
     need_hover_stop_ = false;
     // 连续重规划失败计数器清零
     replan_fail_count_ = 0;
+    // 脱困计数清零
+    escape_total_ = 0;
+    escape_active_ = false;
+    escape_strategy_ = 0;
+    // 运行状态复位：未收到目标前不参与到达判定
+    status_have_goal_ = false;
+    status_target_valid_ = false;
+    status_is_stop_ = false;
+    status_goal_valid_ = false;
+    status_error_latched_ = false;
+    status_last_state_.clear();
     // 记录当前时间，供“冻结”逻辑计算时间差
     last_freeze_update_time_ = node_->now();
 
@@ -96,6 +107,10 @@ namespace scan_planner
     enable_fail_safe_ = load_parameter<bool>(node_, "fsm.fail_safe", true);
     // 连续规划失败超过这个次数 → 强制急停
     max_replan_fail_count_ = load_parameter<int>(node_, "fsm.max_replan_fail_count", 20);
+    // 脱困后撤的全局次数上限：防止「重试→后撤→重试」无限循环
+    max_escape_total_ = load_parameter<int>(node_, "fsm.max_escape_total", 6);
+    if (max_escape_total_ < 0)
+      max_escape_total_ = 0;
     // 下面几个是机器人外形尺寸（用于画自身膨胀 + 碰撞检测）
     self_inflation_z_up_ = load_parameter<double>(node_, "grid_map.obstacles_inflation_z_up", 0.0);
     self_inflation_z_down_ = load_parameter<double>(node_, "grid_map.obstacles_inflation_z_down", 0.0);
@@ -371,14 +386,31 @@ namespace scan_planner
       // 标记“已有目标”“这是一个新目标”
       have_target_ = true;
       have_new_target_ = true;
+      // 【V9】新目标必须清掉上一轮的失败计数，否则 finishProcess 会立刻把
+      //   新任务打成后撤/急停（pathCallback 的 P23 已这么做，这里要对齐）。
+      replan_fail_count_ = 0;
+      stuck_retry_count_ = 0;
+      escape_active_ = false;
+      escape_strategy_ = 0;
+      escape_total_ = 0;
+      exec_no_progress_ = false;
       // mode1/mode2 的目标点直接就是 world 系坐标，无需等参考 TF
       status_target_valid_ = true;
+      // 到达判定基准 = 本次任务的真实最终目标（end_pt_ 之后可能被截断改写）
+      mission_goal_pt_ = end_pt_;
+      mission_goal_truncated_ = false;
+      have_truncated_reachable_pt_ = false;
       // 新目标 → 运行状态置为 running
       armPlannerStatus();
 
       /*** FSM ***/
-      // 按当前状态切换：等待中→生成新轨迹；正在执行→重新规划
-      if (exec_state_ == WAIT_TARGET)
+      // 按当前状态切换：等待中/急停中 → 生成新轨迹；正在执行 → 重新规划
+      // 【V5】必须包含 EMERGENCY_STOP：否则新目标无法把急停状态唤醒，
+      //   （mode3 下外部只发一次路径时）任务会永久停在急停。
+      // 但 TF 停机（reference_tf_stop_）必须排除：那时新目标同样无法换算，
+      // 唤醒只会造成震荡，恢复交给 EMERGENCY_STOP 的 TF_RECOVERED 分支。
+      if (exec_state_ == WAIT_TARGET ||
+          (exec_state_ == EMERGENCY_STOP && !reference_tf_stop_))
         changeFSMExecState(GEN_NEW_TRAJ, "TRIG");
       else if (exec_state_ == EXEC_TRAJ)
         changeFSMExecState(REPLAN_TRAJ, "TRIG");
@@ -404,8 +436,9 @@ namespace scan_planner
       return false;
     }
 
-    // 终点记在参考坐标系下，真正规划时再乘上“参考系 → world”的变换
-    reference_end_pt_ = waypoints.back();
+    // 终点先记在局部变量里。只有在全局轨迹真正生成成功之后才写进 reference_end_pt_，
+    // 否则规划失败时会出现"局部目标沿旧轨迹取、到达判定按新终点判"的不同源问题。
+    const Eigen::Vector3d new_reference_end = waypoints.back();
     // 第一个点作为起点，其余点作为中间航点
     std::vector<Eigen::Vector3d> reference_waypoints(waypoints.begin() + 1, waypoints.end());
 
@@ -440,6 +473,9 @@ namespace scan_planner
     {
       gloabl_traj[i] = planner_manager_->global_data_.global_traj_.evaluate(i * step_size_t);
     }
+
+    // 成功 → 此时才把终点写进 reference_end_pt_，保证它与 global_data_ 同源
+    reference_end_pt_ = new_reference_end;
 
     // 终点速度设为 0；标记有目标、有新目标
     end_vel_.setZero();
@@ -507,6 +543,10 @@ namespace scan_planner
     have_new_target_ = true;
     // 航点坐标本身就在 world 系，目标立即可用于到达判定
     status_target_valid_ = true;
+    // 航点模式下每个航点本身就是"本段真实目标"
+    mission_goal_pt_ = end_pt_;
+    mission_goal_truncated_ = false;
+    have_truncated_reachable_pt_ = false;
     // 显示全局路径与当前航点
     visualization_->displayGlobalPathList(gloabl_traj, 0.1, 0);
     visualization_->displayGoalPoint(end_pt_, Eigen::Vector4d(0, 0.5, 0.5, 1), 0.3, current_wp_);
@@ -561,19 +601,29 @@ namespace scan_planner
       const Eigen::Vector3d pt = global_data.global_traj_.evaluate(t);
       const Eigen::Vector3d prev_pt = global_data.global_traj_.evaluate(prev_t);
 
-      // 找到第一个空点 → 把它当作新终点
+      // 找到第一个空点 → 把全局轨迹截断到这里
       if (map->getInflateOccupancy(pt, estimateYawFromSegment(prev_pt, pt)) == 0)
       {
-        // 记下原始终点，用于日志
-        const Eigen::Vector3d raw_end = end_pt_;
-        end_pt_ = pt;
+        // 【根治 CLOSE_TO_GOAL 退化】这里**不再改写 end_pt_**：
+        //   end_pt_ 是任务的目标，被就地写成"半路点"之后再也没有任何地方会还原它
+        //   （mode1 尤其明显），于是 getLocalTarget 每轮都返回那个点，
+        //   机器人靠近 0.2 m 内就必然报 CLOSE_TO_GOAL —— 确定性失败。
+        //   现在只截断全局轨迹时长：局部目标仍从轨迹上取，自然会停在可达处；
+        //   而 end_pt_ / mission_goal_pt_ 保持"真实最终目标"的语义。
+        mission_goal_truncated_ = true;
+        setStatusReason(ReplanFailure::TARGET_OCCUPIED);
+        // 记住"实际可达的最后一个自由点"：planFromCurrentTraj 重建全局轨迹时用它当终点。
+        //   否则会重新对准真实目标（那里是障碍）→ 再截断一次 → 每轮重复"规划-截断"。
+        truncated_reachable_pt_ = pt;
+        have_truncated_reachable_pt_ = true;
         // 把全局轨迹时长缩短到这一点（相当于提前结束）
         global_data.global_duration_ = t;
         global_data.last_progress_time_ = std::min(global_data.last_progress_time_, t);
-        // 打警告：原目标被占，改用新终点
+        // 打警告：原目标被占，只走到可达处
         RCLCPP_WARN(node_->get_logger(),
-                    "Target [%.2f, %.2f, %.2f] is occupied; using [%.2f, %.2f, %.2f]",
-                    raw_end(0), raw_end(1), raw_end(2), end_pt_(0), end_pt_(1), end_pt_(2));
+                    "Target [%.2f, %.2f, %.2f] is occupied; global traj truncated to "
+                    "[%.2f, %.2f, %.2f] (mission goal kept)",
+                    end_pt_(0), end_pt_(1), end_pt_(2), pt(0), pt(1), pt(2));
         return true;
       }
     }
@@ -672,11 +722,13 @@ namespace scan_planner
       replan_fail_count_ = 0;
       stuck_retry_count_ = 0;
       escape_active_ = false;
-      escape_used_ = false;
       escape_strategy_ = 0;
       exec_no_progress_ = false;
       exec_progress_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
       status_is_stop_ = false;
+      // 【V9】与 waypointCallback 对齐：新路径要清掉上一轮的失败/脱困计数
+      plan_retry_fails_ = 0;
+      last_plan_attempt_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
       // 只有“真正的新目标”才清掉到达判定缓存；重复收到同一条路径
       // （外部全局规划器可能周期性重发）不应该反复重置去抖计时。
       if (status_new_goal)
@@ -685,6 +737,11 @@ namespace scan_planner
         status_goal_snapshot_ = Eigen::Vector3d::Zero();
       }
 
+      // 【V3】到达判定基准 = 任务的真实最终目标（参考系下记录，换到 world 后再用）。
+      //   end_pt_ 之后会被 adjustGlobalTargetIfOccupied / 局部目标逻辑改写。
+      mission_goal_truncated_ = false;
+      have_truncated_reachable_pt_ = false;
+
       // 目标点必须立刻换算到 world 系，否则 updatePlannerStatus 会拿陈旧/未初始化的
       // end_pt_ 做距离判定，机器人在旧目标附近且静止时会被误判为“已到达”。
       // 拿不到参考 TF 时先标记无效，等 monitorReferenceTransform 成功后再置位。
@@ -692,6 +749,8 @@ namespace scan_planner
       if (lookupReferenceTransform(reference_to_world))
       {
         end_pt_ = reference_to_world * reference_end_pt_;
+        // 任务的真实最终目标（world 系），到达判定只看它
+        mission_goal_pt_ = end_pt_;
         status_target_valid_ = true;
       }
       else
@@ -710,7 +769,12 @@ namespace scan_planner
         changeFSMExecState(GEN_NEW_TRAJ, "NEW_PATH");
       }
       /*** FSM ***/
-      if (exec_state_ == WAIT_TARGET)
+      // 【V5】新路径同样能唤醒 EMERGENCY_STOP，但**排除 TF 停机的急停**：
+      //   此时参考 TF 还不可用，新路径也无法换算到 world 系，
+      //   若在这里唤醒就会变成"路径重发 → 唤醒 → 又 TF 超时 → 再急停"的高频震荡，
+      //   而且机器人根本没停住。TF 恢复由 EMERGENCY_STOP 内的 TF_RECOVERED 分支负责。
+      if (exec_state_ == WAIT_TARGET ||
+          (exec_state_ == EMERGENCY_STOP && !reference_tf_stop_))
       {
         changeFSMExecState(GEN_NEW_TRAJ, "TRIG");
       }
@@ -832,7 +896,10 @@ namespace scan_planner
 
     const double t_max = info->duration_;
     double best_t = std::min(std::max(t_hint, 0.0), t_max);
-    const double lo = std::max(0.0, t_hint - 3.0);
+    // 窗口 [-1.0, +1.0] 秒：与控制器 projectOntoTrajClamped 保持一致。
+    //   两边窗口不同会让"规划器判定的进度"与"控制器判定的进度"差出几秒，
+    //   冻结/超前夹紧互相抵消（V23）。
+    const double lo = std::max(0.0, t_hint - 1.0);
     const double hi = std::min(t_max, t_hint + 1.0);
     constexpr double step = 0.02;
     double best_d = std::numeric_limits<double>::max();
@@ -902,6 +969,9 @@ namespace scan_planner
   {
     // 新目标：清除重试退避，第一次尝试立即进行
     resetPlanRetry();
+    // 【V5】新目标意味着"上一轮失败太多"的语义已失效：
+    //   若不清掉，EMERGENCY_STOP 的 need_hover_stop_ 分支会立刻把新目标丢掉。
+    need_hover_stop_ = false;
     status_have_goal_ = true;
     status_is_stop_ = false;
     status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
@@ -913,7 +983,6 @@ namespace scan_planner
     exec_no_progress_ = false;
     stuck_retry_count_ = 0;
     escape_active_ = false;
-    escape_used_ = false;
     escape_strategy_ = 0;
     if (!status_error_latched_)
       status_reasons_.clear();  // 锁存 error 后保留原因，供上报
@@ -950,7 +1019,14 @@ namespace scan_planner
       RCLCPP_INFO(node_->get_logger(), "motion enabled: planning from cached /global_path");
       resetPlanRetry();
       pathCallback(last_global_path_);
-      changeFSMExecState(GEN_NEW_TRAJ, "MOTION_ENABLE");
+      // 只有参考轨迹真的建好了才进 GEN_NEW_TRAJ：
+      //   否则 getLocalTarget 会在 duration<=0 时退化成"直奔远处终点"。
+      if (have_target_ && hasUsableGlobalTraj())
+        changeFSMExecState(GEN_NEW_TRAJ, "MOTION_ENABLE");
+      else
+        RCLCPP_WARN(node_->get_logger(),
+                    "motion enabled: cached /global_path did not yield a usable global traj; "
+                    "waiting for a new one");
     }
   }
 
@@ -974,10 +1050,13 @@ namespace scan_planner
     }
 
     bool progressed = false;
+    // 只有"更靠近目标"才算真正进展（会清掉脱困累计次数）。
+    bool goal_progressed = false;
     if (d < exec_best_dist_ - stuck_progress_eps_)
     {
       exec_best_dist_ = d;
       progressed = true;
+      goal_progressed = true;
     }
 
     // 【P21】轨迹投影进度：真正衡量“这条轨迹有没有在走”。
@@ -998,8 +1077,13 @@ namespace scan_planner
       exec_progress_time_ = now;
       // 只有真正前进才清零重试计数，避免“规划成功但原地不动”无限重试
       stuck_retry_count_ = 0;
-      escape_used_ = false;
+    }
+    if (goal_progressed)
+    {
+      // 【V13】只有"更靠近目标"才清脱困累计次数与策略序号。
+      //   轨迹投影推进（如后撤挪动一点）不算——否则会无限后撤。
       escape_strategy_ = 0;
+      escape_total_ = 0;
     }
 
     exec_no_progress_ = (now - exec_progress_time_).seconds() >= stuck_window_ &&
@@ -1047,6 +1131,14 @@ namespace scan_planner
     resetPlanRetry();
     if (escape_active_ || escape_strategy_ >= 3)
       return false;
+    // 【V13】累计后撤次数上限：单次"有位移"不清零，防止无限「重试→后撤→重试」
+    if (max_escape_total_ > 0 && escape_total_ >= max_escape_total_)
+    {
+      RCLCPP_WARN(node_->get_logger(),
+                  "[FSM] backup escape budget exhausted (%d); giving up this segment",
+                  escape_total_);
+      return false;
+    }
 
     static const double kScale[3] = {1.0, 0.6, 1.4};
     const double want = std::max(0.10, escape_distance_ * kScale[escape_strategy_ % 3]);
@@ -1080,10 +1172,10 @@ namespace scan_planner
 
     publishCurrentTrajectory();
     escape_active_ = true;
-    escape_used_ = true;
     escape_start_pos_ = odom_pos_;
     traj_commit_wall_ = node_->now();
     stuck_retry_count_ = 0;
+    ++escape_total_;
 
     RCLCPP_WARN(node_->get_logger(),
                 "[FSM] stuck (%s): low-speed backup %.2fm in %.1fs to (%.2f,%.2f,%.2f)",
@@ -1194,16 +1286,28 @@ namespace scan_planner
       }
       else
       {
+        // 【V3】到达判定只看任务的真实最终目标 mission_goal_pt_，不看 end_pt_。
+        //   end_pt_ 会被 adjustGlobalTargetIfOccupied（目标被占时截断到半路）改写，
+        //   用它判到达会在"原目标不可达"时误报 goal_reached。
+        //
+        // 例外：目标被判为不可达（占据）并主动截断时，判定基准改为
+        //   "实际可达的最后一个自由点"——否则永远差一截，任务无法收尾。
+        const Eigen::Vector3d &arrival_ref =
+            (mission_goal_truncated_ && have_truncated_reachable_pt_) ? truncated_reachable_pt_
+                                                                     : mission_goal_pt_;
         const bool arrived =
-            (end_pt_.head<2>() - odom_pos_.head<2>()).norm() < status_goal_tol_;
+            (arrival_ref.head<2>() - odom_pos_.head<2>()).norm() < status_goal_tol_;
         const bool velocity_zero = speed_now < status_speed_tol_;
+        // 注意：mission_goal_truncated_ 不能算作 problem ——
+        //   "目标不可达、停在可达点"是一次**正常的任务完成**，
+        //   若计入 problem，状态话题会永远停在 failed（永不自恢复）。
         const bool problem = (replan_fail_count_ != 0) || (exec_state_ == EMERGENCY_STOP);
 
         if (arrived && velocity_zero)
         {
           // 进入到达候选：锁存目标点 + 开始去抖计时
           status_hold_since_ = now;
-          status_goal_snapshot_ = end_pt_;
+          status_goal_snapshot_ = arrival_ref;
           state = "running";
         }
         else
@@ -1225,9 +1329,9 @@ namespace scan_planner
             if (problem && status_problem_since_.nanoseconds() != 0 &&
                 (now - status_problem_since_).seconds() >= status_error_time_)
             {
-              // 按"原因是否必须人工干预"分级（不再看速度）：
-              //   硬错误(堵死/目标不可达/碰撞急停/连续失败超限/A* 无路) → error（需重启或遥控移开）
-              //   软错误(优化/拟合/TF 定位类等可自恢复)                → failed（有错但仍能跑）
+              // 按"原因是否必须人工干预"分级：
+              //   硬错误 → error（需重启或遥控移开）
+              //   软错误 → failed（有错但仍能跑）
               bool needs_intervention = false;
               for (const auto &r : status_reasons_)
               {
@@ -1260,14 +1364,29 @@ namespace scan_planner
     }
 
     // 状态切换 → 立即发布；同状态 → 1Hz 心跳（goal_reached 只发一次）
-    if (state != status_last_state_)
+    // 【V17】比较对象必须是"门控后的实际状态"，与 status_last_state_ 的存储口径一致，
+    //   否则 disabled/paused 期间每 10 ms 都会被判成一次切换并重发。
+    const std::string effective = gateStatusName(state);
+    if (effective != status_last_state_)
     {
       publishPlannerStatus(state);
     }
-    else if (state != "goal_reached" && heartbeat_due)
+    else if (effective != "goal_reached" && heartbeat_due)
     {
       publishPlannerStatus(state);
     }
+  }
+
+  // 把门控（未使能 / 任务暂停 / error 锁存）施加到状态名上。
+  std::string SCANReplanFSM::gateStatusName(const std::string &state) const
+  {
+    std::string out = state;
+    if (!motion_enabled_ && out != status_name_disabled_)
+      out = status_name_disabled_;                 // 外部未使能
+    else if (status_error_latched_ && out != status_name_disabled_ &&
+             out != status_name_paused_)
+      out = "error";
+    return out;
   }
 
   // 把状态发到 /local_planner/status（std_msgs/String，内容为 JSON）；空串不发布。
@@ -1275,13 +1394,7 @@ namespace scan_planner
   {
     if (state.empty())
       return;
-    // error 锁存：除 disabled/paused（门控优先级最高）外一律上报 error；只有重启节点才清除
-    std::string out = state;
-    if (!motion_enabled_ && out != status_name_disabled_)
-      out = status_name_disabled_;                 // 外部未使能
-    else if (status_error_latched_ && out != status_name_disabled_ &&
-             out != status_name_paused_)
-      out = "error";
+    const std::string out = gateStatusName(state);
     std_msgs::msg::String msg;
     msg.data = buildStatusJson(out);
     status_pub_->publish(msg);
@@ -1383,6 +1496,17 @@ namespace scan_planner
     have_new_target_ = false;
     trigger_ = false;
     have_last_reference_transform_ = false;
+    // 【V8】脱困/失败状态必须一起清：否则它们会泄漏到 resume，
+    //   replan_fail_count_ 超限时 resume 后第一拍就被 finishProcess 打成后撤/急停。
+    escape_active_ = false;
+    escape_strategy_ = 0;
+    escape_total_ = 0;
+    stuck_retry_count_ = 0;
+    replan_fail_count_ = 0;
+    exec_no_progress_ = false;
+    exec_progress_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+    resetPlanRetry();
+    need_hover_stop_ = false;
     // 清局部轨迹
     planner_manager_->local_data_.duration_ = 0.0;
     planner_manager_->local_data_.start_time_ =
@@ -1407,7 +1531,17 @@ namespace scan_planner
     {
       RCLCPP_INFO(node_->get_logger(), "External RESUME: rebuilding from cached /global_path");
       pathCallback(last_global_path_);
-      changeFSMExecState(GEN_NEW_TRAJ, "RESUME");
+      // V1：必须确认参考轨迹真的建好了再切 GEN_NEW_TRAJ。
+      //   否则 duration=0 时 getLocalTarget 会退化成"直奔远处终点"，绕过 planning_horizon。
+      if (have_target_ && hasUsableGlobalTraj())
+        changeFSMExecState(GEN_NEW_TRAJ, "RESUME");
+      else
+      {
+        RCLCPP_WARN(node_->get_logger(),
+                    "External RESUME: cached /global_path produced no usable global traj; "
+                    "waiting for a new /global_path");
+        changeFSMExecState(WAIT_TARGET, "RESUME_FAILED");
+      }
     }
     else
     {
@@ -1701,6 +1835,49 @@ namespace scan_planner
     last_plan_attempt_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
   }
 
+  // 放弃当前任务：清目标、清轨迹、复位到达判定，并让状态话题回到 idle。
+  //   give-up（STUCK_GIVEUP）与"失败太多"的急停退出都走这里。
+  //   关键点：status_have_goal_ 必须一起清，否则 updatePlannerStatus 会一直报 running。
+  void SCANReplanFSM::abandonMission(const char *reason)
+  {
+    if (stop_traj_on_finish_ && have_odom_)
+      callEmergencyStop(odom_pos_);
+
+    have_target_ = false;
+    have_new_target_ = false;
+    trigger_ = false;
+    need_hover_stop_ = false;
+    stuck_retry_count_ = 0;
+
+    // 目标已清空：到达判定与运行状态都必须失效
+    status_have_goal_ = false;
+    status_target_valid_ = false;
+    status_is_stop_ = false;
+    status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+    status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+    status_reason_ = ReplanFailure::NONE;
+    if (!status_error_latched_)
+      status_reasons_.clear();
+
+    if (isWaypointSequenceMode())
+    {
+      active_waypoints_.clear();
+      current_wp_ = 0;
+    }
+
+    changeFSMExecState(WAIT_TARGET, reason);
+    RCLCPP_WARN(node_->get_logger(), "[FSM] mission abandoned (%s); waiting for a new goal", reason);
+  }
+
+  // 全局轨迹是否可用于规划：navi_mode=3 的 resume 必须等参考轨迹真正建好，
+  // 否则 getLocalTarget 会在 duration<=0 时退化成"直奔远处终点"。
+  bool SCANReplanFSM::hasUsableGlobalTraj() const
+  {
+    if (!planner_manager_)
+      return false;
+    return planner_manager_->global_data_.global_duration_ > 1e-3;
+  }
+
   // 打印当前状态名（调试用）。
   void SCANReplanFSM::printFSMExecState()
   {
@@ -1730,8 +1907,11 @@ namespace scan_planner
     // 外部未使能（未按 START / 按了 B）：冻结，不重规划、不发布
     if (!motion_enabled_)
       return;
-    if (!monitorReferenceTransform())
-      return;
+    // 【V14】参考 TF 监控结果不能用来"冻结整个 FSM"：
+    //   monitorReferenceTransform() 自己会在超宽限时切 EMERGENCY_STOP，
+    //   而 EMERGENCY_STOP 的 TF 恢复分支必须能继续跑到。
+    //   这里只调用（触发监控副作用），不因返回 false 而 return。
+    monitorReferenceTransform();
 
     // 下面几行：每 100 次（约 1 秒）打印一次当前状态
     static int fsm_num = 0;
@@ -1949,7 +2129,6 @@ namespace scan_planner
 
         const double moved = (odom_pos_ - escape_start_pos_).norm();
         escape_active_ = false;
-        escape_used_ = false;
         if (moved < 0.05)
         {
           ++escape_strategy_;
@@ -1976,15 +2155,17 @@ namespace scan_planner
           current_wp_ + 1 < (int)active_waypoints_.size() &&
           (end_pt_ - odom_pos_).norm() < 0.5)
       {
-        // 航点下标前进一位
-        current_wp_++;
-        // 规划到下一个航点，并切到“生成新轨迹”
+        // 【V24】先规划成功再推进下标：否则规划失败也会前进，
+        //   下一个航点被静默跳过，最终"成功到达"却漏走了若干航点。
+        const int next_wp = current_wp_ + 1;
+        current_wp_ = next_wp;
         if (planNextWaypoint())
         {
           changeFSMExecState(GEN_NEW_TRAJ, "FSM");
           return;
         }
-        // 规划失败 → 计数 +1，仍然要求重新生成新轨迹
+        // 规划失败 → 回退下标，留在本航点重试（计入失败次数）
+        current_wp_ = next_wp - 1;
         if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
         changeFSMExecState(GEN_NEW_TRAJ, "FSM");
         return;
@@ -1992,9 +2173,8 @@ namespace scan_planner
 
       // 【本段是否结束】
       //   非航点模式：物理到达(与状态话题同源) / 连续无进展 / 很宽的绝对上限（只防死循环）
-      //   航点模式：保持原有"轨迹时长到"判据（本次不改）
+      //   航点模式：轨迹时长到 或 同样适用无进展看门狗
       const bool time_done = t_cur > info->duration_ - 1e-2;
-      const bool hard_cap = t_cur > info->duration_ + finish_timeout_extra_;
       // 【P16】exec_no_progress_ 还要求“当前这条轨迹已执行 ≥ stuck_window_”：
       //   刚换上一条新轨迹时不该被几秒前的旧判定直接判死。
       // 【P19b】门槛用“墙钟自提交以来的秒数”，不能用 t_cur：
@@ -2003,8 +2183,17 @@ namespace scan_planner
                                            ? 0.0
                                            : (node_->now() - traj_commit_wall_).seconds();
       const bool no_progress_valid = exec_no_progress_ && wall_since_commit >= stuck_window_;
+      // 【V12】hard_cap 必须用墙钟：t_cur 被 P4 夹在 (t_proj + max_lead)，
+      //   永远到不了 duration + finish_timeout_extra_，原判据是死代码。
+      const bool hard_cap =
+          wall_since_commit > info->duration_ + finish_timeout_extra_;
+      // 【V11】航点模式也必须有看门狗：原实现只看 time_done（依赖被夹的 t_cur），
+      //   卡住时永不触发，会永久停在 EXEC_TRAJ。
       const bool segment_done =
-          isWaypointSequenceMode() ? time_done : (status_is_stop_ || no_progress_valid || hard_cap);
+          status_is_stop_ ||
+          no_progress_valid ||
+          hard_cap ||
+          (isWaypointSequenceMode() && time_done);
       if (segment_done)
       {
         RCLCPP_WARN(node_->get_logger(),
@@ -2022,41 +2211,43 @@ namespace scan_planner
         exec_best_tproj_ = 0.0;
         exec_no_progress_ = false;
 
-        // 还有下一个航点 → 继续前往
-        if (isWaypointSequenceMode() && current_wp_ + 1 < (int)active_waypoints_.size())
+        // 航点模式下"撞障碍/被卡住"不是到达：必须先重试/脱困，
+        // 绝不能在卡住时推进航点下标（否则会静默跳过航点）。
+        const bool waypoint_stuck =
+            isWaypointSequenceMode() && !time_done && !status_is_stop_;
+
+        // 航点正常走完：还有下一个航点 → 继续前往（先规划成功再推进）
+        if (isWaypointSequenceMode() && !waypoint_stuck &&
+            current_wp_ + 1 < (int)active_waypoints_.size())
         {
-          current_wp_++;
+          const int next_wp = current_wp_ + 1;
+          current_wp_ = next_wp;
           if (planNextWaypoint())
           {
             changeFSMExecState(GEN_NEW_TRAJ, "FSM");
             return;
           }
+          current_wp_ = next_wp - 1;
           if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
           changeFSMExecState(GEN_NEW_TRAJ, "FSM");
           return;
         }
 
         // 航点模式走到最后一个航点 → 按原逻辑结束
-        if (isWaypointSequenceMode())
+        if (isWaypointSequenceMode() && !waypoint_stuck)
         {
           active_waypoints_.clear();
           current_wp_ = 0;
-          if (stop_traj_on_finish_)
-            callEmergencyStop(odom_pos_);
-          have_target_ = false;
-          changeFSMExecState(WAIT_TARGET, "FSM");
+          abandonMission("WAYPOINTS_DONE");
           return;
         }
 
-        // 【P21】非航点模式：把“到达”和“卡住”分开处理。
+        // 【P21】非航点模式（以及"航点模式下的卡住"）：把“到达”和“卡住”分开处理。
         //   到达 → 正常结束；
         //   卡住/超时 → 有限重试，重试期内绝不清目标。
         if (status_is_stop_)
         {
-          if (stop_traj_on_finish_)
-            callEmergencyStop(odom_pos_);
-          have_target_ = false;
-          changeFSMExecState(WAIT_TARGET, "FSM");
+          abandonMission("GOAL_REACHED");
           return;
         }
 
@@ -2078,12 +2269,8 @@ namespace scan_planner
           return;
 
         // 重试 + 后撤都失败 → 放弃本段
-        stuck_retry_count_ = 0;
-        escape_used_ = false;
-        if (stop_traj_on_finish_)
-          callEmergencyStop(odom_pos_);
-        have_target_ = false;
-        changeFSMExecState(WAIT_TARGET, "STUCK_GIVEUP");
+        // 【V10】give-up 必须清 status_have_goal_（否则状态话题永远 running）
+        abandonMission("STUCK_GIVEUP");
         return;
       }
       // 离终点已经很近 → 不必重规划，继续走完
@@ -2113,9 +2300,23 @@ namespace scan_planner
     {
       if (reference_tf_stop_)
       {
-        if (!reference_tf_jump_failed_ && odom_vel_.norm() < 0.1)
+        // 【V15】恢复前提是"TF 真的回来了"——必须显式查询，不能凭标志推断：
+        //   monitorReferenceTransform() 在 TF 缺失时只返回 false、**不会**清
+        //   reference_tf_stop_，所以这里若只看速度就会在 TF 仍缺失时反复
+        //   EMERGENCY_STOP ⇄ GEN_NEW_TRAJ 震荡（实测每个 tick 一次）。
+        Eigen::Isometry3d tf_now;
+        const bool tf_ok = lookupReferenceTransform(tf_now);
+
+        // 坡道上速度可能长期降不到 0.1（定位微漂）→ TF 可用时不再等速度归零
+        const bool tf_stop_timeout =
+            reference_tf_stop_since_.nanoseconds() != 0 &&
+            (node_->now() - reference_tf_stop_since_).seconds() > reference_tf_grace_;
+        const bool stopped = odom_vel_.norm() < 0.1 || tf_stop_timeout;
+
+        if (tf_ok && !reference_tf_jump_failed_ && stopped)
         {
           reference_tf_stop_ = false;
+          reference_tf_stop_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
           reference_jump_replan_ = false;
           have_new_target_ = true;
           // 故障已解除：清除重试退避，立即恢复规划
@@ -2130,22 +2331,20 @@ namespace scan_planner
       {
         callEmergencyStop(odom_pos_);
       }
-      // 已经停住了：如果开了自动恢复，且速度已经很低
       else
       {
-        // 普通情况 → 回到 GEN_NEW_TRAJ 重新尝试规划
-        if (enable_fail_safe_ && !need_hover_stop_ && odom_vel_.norm() < 0.1)
-          changeFSMExecState(GEN_NEW_TRAJ, "FSM");
-        // 是“失败太多”导致的急停 → 清空目标，回到等待新目标
-        else if (enable_fail_safe_ && need_hover_stop_ && odom_vel_.norm() < 0.1)
+        // 【V6】fail_safe=false 也必须有出口：否则 EMERGENCY_STOP 会永久停住，
+        //   只能重启节点。这里改成"失败太多 → 放弃任务"，其它情况仍需 fail_safe。
+        if (need_hover_stop_ && odom_vel_.norm() < 0.1)
         {
           RCLCPP_INFO(node_->get_logger(),
                       "Exiting EMERGENCY_STOP; switching to WAIT_TARGET for a new target");
-          need_hover_stop_ = false;
-          have_target_ = false;
-          trigger_ = false;
-          changeFSMExecState(WAIT_TARGET, "EMERGENCY_EXIT");
+          abandonMission("EMERGENCY_EXIT");
+          return;
         }
+        // 普通情况 → 回到 GEN_NEW_TRAJ 重新尝试规划（需要 fail_safe）
+        if (enable_fail_safe_ && odom_vel_.norm() < 0.1)
+          changeFSMExecState(GEN_NEW_TRAJ, "FSM");
       }
 
       // 本轮处理完成，清掉“刚进入急停”的标志
@@ -2171,27 +2370,52 @@ namespace scan_planner
     resetPlanRetry();
     if (isWaypointSequenceMode() && current_wp_ + 1 < (int)active_waypoints_.size())
     {
-      current_wp_++;
+      // 【V24】先规划成功再推进下标
+      const int next_wp = current_wp_ + 1;
+      current_wp_ = next_wp;
       if (planNextWaypoint())
       {
         changeFSMExecState(GEN_NEW_TRAJ, "NEXT_WAYPOINT");
         return;
       }
+      current_wp_ = next_wp - 1;
       if (!replanFailureIsBenign(status_reason_)) replan_fail_count_++;
       changeFSMExecState(GEN_NEW_TRAJ, "NEXT_WAYPOINT_FAIL");
       return;
     }
 
-    if (isWaypointSequenceMode())
+    // 【V10】本段结束统一走 abandonMission，保证 status_have_goal_ 一起清掉，
+    //   状态话题不会永远停在 running。
+    //
+    // 但 CLOSE_TO_GOAL 的语义是"起点距**局部目标** <0.2 m"，在 mode1/mode3 下
+    // 局部目标只是前方 horizon 处的截断点。若此时离任务真实终点还很远，
+    // 说明局部目标退化了，不能当成任务完成——按一次失败处理，让重试/脱困接管。
+    //
+    // 例外：目标本身被判为"不可达（被障碍占据）"而主动截断了全局轨迹时，
+    //   停在截断点就是**正常完成**（本来就去不了原目标），不能当失败无限重试。
+    const bool close_to_goal_case = (std::string(reason) == "CLOSE_TO_GOAL");
+    if (close_to_goal_case && status_target_valid_ && !mission_goal_truncated_ &&
+        (mission_goal_pt_.head<2>() - odom_pos_.head<2>()).norm() > status_goal_tol_exit_)
     {
-      active_waypoints_.clear();
-      current_wp_ = 0;
+      ++replan_fail_count_;
+      // 调用方在进来之前已按"到达"调过一次 notePlanResult(true)，把退避清零了。
+      // 这里判定为退化失败，必须重新记一次失败，否则回 GEN_NEW_TRAJ 会以 10 ms
+      // 一拍热循环重试同一个注定失败的局部目标（无退避）。
+      notePlanResult(false);
+      RCLCPP_WARN(node_->get_logger(),
+                  "[FSM] CLOSE_TO_GOAL but still %.2f m from mission goal; treat as replan failure",
+                  (mission_goal_pt_ - odom_pos_).norm());
+      changeFSMExecState(GEN_NEW_TRAJ, "CLOSE_TO_GOAL_DEGENERATE");
+      return;
+    }
+    if (close_to_goal_case && mission_goal_truncated_)
+    {
+      RCLCPP_WARN(node_->get_logger(),
+                  "[FSM] mission goal is unreachable (occupied); finishing at the reachable point "
+                  "%.2f m short of it", (mission_goal_pt_ - odom_pos_).norm());
     }
 
-    if (stop_traj_on_finish_)
-      callEmergencyStop(odom_pos_);
-    have_target_ = false;
-    changeFSMExecState(WAIT_TARGET, reason);
+    abandonMission(reason);
   }
 
   void SCANReplanFSM::finishProcess()
@@ -2271,11 +2495,16 @@ namespace scan_planner
     }
 
     // 重新生成一条“从当前位置到终点”的全局参考轨迹
+    // 若目标此前被判为"不可达、轨迹已截断"，则重建到那个可达点，
+    // 避免每轮都把轨迹重新拉回真实目标（障碍处）→ 重复截断。
+    const Eigen::Vector3d replan_end_pt =
+        (mission_goal_truncated_ && have_truncated_reachable_pt_) ? truncated_reachable_pt_
+                                                                 : end_pt_;
     if (!planner_manager_->planGlobalTraj(
             start_pt_,
             start_vel_,
             start_acc_,
-            end_pt_,
+            replan_end_pt,
             Eigen::Vector3d::Zero(),
             Eigen::Vector3d::Zero()))
     {
@@ -2351,8 +2580,9 @@ namespace scan_planner
   // ==========================================================================
   void SCANReplanFSM::checkCollisionCallback()
   {
-    // 同样先处理“冻结”
-    updateLocalTrajTimeFreeze();
+    // 【V21】不在这里再调 updateLocalTrajTimeFreeze()：
+    //   它按"距上次调用"推进冻结/夹紧，两个定时器（10 ms / 50 ms）交替调用会让
+    //   dt 的语义混乱（一半采样被顺延、一半没有）。时钟只由主循环统一维护。
     // 外部停止 / 未使能期间不做碰撞检查
     if (externally_stopped_ || !motion_enabled_)
       return;
@@ -2364,8 +2594,17 @@ namespace scan_planner
     // 参考 TF 已判定异常并急停过 → 不再做碰撞检查
     if (reference_tf_stop_)
       return;
-    // 正在等待目标、或轨迹还没开始 → 不需要检查
-    if (exec_state_ == WAIT_TARGET || info->start_time_.seconds() < 1e-5)
+    // 正在等待/急停、轨迹还没开始、或正在执行脱困后撤 → 不需要检查
+    // 【V7】后撤轨迹是沿来路的直线，指向机器人刚走过的地方，形状上极易被判成"撞"。
+    //   若不跳过，安全回调会 planFromCurrentTraj() 覆盖后撤轨迹，并让 escape_active_
+    //   残留为 true → 新轨迹在 EXEC_TRAJ 里被当成后撤轨迹整段劫持。
+    if (exec_state_ == WAIT_TARGET || exec_state_ == EMERGENCY_STOP ||
+        escape_active_ || info->start_time_.seconds() < 1e-5)
+      return;
+    // 【V7】只有真正"在执行"的轨迹才需要安全监控：
+    //   GEN_NEW_TRAJ / REPLAN_TRAJ 期间 local_data_ 里还是上一条旧轨迹，
+    //   拿它做检查会绕过主循环的失败计数与 CLOSE_TO_GOAL 消费逻辑。
+    if (exec_state_ != EXEC_TRAJ)
       return;
 
     /* ---------- check trajectory ---------- */
@@ -2477,25 +2716,63 @@ namespace scan_planner
     if (map->getInflateOccupancy(start_pt_, yaw) == 0)
       return false;
 
-    Eigen::Vector2d dir = local_target_pt_.head<2>() - start_pt_.head<2>();
-    if (dir.norm() < 1e-3)
-      return false;
-    dir.normalize();
-
     const double step = map->getResolution();
     const int step_max = std::max(1, static_cast<int>(std::ceil(start_escape_max_offset_ / step)));
-    for (int k = 1; k <= step_max; ++k)
-    {
-      Eigen::Vector3d cand = start_pt_;
-      cand.head<2>() += dir * (step * k);
-      if (map->getInflateOccupancy(cand, yaw) == 0)
+
+    // 【CLOSE_TO_GOAL 自伤修复】推进起点时不能把起点送到局部目标附近：
+    //   getLocalTarget 用 min_target_dist(0.30~0.40 m) 校验过距离，
+    //   但 reboundReplan 的早退门槛只有 0.20 m。若这里把起点朝目标推 0.3~0.4 m，
+    //   推完之后距离掉到 0.2 m 以下，规划器就会把自己刚通过校验的目标判成"已到达"。
+    //   因此：任何候选点都必须与局部目标保持 > kMinGoalClearance 的距离。
+    const double kMinGoalClearance =
+        std::max(0.25, 1.25 * planner_manager_->pp_.ctrl_pt_dist);
+    const Eigen::Vector2d goal_xy = local_target_pt_.head<2>();
+    auto keepsGoalDistance = [&](const Eigen::Vector3d &cand) {
+      // 局部目标就是轨迹末端时不做这个限制：此时靠近是"合法到达"，
+      // 与 targetFarEnough 的 t>=duration 豁免保持一致。
+      if (local_target_is_traj_end_)
+        return true;
+      return (cand.head<2>() - goal_xy).norm() > kMinGoalClearance;
+    };
+
+    // 【V20】多方向脱困，与 A* 的起点脱困保持一致。
+    //   原来只沿"起点→局部目标"单向推进：目标在身后时会把起点推得更深。
+    //   顺序：朝局部目标 → 朝反方向 → 绕起点 8 方向。
+    Eigen::Vector2d primary = local_target_pt_.head<2>() - start_pt_.head<2>();
+    if (primary.norm() < 1e-3)
+      primary = Eigen::Vector2d(std::cos(yaw), std::sin(yaw));
+    primary.normalize();
+
+    auto try_direction = [&](const Eigen::Vector2d &dir) -> bool {
+      for (int k = 1; k <= step_max; ++k)
       {
+        Eigen::Vector3d cand = start_pt_;
+        cand.head<2>() += dir * (step * k);
+        if (map->getInflateOccupancy(cand, yaw) != 0)
+          continue;
+        // 推完之后不能贴到局部目标上，否则 reboundReplan 会判 CLOSE_TO_GOAL
+        if (!keepsGoalDistance(cand))
+          break;
         RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                             "[replan] start point was inside an inflated cell; pushed forward by %.2f m",
-                             step * k);
+                             "[replan] start point was inside an inflated cell; pushed by %.2f m "
+                             "(dir=%.2f,%.2f)",
+                             step * k, dir(0), dir(1));
         start_pt_ = cand;
         return true;
       }
+      return false;
+    };
+
+    if (try_direction(primary))
+      return true;
+    if (try_direction(-primary))
+      return true;
+    for (int a = 0; a < 8; ++a)
+    {
+      const double ang = a * M_PI / 4.0;
+      const Eigen::Vector2d dir(std::cos(ang), std::sin(ang));
+      if (try_direction(dir))
+        return true;
     }
 
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
@@ -2519,9 +2796,10 @@ namespace scan_planner
       return false;
     }
 
-
-    // 第二步：起点脱困（需要“起点 → 局部目标”的方向，所以放在取到局部目标之后）。
-    // 起点若落在膨胀层里，就推向最近的自由格，别让 A*/优化器从一个“本来就撞着”的点出发。
+    // 第二步：起点脱困（方向取自"起点 → 局部目标"，所以必须在取到局部目标之后）。
+    //   起点若落在膨胀层里，就推向最近的自由格，别让 A*/优化器从一个"本来就撞着"的点出发。
+    //   注意：它对推进距离做了上限，保证推完之后仍满足 reboundReplan 的最小目标距离，
+    //   否则会出现"自己把起点推到目标旁边 → 被判 CLOSE_TO_GOAL"的自伤。
     pushStartPtOutOfInflation();
 
     // 本次重规划的关联号：A* / 优化 / 可行性日志都用它串起来
@@ -2778,6 +3056,9 @@ namespace scan_planner
         RCLCPP_ERROR(node_->get_logger(), "Reference TF missing for %.2f s; stopping",
                      reference_tf_grace_);
         reference_tf_stop_ = true;
+        // 记录进入 TF 急停的时刻：坡道上速度可能长期降不到 0.1，需要时间兜底
+        if (reference_tf_stop_since_.nanoseconds() == 0)
+          reference_tf_stop_since_ = now;
         callEmergencyStop(odom_pos_);
         flag_escape_emergency_ = false;
         setStatusReason(ReplanFailure::EMERGENCY_TF_TIMEOUT);
@@ -2789,6 +3070,8 @@ namespace scan_planner
     // 拿到了 → 清空“缺失起始时刻”，并按最新变换刷新终点
     reference_tf_missing_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     end_pt_ = current * reference_end_pt_;
+    // 到达判定基准跟随参考系刷新（定位会在世界系里漂移，基准必须同步更新）
+    mission_goal_pt_ = end_pt_;
     // 目标点已经能换算到 world 系，到达判定从这里开始才可信
     status_target_valid_ = true;
     // 执行轨迹期间，参考系若突然跳了一大步，旧轨迹的预测状态已不可信 → 重规划
@@ -2860,8 +3143,13 @@ namespace scan_planner
         world_path, duration, t_step, start_pt_);
     const double t_proj = projection.t_proj;
 
+    // 【根治 CLOSE_TO_GOAL 退化】"走不满 horizon 时的兜底点"必须取
+    // **全局轨迹的真实末端**，不能取 end_pt_：
+    //   end_pt_ 是任务最终目标，可能远在轨迹之外（例如目标被占、轨迹被截断），
+    //   拿它当兜底会让局部目标落到轨迹外、还可能正好在障碍里。
+    const Eigen::Vector3d traj_end_pt = world_path(duration);
     const auto forward_target = scan_planner::findForwardTarget(
-        world_path, duration, t_proj, horizon, t_step, end_pt_);
+        world_path, duration, t_proj, horizon, t_step, traj_end_pt);
     double target_t = forward_target.t;
     const bool target_found = forward_target.found;
     local_target_pt_ = forward_target.point;
@@ -2889,7 +3177,7 @@ namespace scan_planner
     {
       const auto fallback = scan_planner::findFallbackTarget(
           world_path, duration, t_proj, target_t, t_step,
-          acceptableTarget, end_pt_);
+          acceptableTarget, traj_end_pt);
       if (fallback.found)
       {
         local_target_pt_ = fallback.point;
@@ -2906,6 +3194,10 @@ namespace scan_planner
       }
       // 局部目标只影响“这一轮往哪走”，不改全局路径与最终终点。
     }
+
+    // 记录"本轮局部目标是否就是轨迹末端"：末端目标靠近机器人是合法到达，
+    // 不受最小距离约束（与 targetFarEnough 的 t>=duration 豁免保持同一口径）。
+    local_target_is_traj_end_ = (target_t >= duration - 1e-3);
 
     // 如果局部目标已经非常接近最终终点（进入刹车距离之内）
     const double braking_distance = max_acc > 1e-6

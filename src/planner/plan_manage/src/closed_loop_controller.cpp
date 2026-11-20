@@ -148,10 +148,11 @@ private:
 
   // 把机器人当前位置投影到当前轨迹上，返回对应时刻（窗口化，避免轨迹自交时跳到另一支；
   //   只比较 xy —— 轨迹与 odom 在 z 上有约 0.14 m 系统性偏置）。
-  //   注意：P0 阶段只是"观测用"，不参与任何控制决策。
+  //   窗口 [-1.0, +1.0] 秒：与 FSM 侧 projectOdomToTrajParam 保持一致，
+  //   否则"控制器以为的进度"和"规划器以为的进度"会差出几秒，冻结/超前判定互相打架。
   double projectOntoTrajClamped(const Eigen::Vector3d &p, double t0) const
   {
-    const double lo = std::max(0.0, t0 - 0.5);
+    const double lo = std::max(0.0, t0 - 1.0);
     const double hi = std::min(traj_duration_, t0 + 1.0);
     double t_best = std::clamp(t0, 0.0, traj_duration_);
     double d_best = std::numeric_limits<double>::max();
@@ -358,10 +359,14 @@ private:
       return;
     }
 
-    // 朝向已对齐 → 解除冻结，允许规划器继续推进轨迹
-    publishExecutionFrozen(false);
+    // 朝向已对齐 → 本拍先允许推进轨迹（卡住判定在下面，可能重新冻结）
+    // 【V4】冻结信号的最终状态必须由"本拍的最后结论"决定：
+    //   原来在这里无条件 publishExecutionFrozen(false)，而下面的卡住分支又发 true，
+    //   两者以 ~100 Hz 交替，导致 FSM 的轨迹时钟被"半冻结"、
+    //   exec_no_progress_（要求 !go2_execution_frozen_）时真时假。
     freeze_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     freeze_released_ = false;
+    bool frozen_this_cycle = false;
     // 【P3】参考时刻跟随实际进度：最多只超前实测投影 time_lead_ 秒
     const double t_proj = projectOntoTrajClamped(odom_pos_, exec_time_);
     exec_time_ = std::min(traj_duration_, std::min(exec_time_ + dt, t_proj + time_lead_));
@@ -403,6 +408,8 @@ private:
 
     // ---- 卡住检测：指令想动但实测几乎不动，持续超过 stuck_time → 判卡住 ----
     //   处理：刹停 + 发 freeze=true，让规划器把轨迹时钟一并暂停；不再满速顶
+    //   【V4】这一分支同样要有超时释放：否则一旦判卡住就永远冻结，
+    //     而 FSM 的无进展看门狗要求 !go2_execution_frozen_，会一起失效。
     const bool intend_move = std::abs(command.linear.x) > stuck_cmd_eps_ ||
                              std::abs(command.linear.y) > stuck_cmd_eps_;
     const bool moving = odom_speed_ > stuck_speed_eps_;
@@ -412,18 +419,39 @@ private:
         stuck_since_ = current_time;
       if ((current_time - stuck_since_).seconds() > stuck_time_)
       {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-                             "Robot stuck (intend move but odom_speed=%.3f m/s); freeze reference",
-                             odom_speed_);
-        publishExecutionFrozen(true);
-        publishStop();
-        return;
+        if (!stuck_freeze_released_ &&
+            (current_time - stuck_since_).seconds() > stuck_time_ + freeze_timeout_)
+        {
+          stuck_freeze_released_ = true;
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                               "Stuck freeze timeout; release trajectory clock so FSM can act");
+        }
+
+        if (!stuck_freeze_released_)
+        {
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                               "Robot stuck (intend move but odom_speed=%.3f m/s); freeze reference",
+                               odom_speed_);
+          frozen_this_cycle = true;
+          publishStop();
+        }
+        else
+        {
+          // 超时后不再冻结：让 FSM 的 no_progress 看门狗能触发重试/脱困
+          frozen_this_cycle = false;
+        }
       }
     }
     else
     {
       stuck_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+      stuck_freeze_released_ = false;
     }
+
+    // 【V4】本拍只发一次冻结状态，取值就是本拍最后结论，避免同一周期内 true/false 抖动
+    publishExecutionFrozen(frozen_this_cycle);
+    if (frozen_this_cycle)
+      return;
 
     // 发布速度指令
     cmd_vel_pub_->publish(command);
@@ -460,6 +488,8 @@ private:
   double freeze_timeout_{2.0};
   rclcpp::Time freeze_since_{0, 0, RCL_ROS_TIME};
   bool freeze_released_{false};
+  // 【V4】卡住冻结的超时释放标志（否则判卡住后会永久冻结）
+  bool stuck_freeze_released_{false};
 };
 }  // namespace scan_planner
 

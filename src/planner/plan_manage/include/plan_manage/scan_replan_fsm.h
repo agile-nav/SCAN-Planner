@@ -144,6 +144,9 @@ namespace scan_planner
     // 重规划重试节流：同一状态下连续重试的最小间隔与退避上限(秒)；enable=false 则每拍都试
     bool replan_retry_enable_{true};
     double replan_retry_min_{0.2}, replan_retry_max_{1.0};
+    // 脱困后撤的全局次数上限：即使每次都能挪动一点，也不允许无限「重试→后撤→重试」。
+    // 有真实进展 / 新目标时清零。
+    int max_escape_total_{6};
     // 收尾时是否发一条“停在原地”轨迹让控制器刹停（P1）
     bool stop_traj_on_finish_{true};
     // 到达且停稳持续多久才判为 goal_reached(秒)
@@ -157,10 +160,10 @@ namespace scan_planner
 
     // ---------- 运行时数据（程序自己维护的状态） ----------
     /* planning data */
-    bool trigger_, have_target_, have_odom_, have_new_target_;
+    bool trigger_{false}, have_target_{false}, have_odom_{false}, have_new_target_{false};
     bool preset_started_{false};
-    bool rviz_height_ready_;
-    bool go2_execution_frozen_;
+    bool rviz_height_ready_{false};
+    bool go2_execution_frozen_{false};
     // 外部使能（/motion_enabled，遥控器 START/B）：false 时冻结轨迹不规划不下发
     bool motion_enabled_{false};
     // 无外部使能时的初始值：真机默认 false（必须等 START）；仿真由 launch 置 true 才能跑起来
@@ -175,12 +178,12 @@ namespace scan_planner
     uint64_t replan_rid_{0};
     bool diag_verbose_{false};
     rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr diag_param_cb_;
-    bool enable_fail_safe_, need_hover_stop_;
-    FSM_EXEC_STATE exec_state_;
+    bool enable_fail_safe_{true}, need_hover_stop_{false};
+    FSM_EXEC_STATE exec_state_{INIT};
     int continuously_called_times_{0};
     int replan_fail_count_{0};
     int max_replan_fail_count_{1000};
-    rclcpp::Time last_freeze_update_time_;
+    rclcpp::Time last_freeze_update_time_{0, 0, RCL_ROS_TIME};
     // 当前局部轨迹的墙钟提交时刻（P19b：无进展看门狗门槛）
     rclcpp::Time traj_commit_wall_{0, 0, RCL_ROS_TIME};
     // 轨迹投影进度的历史最好值（P21：无进展判据）
@@ -189,10 +192,10 @@ namespace scan_planner
     int stuck_retry_count_{0};
     // 当前是否正在执行后撤轨迹
     bool escape_active_{false};
-    // 是否已经用过后撤（无位移时会按不同距离重试）
-    bool escape_used_{false};
     // 后撤策略序号：0=0.35m, 1=0.21m, 2=0.49m
     int escape_strategy_{0};
+    // 后撤总次数（不因单次有位移而清零）：防止「重试→后撤→重试」无限循环
+    int escape_total_{0};
     // 后撤固定时长 [s]
     double escape_duration_{3.0};
     // 后撤起点（用于判断是否真的动了）
@@ -202,23 +205,32 @@ namespace scan_planner
     // 最近实际走过的位姿历史（用于沿原路后撤）
     std::deque<Eigen::Vector3d> odom_history_;
 
-    Eigen::Vector3d odom_pos_, odom_vel_, odom_acc_; // odometry state
-    Eigen::Quaterniond odom_orient_;
+    Eigen::Vector3d odom_pos_{Eigen::Vector3d::Zero()}, odom_vel_{Eigen::Vector3d::Zero()},
+        odom_acc_{Eigen::Vector3d::Zero()}; // odometry state
+    Eigen::Quaterniond odom_orient_{Eigen::Quaterniond::Identity()};
 
-    Eigen::Vector3d init_pt_, start_pt_, start_vel_, start_acc_, start_yaw_; // start state
+    Eigen::Vector3d init_pt_{Eigen::Vector3d::Zero()}, start_pt_{Eigen::Vector3d::Zero()},
+        start_vel_{Eigen::Vector3d::Zero()}, start_acc_{Eigen::Vector3d::Zero()},
+        start_yaw_{Eigen::Vector3d::Zero()}; // start state
     Eigen::Vector3d end_pt_{Eigen::Vector3d::Zero()};                        // goal state
     Eigen::Vector3d end_vel_{Eigen::Vector3d::Zero()};
-    Eigen::Vector3d local_target_pt_, local_target_vel_;                     // local target state
+    Eigen::Vector3d local_target_pt_{Eigen::Vector3d::Zero()},
+        local_target_vel_{Eigen::Vector3d::Zero()};                     // local target state
+    // 本轮局部目标是否就是全局轨迹末端（此时"靠近目标"是合法到达，
+    // 不受"替代点不能贴着机器人"的最小距离约束；见 getLocalTarget/targetFarEnough）
+    bool local_target_is_traj_end_{false};
     Eigen::Vector3d reference_end_pt_{Eigen::Vector3d::Zero()};
     Eigen::Isometry3d planning_reference_to_world_{Eigen::Isometry3d::Identity()};
     Eigen::Isometry3d last_reference_to_world_{Eigen::Isometry3d::Identity()};
     bool have_last_reference_transform_{false};
     bool reference_tf_stop_{false};
+    // 进入 TF 急停的时刻（用于"坡道微漂导致永远停着"的兜底恢复）
+    rclcpp::Time reference_tf_stop_since_{0, 0, RCL_ROS_TIME};
     bool reference_tf_jump_failed_{false};
     bool reference_jump_replan_{false};
     rclcpp::Time reference_tf_missing_since_{0, 0, RCL_ROS_TIME};
     std::vector<Eigen::Vector3d> active_waypoints_;
-    int current_wp_;
+    int current_wp_{0};
 
     // ---------- 运行状态发布(running/goal_reached) ----------
     // 是否收到过目标：没收到过属于 idle，不上话题
@@ -226,6 +238,17 @@ namespace scan_planner
     // 当前目标点是否已换算到 world 系（mode3 需要等第一帧参考 TF）
     // false 时 updatePlannerStatus 不做到达判定，避免用陈旧/未初始化的 end_pt_ 误判“已到达”
     bool status_target_valid_{false};
+    // 任务的**真实最终目标**（world 系）。到达判定只看它，不看 end_pt_：
+    //   end_pt_ 会被 adjustGlobalTargetIfOccupied / 局部目标逻辑改写，
+    //   用它判到达会在"目标点被占、截断到半路"时误报 goal_reached。
+    Eigen::Vector3d mission_goal_pt_{Eigen::Vector3d::Zero()};
+    // 目标点因被占据而被截断（到不了原目标）：用于上报 target_occupied
+    bool mission_goal_truncated_{false};
+    // 被截断后"实际可达的最后一个自由点"（world 系）。
+    //   planFromCurrentTraj 重建全局轨迹时用它作终点，否则会把轨迹重新拉回
+    //   真实目标（那里是障碍）→ 又截断一次 → 每轮重复"规划-截断"。
+    Eigen::Vector3d truncated_reachable_pt_{Eigen::Vector3d::Zero()};
+    bool have_truncated_reachable_pt_{false};
     // 当前是否已判为 goal_reached（锁存，直到收到新目标）
     bool status_is_stop_{false};
     // 是否已有"上一次目标点"，用于重复路径去重
@@ -304,6 +327,10 @@ namespace scan_planner
     void notePlanResult(bool ok);
     // 新目标/新航点/恢复时清除退避，保证第一次尝试不等待
     void resetPlanRetry();
+    // 放弃当前任务（give-up / 急停退出）：清目标并复位状态话题
+    void abandonMission(const char *reason);
+    // 全局轨迹是否可用（navi_mode=3 下 resume 前必须为真）
+    bool hasUsableGlobalTraj() const;
     // 把实测位置投影到当前局部轨迹，返回对应轨迹时刻（P0：仅诊断用）
     double projectOdomToTrajParam(double t_hint) const;
 
@@ -351,6 +378,10 @@ namespace scan_planner
     void publishCurrentTrajectory();
     // 向 /local_planner/status 发布状态（空串不发布）
     void publishPlannerStatus(const std::string &state);
+    // 把门控（未使能/暂停/error 锁存）施加到状态名上。
+    //   发布与"是否算状态切换"两处必须用同一个函数，否则会出现
+    //   "比较用原始值、存储用门控值"导致每拍都判定为切换并重复发布。
+    std::string gateStatusName(const std::string &state) const;
     // 把状态拼成 JSON（state / msgs）
     std::string buildStatusJson(const std::string &state);
     // “如果没有门控，本该报什么状态”（只读、无副作用），供 JSON 的 inner 字段使用
