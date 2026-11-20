@@ -47,7 +47,8 @@ def _setup(context):
     if not gazebo:
         raise RuntimeError(
             "robot profile '%s' has no Gazebo assets (missing 'gazebo:' section). "
-            "Use `ros2 launch scan_planner run.launch.py robot:=%s "
+            "A2/Go2-W are intentionally unsupported. Use "
+            "`ros2 launch scan_planner run.launch.py robot:=%s "
             "is_real_world:=false` for the kinematic simulation." % (robot, robot))
 
     description_share = get_package_share_directory(meta["description_package"])

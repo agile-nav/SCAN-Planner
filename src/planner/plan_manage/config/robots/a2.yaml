@@ -109,4 +109,4 @@ robot_topics:
 #     sensor_mount_xyz: [0.0, 0.0, 0.0]
 #     sensor_mount_rpy: [-1.570796, 0.0, -1.570796]
 
-# 暂无 Gazebo 物理资产；robot_gazebo.launch.py 会明确提示不支持。
+# A2 按设计不做 Gazebo 仿真；robot_gazebo.launch.py 会明确提示不支持。

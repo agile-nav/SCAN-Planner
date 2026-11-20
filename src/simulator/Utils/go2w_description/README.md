@@ -43,9 +43,9 @@ ros2 launch scan_planner run.launch.py robot:=go2w is_real_world:=false
 
 ## 注意
 
-- 官方 URDF **没有 `<gazebo>` 标签**，也没有 ROS 2 `ros2_control` / Fortress 插件。
-  因此 `robot_gazebo.launch.py` 目前不支持 Go2-W；要做 Gazebo 物理仿真，需要另外
-  增加 Gazebo 插件、轮子摩擦/接触参数和轮速控制器。
+- A2/Go2-W 按设计**不做 Gazebo 物理仿真**；本包只用于 `robot_view.launch.py` 和主仿真。
+- 官方 URDF 没有 `<gazebo>` 标签，也没有 ROS 2 `ros2_control` / Fortress 插件；
+  因此不提供 Gazebo 资产。
 - 官方 URDF 的 `base` collision 仍是 `0.3762 × 0.0935 × 0.114`（和 Go2 相同）；
   规划器用的碰撞几何不读 URDF，而是 `config/robots/go2w.yaml` 的
   `double_cylinder_radius/offset` 等参数。

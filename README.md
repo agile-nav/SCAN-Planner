@@ -263,7 +263,7 @@ Go2 四足机器人物理模型基于 Gazebo Fortress、`ros_gz_sim` 和 `gz_ros
 ros2 launch scan_planner robot_gazebo.launch.py robot:=go2
 ```
 
-`robot_gazebo` 目前只支持 Go2（A2 没有 Gazebo 资产；Go2-W 官方 URDF 还没有 Gazebo 插件）。
+`robot_gazebo` 只支持 Go2；A2 和 Go2-W 按设计不提供 Gazebo 物理仿真（主仿真仍可用）。
 
 如需在不启动物理仿真时查看模型，可运行：
 

@@ -36,5 +36,5 @@ ros2 launch scan_planner run.launch.py is_real_world:=false navi_mode:=1 \
 
 ## 注意
 
-本包只装了 `urdf` 与 `meshes`，没有 Gazebo 相关部分（`go2_description` 才有
-`xacro` / `worlds` / `config` / `ros2_control`）。
+本包只装 `urdf` 与 `meshes`；A2 按设计不做 Gazebo 仿真
+（`go2_description` 才有 Gazebo 资产）。

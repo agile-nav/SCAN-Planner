@@ -66,7 +66,7 @@ ros2 launch scan_planner robot_gazebo.launch.py robot:=go2
 | 入口 | A2 | Go2 | Go2-W |
 |---|---|---|---|
 | `robot_view.launch.py` | ✅ | ✅ | ✅（16 关节） |
-| `robot_gazebo.launch.py` | ❌ 无 Gazebo 资产 | ✅ | ❌ 官方 URDF 暂无 Gazebo 插件 |
+| `robot_gazebo.launch.py` | ❌ 按设计不做 | ✅ | ❌ 按设计不做 |
 
 `robot_gazebo` 对没有 `gazebo:` 段的机型会明确报错，不会静默启动空场景。
 Gazebo 资产路径由机型档案提供：

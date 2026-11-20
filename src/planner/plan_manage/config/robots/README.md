@@ -41,7 +41,7 @@ ros2 launch scan_planner run.launch.py robot:=myrobot is_real_world:=false
 | `quadruped_gait_publisher` | 可选 | 不启动 | 视觉步态/轮子转动 |
 | `pcl_render_node` | 可选 | 不启动 | 仿真传感器安装位姿 |
 | `robot_topics` | 不需要（仿真固定 `/quad_0/*`） | 需要 | 真机话题映射 |
-| `gazebo` | 可选 | 不需要 | 只有具备 Gazebo 资产的机型才填 |
+| `gazebo` | 仅 Go2 | 不需要 | A2/Go2-W 按设计不做 Gazebo 仿真 |
 
 ## 最小必填项
 
