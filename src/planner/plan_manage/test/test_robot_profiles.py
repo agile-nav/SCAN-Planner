@@ -165,8 +165,8 @@ REQUIRED_COMMON_SECTIONS = (
     "scan_planner_node",
     "closed_loop_controller",
     "open_loop_controller",
-    "go2_kinematic_sim",
-    "go2_gait_publisher",
+    "quadruped_kinematic_sim",
+    "quadruped_gait_publisher",
     "mockamap_node",
     "pcl_render_node",
     "odom_visualization",
@@ -268,7 +268,7 @@ def test_go2w_wheel_joint_names_match_urdf():
         text = handle.read()
     urdf_wheels = set(re.findall(
         r'<joint name="([A-Z]{2}_foot_joint)" type="continuous"', text))
-    params = profile["go2_gait_publisher"]["ros__parameters"]
+    params = profile["quadruped_gait_publisher"]["ros__parameters"]
     assert set(params["wheel_joint_names"]) == urdf_wheels
 
 

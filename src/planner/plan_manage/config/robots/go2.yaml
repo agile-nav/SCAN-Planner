@@ -67,7 +67,7 @@ closed_loop_controller:
   ros__parameters:
     max_vx: 1.0
 
-go2_kinematic_sim:
+quadruped_kinematic_sim:
   ros__parameters:
     max_vx: 1.0
 

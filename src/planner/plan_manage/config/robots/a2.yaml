@@ -24,7 +24,7 @@ robot:
 #   启动时传 robot:=<机型> 即可，不需要改任何代码。
 #
 # 【两段内容】
-#   scan_planner_node / closed_loop_controller / go2_kinematic_sim
+#   scan_planner_node / closed_loop_controller / quadruped_kinematic_sim
 #     各节点的参数覆盖：只写需要覆盖的项，不用复制整份 common.yaml
 #   robot_topics
 #     不是节点参数，由 run.launch.py 读取，用来生成话题重映射与初始位置
@@ -79,7 +79,7 @@ closed_loop_controller:
     # 转向角速度上限(弧度/秒)
     max_vyaw: 1.2
 
-go2_kinematic_sim:
+quadruped_kinematic_sim:
   ros__parameters:
     # 仅在仿真下使用；与上面的速度上限保持一致
     max_vx: 1.0

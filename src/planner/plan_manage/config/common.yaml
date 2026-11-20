@@ -281,9 +281,9 @@ open_loop_controller:
     init_z: 0.3
     init_yaw: 0.0
 
-# ---- 运动学仿真器 go2_kinematic_sim ----
+# ---- 运动学仿真器 quadruped_kinematic_sim ----
 # 接收 cmd_vel，用简单积分算出机器人位置，再发里程计，形成闭环。
-go2_kinematic_sim:
+quadruped_kinematic_sim:
   ros__parameters:
     use_sim_time: false
     init_x: -19.0
@@ -301,9 +301,9 @@ go2_kinematic_sim:
     frame_id: world
     child_frame_id: base
 
-# ---- 步态发布器 go2_gait_publisher ----
+# ---- 步态发布器 quadruped_gait_publisher ----
 # 纯动画：让 RViz 里的 Go2 腿按速度摆起来，不影响规划。
-go2_gait_publisher:
+quadruped_gait_publisher:
   ros__parameters:
     use_sim_time: false
     rate: 60.0

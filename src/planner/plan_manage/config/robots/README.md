@@ -37,8 +37,8 @@ ros2 launch scan_planner run.launch.py robot:=myrobot is_real_world:=false
 |---|---|---|---|
 | `robot.description_package` / `model_file` / `model_args` | 需要 | 不需要 | 真机模型/TF 由宇树驱动/LIO 提供 |
 | `scan_planner_node` 的几何/速度/视野/传感器参数 | 需要 | 需要 | 规划器与碰撞都依赖 |
-| `go2_kinematic_sim` | 需要 | 不启动 | 仿真假机器人 |
-| `go2_gait_publisher` | 可选 | 不启动 | 视觉步态/轮子转动 |
+| `quadruped_kinematic_sim` | 需要 | 不启动 | 仿真假机器人 |
+| `quadruped_gait_publisher` | 可选 | 不启动 | 视觉步态/轮子转动 |
 | `pcl_render_node` | 可选 | 不启动 | 仿真传感器安装位姿 |
 | `robot_topics` | 不需要（仿真固定 `/quad_0/*`） | 需要 | 真机话题映射 |
 | `gazebo` | 可选 | 不需要 | 只有具备 Gazebo 资产的机型才填 |

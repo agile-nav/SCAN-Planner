@@ -187,8 +187,8 @@ def _setup(context):
     # 机型档案里与各节点对应的参数段（没有就是空 dict，等于不覆盖）
     planner_profile_params = _profile_params(profile, "scan_planner_node")
     controller_profile_params = _profile_params(profile, "closed_loop_controller")
-    sim_profile_params = _profile_params(profile, "go2_kinematic_sim")
-    gait_profile_params = _profile_params(profile, "go2_gait_publisher")
+    sim_profile_params = _profile_params(profile, "quadruped_kinematic_sim")
+    gait_profile_params = _profile_params(profile, "quadruped_gait_publisher")
     planner_overrides = {
         **common,
         "fsm.navi_mode": navi_mode,
@@ -285,8 +285,8 @@ def _setup(context):
                     package="scan_planner",
     # ---- 假机器人（仅仿真）----
     # 接收 cmd_vel 算出位置，再发 body_pose，和控制器组成闭环。
-                    executable="go2_kinematic_sim",
-                    name="go2_kinematic_sim",
+                    executable="quadruped_kinematic_sim",
+                    name="quadruped_kinematic_sim",
                     output="screen",
                     parameters=[
                         common_yaml,
@@ -333,8 +333,8 @@ def _setup(context):
                     package="scan_planner",
     # ---- 步态动画（仅仿真）----
     # 纯视觉效果：让 RViz 里的 Go2 腿动起来。
-                    executable="go2_gait_publisher",
-                    name="go2_gait_publisher",
+                    executable="quadruped_gait_publisher",
+                    name="quadruped_gait_publisher",
                     output="screen",
                     parameters=[common_yaml, gait_profile_params, common],
                     remappings=[("body_pose", body_pose)],

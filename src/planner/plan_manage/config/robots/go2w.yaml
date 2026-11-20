@@ -66,11 +66,11 @@ closed_loop_controller:
   ros__parameters:
     max_vx: 1.0
 
-go2_kinematic_sim:
+quadruped_kinematic_sim:
   ros__parameters:
     max_vx: 1.0
 
-go2_gait_publisher:
+quadruped_gait_publisher:
   ros__parameters:
     # 4 个轮关节：只在 RViz 里做视觉转动，不影响规划闭环
     wheel_joint_names:

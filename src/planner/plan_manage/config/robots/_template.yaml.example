@@ -79,14 +79,14 @@ closed_loop_controller:
   ros__parameters:
     max_vx: 1.0
 
-go2_kinematic_sim:
+quadruped_kinematic_sim:
   ros__parameters:
     max_vx: 1.0
 
 # ---- 3. 仿真视觉步态（可选）----
 # 如果新机型也是 12 个腿关节，默认即可；
 # 如果是轮足，把 4 个轮关节名填进来（只做视觉转动，不参与规划）。
-# go2_gait_publisher:
+# quadruped_gait_publisher:
 #   ros__parameters:
 #     wheel_joint_names: [FL_foot_joint, FR_foot_joint, RL_foot_joint, RR_foot_joint]
 #     wheel_radius: 0.09

@@ -11,8 +11,8 @@
 #   scan_planner_node     规划器主程序（最重要）
 #   closed_loop_controller 闭环控制器
 #   open_loop_controller   开环控制器
-#   go2_kinematic_sim      假机器人
-#   go2_gait_publisher     步态动画
+#   quadruped_kinematic_sim      假机器人
+#   quadruped_gait_publisher     步态动画
 # ============================================================================
 cmake_minimum_required(VERSION 3.8)
 # 注意：包名叫 scan_planner，但目录名是 plan_manage（两者不一致是历史原因）。
@@ -56,7 +56,7 @@ ament_target_dependencies(scan_planner_node ${scan_planner_dependencies})
 target_link_libraries(scan_planner_node Eigen3::Eigen)
 
 # 下面用一个循环批量生成 4 个较小的可执行程序，它们的依赖是一样的。
-foreach(target open_loop_controller closed_loop_controller go2_kinematic_sim go2_gait_publisher)
+foreach(target open_loop_controller closed_loop_controller quadruped_kinematic_sim quadruped_gait_publisher)
   add_executable(${target} src/${target}.cpp)
   target_include_directories(${target} PRIVATE include)
   ament_target_dependencies(${target}
@@ -69,7 +69,7 @@ endforeach()
 # launch/config 装到 share/scan_planner（运行时靠它找参数文件和启动脚本）。
 install(TARGETS
   scan_planner_node open_loop_controller closed_loop_controller
-  go2_kinematic_sim go2_gait_publisher
+  quadruped_kinematic_sim quadruped_gait_publisher
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME} OPTIONAL)

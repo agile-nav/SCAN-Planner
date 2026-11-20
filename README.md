@@ -120,7 +120,7 @@ ros2 launch scan_planner run.launch.py \
 档案只写“要覆盖的项”（不用复制整份 `common.yaml`），启动时按 **`common.yaml` → 机型档案 → 命令行参数** 的顺序叠加（后者覆盖前者）。档案里主要有三部分：
 
 - `robot`：机型元数据（描述包、模型文件、xacro 参数、根节点）
-- `scan_planner_node` / `closed_loop_controller` / `go2_kinematic_sim`：各节点的参数覆盖
+- `scan_planner_node` / `closed_loop_controller` / `quadruped_kinematic_sim`：各节点的参数覆盖
 - `robot_topics`：不是节点参数，由启动文件读取，用来生成真机话题重映射与初始位置
 
 新增机型：复制 `config/robots/_template.yaml.example` 为 `<机型>.yaml`，按注释填写。模板后缀是 `.yaml.example`，不会被 `robot:=` 误选；字段分类和最小必填项见 `config/robots/README.md`。
@@ -189,7 +189,7 @@ tools/sim_check.sh go2        # 只跑一个
 | # | 检查项 | 怎么看 |
 |---|---|---|
 | ① | 模型显示 | RViz 里能看到该机型外形（`robot_description` 生成成功、无 xacro 报错） |
-| ② | TF `world -> base` | `ros2 run tf2_ros tf2_echo world base`（由 `go2_kinematic_sim` 广播；模型根节点必须是 `base`） |
+| ② | TF `world -> base` | `ros2 run tf2_ros tf2_echo world base`（由 `quadruped_kinematic_sim` 广播；模型根节点必须是 `base`） |
 | ③ | 跟速度走 | `ros2 topic pub -r 10 /cmd_vel ...` 后 base 位置会动 |
 | ④ | 腿部动画 + 碰撞模型 | `/joint_states` 有 12 个腿关节；Go2-W 另含 4 个轮关节（共 16）；`/self_inflation` 两个双圆柱可见 |
 

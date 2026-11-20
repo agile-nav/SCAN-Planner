@@ -1,8 +1,8 @@
 // ============================================================================
-// 文件：src/planner/plan_manage/src/go2_gait_publisher.cpp
+// 文件：src/planner/plan_manage/src/quadruped_gait_publisher.cpp
 //
 // 【这个文件是干什么的】
-//   “步态发布器”：纯粹为了在 RViz 里让 Go2 的腿动起来好看。
+//   “步态发布器”：纯粹为了在 RViz 里让四足机型的腿动起来好看。
 //   它根据当前速度，虚拟地生成 12 个关节的角度并发布 joint_states（小跑步态）。
 //
 // 【重要】
@@ -22,12 +22,12 @@
 namespace scan_planner
 {
 // 步态发布器类（本身是一个 ROS 节点）。
-class Go2GaitPublisher : public rclcpp::Node
+class QuadrupedGaitPublisher : public rclcpp::Node
 {
 public:
-  // 构造函数：节点取名 go2_gait_publisher，读参数（步频、摆腿幅度等），
+  // 构造函数：节点取名 quadruped_gait_publisher，读参数（步频、摆腿幅度等），
   // 订阅 body_pose（用它的速度决定走多快），创建定时器发布关节角。
-  Go2GaitPublisher() : Node("go2_gait_publisher")
+  QuadrupedGaitPublisher() : Node("quadruped_gait_publisher")
   {
     // 每秒发布多少帧关节状态
     const double rate = declare_parameter<double>("rate", 60.0);
@@ -52,13 +52,13 @@ public:
     // 订阅里程计：用它的速度决定腿摆多大
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
         "body_pose", rclcpp::SensorDataQoS(),
-        std::bind(&Go2GaitPublisher::odomCallback, this, std::placeholders::_1));
+        std::bind(&QuadrupedGaitPublisher::odomCallback, this, std::placeholders::_1));
     // 发布 12 个关节的角度（robot_state_publisher 用它让 RViz 里的模型动起来）
     joint_pub_ = create_publisher<sensor_msgs::msg::JointState>("joint_states", 10);
     // 按 rate 周期性地更新并发布关节角
     timer_ = create_wall_timer(
         std::chrono::duration<double>(1.0 / std::max(1.0, rate)),
-        std::bind(&Go2GaitPublisher::timerCallback, this));
+        std::bind(&QuadrupedGaitPublisher::timerCallback, this));
 
     // 12 个关节的名字：前/后腿 × 左/右 × 髋/大腿/小腿
     joint_msg_.name = {
@@ -240,7 +240,7 @@ private:
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<scan_planner::Go2GaitPublisher>());
+  rclcpp::spin(std::make_shared<scan_planner::QuadrupedGaitPublisher>());
   rclcpp::shutdown();
   return 0;
 }

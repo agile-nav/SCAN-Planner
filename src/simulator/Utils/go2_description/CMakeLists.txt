@@ -8,7 +8,7 @@ project(go2_description)
 
 find_package(ament_cmake REQUIRED)
 
-foreach(directory config dae launch meshes urdf xacro worlds)
+foreach(directory config launch meshes urdf xacro worlds)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${directory}")
     install(DIRECTORY ${directory} DESTINATION share/${PROJECT_NAME})
   endif()

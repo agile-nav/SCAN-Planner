@@ -1,5 +1,5 @@
 // ============================================================================
-// 文件：src/planner/plan_manage/src/go2_kinematic_sim.cpp
+// 文件：src/planner/plan_manage/src/quadruped_kinematic_sim.cpp
 //
 // 【这个文件是干什么的】
 //   “运动学仿真器”：一个极简的假机器人。
@@ -30,12 +30,12 @@
 namespace scan_planner
 {
 // 仿真器类（本身是一个 ROS 节点）。
-class Go2KinematicSim : public rclcpp::Node
+class QuadrupedKinematicSim : public rclcpp::Node
 {
 public:
-  // 构造函数：节点取名 go2_kinematic_sim，读参数（初始位置、限速、仿真频率），
+  // 构造函数：节点取名 quadruped_kinematic_sim，读参数（初始位置、限速、仿真频率），
   // 订阅 cmd_vel，创建发布器 body_pose，并创建定时器执行 simCallback()。
-  Go2KinematicSim() : Node("go2_kinematic_sim")
+  QuadrupedKinematicSim() : Node("quadruped_kinematic_sim")
   {
     // 机器人的初始位置和初始朝向
     x_ = declare_parameter<double>("init_x", 0.0);
@@ -61,16 +61,16 @@ public:
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("body_pose", 100);
     // 订阅控制器的速度指令
     cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-        "cmd_vel", 20, std::bind(&Go2KinematicSim::cmdCallback, this, std::placeholders::_1));
+        "cmd_vel", 20, std::bind(&QuadrupedKinematicSim::cmdCallback, this, std::placeholders::_1));
     // 记录“上次收到指令的时间”和“上次积分时间”
     last_cmd_time_ = now();
     last_sim_time_ = now();
     // 按 sim_rate 周期性积分更新位置
     timer_ = create_wall_timer(
         std::chrono::duration<double>(1.0 / std::max(1.0, sim_rate)),
-        std::bind(&Go2KinematicSim::simCallback, this));
+        std::bind(&QuadrupedKinematicSim::simCallback, this));
     // 启动日志
-    RCLCPP_INFO(get_logger(), "Go2 kinematic simulator ready");
+    RCLCPP_INFO(get_logger(), "Quadruped kinematic simulator ready");
   }
 
 private:
@@ -193,7 +193,7 @@ private:
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<scan_planner::Go2KinematicSim>());
+  rclcpp::spin(std::make_shared<scan_planner::QuadrupedKinematicSim>());
   rclcpp::shutdown();
   return 0;
 }
