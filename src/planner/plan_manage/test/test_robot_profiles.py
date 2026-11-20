@@ -140,6 +140,12 @@ def test_go2_profiles_follow_coverage_formula(robot, length, width):
 
 
 @pytest.mark.parametrize("robot", ROBOTS)
+def test_profiles_do_not_hardcode_navi_mode(robot):
+    """navi_mode 是本次运行模式（launch 参数），不是机型属性。"""
+    assert "fsm.navi_mode" not in params_of(robot)
+
+
+@pytest.mark.parametrize("robot", ROBOTS)
 def test_planning_horizon_fits_local_map(robot):
     """前视距离必须落在局部地图可信范围内。
 
@@ -148,6 +154,7 @@ def test_planning_horizon_fits_local_map(robot):
     """
     params = effective_params(robot)
     horizon = float(params["fsm.planning_horizon"])
+    manager_horizon = float(params.get("manager.planning_horizon", horizon))
     radius = float(params["grid_map.double_cylinder_radius"])
     range_x = float(params["grid_map.local_update_range_x"])
     range_y = float(params["grid_map.local_update_range_y"])
@@ -156,6 +163,9 @@ def test_planning_horizon_fits_local_map(robot):
 
     assert 0.0 < horizon <= min(range_x, range_y) - radius + 1e-9, (
         f"{robot}: planning_horizon={horizon} 超出局部更新范围 "
+        f"(range={min(range_x, range_y)}, radius={radius})")
+    assert 0.0 < manager_horizon <= min(range_x, range_y) - radius + 1e-9, (
+        f"{robot}: manager.planning_horizon={manager_horizon} 超出局部更新范围 "
         f"(range={min(range_x, range_y)}, radius={radius})")
     assert range_x <= size_x / 2.0 + 1e-9 and range_y <= size_y / 2.0 + 1e-9, (
         f"{robot}: local_update_range 不能超过滑动地图半宽")
@@ -279,7 +289,9 @@ def test_template_profile_is_complete():
         data = yaml.safe_load(handle) or {}
     assert data["robot"]["name"] == "myrobot"
     params = data["scan_planner_node"]["ros__parameters"]
-    for key in ("fsm.planning_horizon", "grid_map.double_cylinder_radius",
+    assert "fsm.navi_mode" not in params, "模板不应写死 fsm.navi_mode"
+    for key in ("fsm.planning_horizon", "manager.planning_horizon",
+                "grid_map.double_cylinder_radius",
                 "grid_map.double_cylinder_offset", "grid_map.body_height",
                 "grid_map.self_filter_radius",
                 "grid_map.obstacles_inflation_z_up",

@@ -31,8 +31,7 @@ robot:
 # ============================================================================
 scan_planner_node:
   ros__parameters:
-    # 目标怎么来：A2 上用参考路径模式（订阅外部 global_planner 的 /global_path）
-    fsm.navi_mode: 3
+    # 目标来源由 launch 参数 navi_mode:=1|2|3 决定，不写进机型档案
     # 规划视野(米)：局部与全局各用一个值（实机 A2 实测取值）
     fsm.planning_horizon: 5.0
     manager.planning_horizon: 5.0

@@ -35,11 +35,11 @@ robot:
 # ---- 2. 规划器参数（仿真 + 真机共用）----
 scan_planner_node:
   ros__parameters:
-    # 目标来源：1=外部目标，2=航点文件，3=参考路径
-    fsm.navi_mode: 3
+    # 目标来源由 launch 参数 navi_mode:=1|2|3 决定，不写进机型档案
 
     # 规划视野（米）：必须 <= min(local_update_range) - double_cylinder_radius
     fsm.planning_horizon: 4.5
+    manager.planning_horizon: 4.5
 
     # 机器人碰撞近似：前后两个圆柱
     # 要求 offset <= radius，且两圆并集覆盖站立投影矩形
