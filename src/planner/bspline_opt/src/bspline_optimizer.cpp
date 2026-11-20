@@ -25,7 +25,7 @@
 namespace scan_planner
 {
 
-// 读取所有优化参数（从 planner.yaml 的 optimization.* 段）。
+// 读取所有优化参数（从 common.yaml 的 optimization.* 段）。
   void BsplineOptimizer::setParam(rclcpp::Node *node)
   {
     // 小工具：读取一个 double 参数（没声明过就先声明）

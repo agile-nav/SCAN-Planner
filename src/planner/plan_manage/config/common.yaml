@@ -1,0 +1,422 @@
+# ============================================================================
+# 文件：config/common.yaml —— 三机型共用参数（固定参数）
+#
+# 【这个文件是干什么的】
+#   所有机型共用的默认参数都在这里；某个机型需要不同的值，写到
+#   config/robots/<机型>.yaml 的对应节点段里，不要改本文件里的“通用值”。
+#
+# 【叠加顺序】（后者覆盖前者）
+#   common.yaml
+#     → config/robots/<机型>.yaml
+#       → 命令行 / launch 参数（临时调试）
+#
+# 【怎么选机型】
+#   ros2 launch scan_planner run.launch.py robot:=a2|go2|go2w
+#   仿真时再加 is_real_world:=false。
+#
+# 【文件分节】
+#   本文件按节点分节：scan_planner_node / closed_loop_controller / ...
+#   ROS 2 会把同一份文件传给各节点，节点只读取与自己节点名匹配的 section。
+# ============================================================================
+
+# ============================================================================
+# 一、规划器 scan_planner_node
+# ============================================================================
+# ============================================================================
+# 文件：config/common.yaml —— 规划器 scan_planner_node 的参数（原 planner.yaml）
+#
+# 【这个文件是干什么的】
+#   程序启动时会把这里的参数读进去。改这里就能改规划行为，不用重新编译。
+#   参数名用点号分层，例如 fsm.navi_mode 就是 fsm 下面的 navi_mode。
+#
+# 【四大部分】
+#   fsm.*          状态机行为（怎么给目标、什么时候重规划）
+#   grid_map.*     地图与传感器（分辨率、机器人形状、障碍判定概率）
+#   manager.*      物理限制（最大速度/加速度、控制点间距）
+#   optimization.* 轨迹优化的权重（平滑、避障、可行性各占多少）
+# ============================================================================
+scan_planner_node:
+  ros__parameters:
+    use_sim_time: false
+
+    # 目标怎么来：1=RViz 点选目标, 2=预设航点, 3=订阅外部路径
+    # 注意：改成 2 时需要同时提供 fsm.waypoints（见 keypoints.example.yaml）。
+    fsm.navi_mode: 1
+    # 当“轨迹起点”和“当前位置”相差超过这个距离(米)时，就重新规划
+    fsm.thresh_replan: 1.0
+    # 离终点小于这个距离(米)就不用再重规划了，直接走完
+    fsm.thresh_no_replan: 0.1
+    # 规划视野(米)：每次只规划前方这么远，取这个距离处的点作为局部目标。
+    # 必须 <= 滑动地图半宽 - 圆柱半径（默认 10 m 图 → 半宽 5 m）；
+    # 7.5 m 会落到局部地图外，前视点被 getInflateOccupancy 当成障碍。
+    # getLocalTarget 里还会按 local_update_range 再夹一次，这里是配置层的默认。
+    fsm.planning_horizon: 4.5
+    # 若“撞上障碍”预计发生在这个时间(秒)之内，且来不及重规划，就紧急停止
+    fsm.emergency_time: 1.0
+    # 是否允许紧急停止后自动恢复（速度降到很低时重新尝试规划）
+    fsm.fail_safe: true
+    # 连续规划失败超过这个次数，就强制进入紧急停止
+    fsm.max_replan_fail_count: 20
+    # /motion_enabled 的初始值：真机必须等遥控器 START(默认 false)；
+    # 仿真没有遥控器，run.launch.py 的 auto_enable=true 会在仿真下把它置 true，否则不会动。
+    fsm.motion_enabled_default: false
+
+    # ---- 运行状态(running/goal_reached)判定（发到 /local_planner/status）----
+    # 到达目标的 2D 水平距离容差(米)：与控制器 finish_dist 口径一致
+    fsm.status_goal_tol: 0.20
+    # 到达判定的"退出"阈值(米)：滞回用，大于进入阈值 → 边界抖动不会反复重置去抖
+    fsm.status_goal_tol_exit: 0.30
+    # "速度为零"阈值(米/秒)
+    fsm.status_speed_tol: 0.05
+    # "已停"判定的"退出"阈值(米/秒)：滞回用
+    fsm.status_speed_tol_exit: 0.10
+    # 到达且停稳持续多久才判为 goal_reached(秒)
+    fsm.status_stop_debounce: 1.0
+    # 心跳频率(Hz)：周期性重发当前状态；0 表示关闭
+    fsm.status_heartbeat_hz: 1.0
+    # 判定"目标变了"的位置阈值(米)：新目标点与上一次相差超过它才算新目标
+    fsm.status_goal_change_eps: 0.05
+    # 持续规划失败/急停(碰撞、TF异常)多久判为 error(秒)
+    fsm.status_error_time: 3.0
+    # 门控状态名：未使能(disabled) / 任务暂停(stopped，沿用旧名)
+    fsm.status_name_disabled: disabled
+    fsm.status_name_paused: stopped
+    # ---- 执行进展(stuck)检测（只用于判"走完"，与上面的状态话题判据独立）----
+    # 无进展窗口(秒)：这么久没有更靠近目标 + 已停 + 非原地转向 → 判为卡住
+    fsm.finish_stuck_window: 3.0
+    # 窗口内距离至少要比历史最小值再小这么多才算"有进展"(米)
+    fsm.finish_progress_eps: 0.10
+    # 绝对上限(秒)：t_cur > 轨迹时长 + 它 才强制收尾，只防死循环
+    fsm.finish_timeout_extra: 30.0
+    # 卡住后的有限重试次数（重试期内不清目标，不会掉到 WAIT_TARGET）
+    fsm.max_stuck_retry: 3
+    # 重试用尽后的脱困后撤距离(m)
+    fsm.escape_distance: 0.35
+    # 后撤固定时长(s)：低速直线后撤，不走普通优化
+    fsm.escape_duration: 3.0
+    # 收尾时是否发一条“停在原地”轨迹，让控制器立即刹停（P1）
+    fsm.stop_traj_on_finish: true
+    # 轨迹时钟最多超前实测投影进度多少秒（<=0 关闭，P4）
+    fsm.traj_clock_max_lead: 0.3
+    # 重规划重试节流：连续失败后按 min×2^n 退避，封顶 max（秒）；enable=false 每拍都试
+    fsm.replan_retry_enable: true
+    fsm.replan_retry_min: 0.2
+    fsm.replan_retry_max: 1.0
+    # 重规划起点脱困(m)：起点若落在膨胀层里（机器人自身位置常在自己的膨胀层内），
+    # 沿"起点→局部目标"方向最多前推这么多米去找第一个自由格；0=关闭
+    fsm.start_escape_max_offset: 1.0
+    # [replan-geom] 节流(ms)；0=不节流
+    fsm.diag_throttle_ms: 200
+    fsm.diag_verbose: false
+    # P17a：碰撞检查跳过起点附近这段(秒)；0=旧行为
+    fsm.collision_skip_from_start: 0.25
+
+    # 下面四项只在 navi_mode=3（参考路径）下生效，用来判断"参考坐标系"是否还可信。
+    # 参考路径写在地图系/参考系下，规划时要靠 TF 把它换算到 world 系；
+    # TF 一旦长时间拿不到、或突然跳变，就必须停下来重新规划。
+    # 允许的最大 TF 年龄(秒)：比这更旧的变换认为不可用
+    fsm.reference_tf_max_age: 0.3
+    # 宽限时间(秒)：TF 连续拿不到超过这么久，就急停
+    fsm.reference_tf_grace: 0.5
+    # 判定"参考系跳变"的平移阈值(米)
+    fsm.reference_tf_jump_translation: 0.2
+    # 判定"参考系跳变"的偏航阈值(度)
+    fsm.reference_tf_jump_yaw_deg: 5.0
+
+    # 地图分辨率(米/格)：越小越精细，但越占内存、越慢。0.05 = 每格 5 厘米
+    grid_map.resolution: 0.05
+    # 局部地图的尺寸(米)：10 x 10 x 5 的一个“滑动盒子”，会跟着机器人一起移动
+    grid_map.sliding_map_size_x: 10.0
+    grid_map.sliding_map_size_y: 10.0
+    grid_map.sliding_map_size_z: 5.0
+    grid_map.local_update_range_x: 5.0
+    grid_map.local_update_range_y: 5.0
+    grid_map.local_update_range_z: 2.5
+    # 是否启用“滑动地图”（机器人移动时，地图盒子跟着挪，而不是重建整张地图）
+    grid_map.map_sliding_en: true
+    grid_map.map_sliding_thresh: 0.2
+    # 机器人被抽象成“前后两个圆柱”。这里是圆柱半径(米)。
+    # 障碍会被额外向外膨胀这么多，用来保证身体不撞。
+    grid_map.double_cylinder_radius: 0.25
+    # 两个圆柱中心离机器人中心的距离(米)。所以圆柱中心分别在前后 0.18 米处。
+    grid_map.double_cylinder_offset: 0.18
+    # true=探测点随 pitch 倾斜（新）；false=旧的水平双圆柱（A/B 用）
+    grid_map.tilt_collision_enable: true
+    # 【P11 自过滤】传感器周围该半径(m)球内的点不写入地图；0=关闭
+    grid_map.self_filter_radius: 0.0
+    grid_map.body_height: 0.4
+    # 膨胀在竖直方向的范围：向上 0.1 米、向下 0.4 米（下方的障碍更危险）
+    grid_map.obstacles_inflation_z_up: 0.1
+    grid_map.obstacles_inflation_z_down: 0.4
+    grid_map.frame_id: world
+    grid_map.sliding_map_frame_id: sliding_map
+    grid_map.ground_height: 0.0
+    # 传感器类型：lidar(激光点云) 或 depth(深度相机)。会决定地图怎么更新。
+    grid_map.sensor_type: lidar
+    grid_map.cloud_is_world: true
+    grid_map.need_extrinsic: false
+    # 传感器外参：xyz(米) + rpy(弧度)，默认值与原先硬编码一致。
+    # 机型档案里可按实际安装覆盖。
+    grid_map.lidar_extrinsic_xyz: [-0.011, -0.02329, 0.04412]
+    grid_map.lidar_extrinsic_rpy: [0.0, 0.0, 0.0]
+    grid_map.depth_extrinsic_xyz: [-0.1517, 0.0, 0.0751]
+    grid_map.depth_extrinsic_rpy: [-0.785398, 0.0, -1.570796]
+
+    grid_map.cx: 321.04638671875
+    grid_map.cy: 243.44969177246094
+    grid_map.fx: 387.229248046875
+    grid_map.fy: 387.229248046875
+    grid_map.depth_filter_maxdist: 3.0
+    grid_map.depth_filter_mindist: 0.3
+    grid_map.depth_filter_margin: 1
+    grid_map.k_depth_scaling_factor: 1000.0
+    grid_map.skip_pixel: 2
+
+    # 占据概率模型：光束打中某格的“命中概率”，没打中的是 p_miss。
+    # 每扫到一次就用这两个值去加减该格的概率，累加多个视角后判断是不是障碍。
+    grid_map.p_hit: 0.85
+    grid_map.p_miss: 0.30
+    grid_map.p_min: 0.12
+    grid_map.p_max: 0.98
+    grid_map.p_occ: 0.80
+    # 一条光束算多远(米)。超过这个距离的点不参与建图。
+    grid_map.max_ray_length: 5.0
+    grid_map.vis_height: 0.3
+    grid_map.show_occ_time: false
+
+    # 物理限制：最大速度(米/秒)。规划出的轨迹不允许超过它。
+    manager.max_vel: 0.75
+    # 物理限制：最大加速度(米/秒²)
+    manager.max_acc: 1.5
+    manager.max_jerk: 4.0
+    # B 样条相邻控制点的间距(米)：越小轨迹越灵活，但计算量越大
+    manager.control_points_distance: 0.2
+    manager.feasibility_tolerance: 0.5
+    manager.planning_horizon: 7.5
+    # A* 搜索池：XY 边长(格) + Z 深度(格)，池子以每段中点为中心
+    #   160×0.05=8 m（XY ±4.0 m）；100×0.05=5 m（Z ±2.5 m）；约 123 MB
+    manager.a_star_pool_size: 160
+    manager.a_star_pool_z: 100
+
+    # 下面是“轨迹优化”的各项权重。权重越大，优化越倾向于满足那一项。
+    # lambda_smooth：平滑度（让轨迹不要抖）
+    optimization.lambda_smooth: 1.0
+    # lambda_collision：避障（离障碍越远越好）
+    optimization.lambda_collision: 1.0
+    # lambda_feasibility：动力学可行性（别超速/超加速度）
+    optimization.lambda_feasibility: 0.1
+    optimization.lambda_fitness: 1.0
+    # dist0：期望的安全距离(米)——离障碍至少留这么远才开始“不惩罚”
+    optimization.dist0: 0.2
+    optimization.max_vel: 0.75
+    optimization.max_acc: 1.5
+    # 时间重分配上限：超速/超加速度时最多把轨迹拉长多少倍；
+    # 超过就判不可执行并重规划，避免“拉长后永远追不上”
+    optimization.max_time_stretch: 2.0
+    # 细化后轨迹起点与规划起点的最大允许偏差(m)
+    optimization.max_head_mismatch: 0.30
+    # 【P15】A* 失败时用“障碍面 + 外法线”兜底给出推出方向（false = 旧行为）
+    optimization.rebound_fallback_enable: true
+    # order：B 样条的阶数。3 表示三次 B 样条（常用值，一般不用改）
+    optimization.order: 3
+
+
+# ============================================================================
+# 二、控制器 / 运动学仿真 / 步态
+# ============================================================================
+# ============================================================================
+# 文件：config/common.yaml —— 控制器 / 运动学仿真 / 步态（原 controllers.yaml）
+#
+# 【这个文件是干什么的】
+#   给“控制器”和“仿真器/步态”这几个节点用的参数。
+#   四个小节分别对应四个可执行程序。
+# ============================================================================
+#
+# ---- 闭环控制器 closed_loop_controller ----
+closed_loop_controller:
+  ros__parameters:
+    use_sim_time: false
+    # “前瞻时间”(秒)：看点时不是看当前位置，而是看 0.8 秒后的轨迹点，
+    # 用它来决定机器人该朝哪个方向（避免转向滞后）。
+    time_forward: 0.8
+    # 朝向误差超过这个角度(弧度)时，就先原地转向、暂停前进。
+    heading_error_threshold: 0.8
+    # 位置纠偏的比例增益：误差越大，修正速度越大。
+    kp_pos: 0.8
+    # 转向的比例增益：朝向误差 → 转向角速度。
+    kp_yaw: 1.5
+    max_vx: 0.75
+    max_vy: 0.35
+    max_vyaw: 1.0
+    # 距离终点小于这个值(米)且已走完轨迹，就发“停下”。
+    finish_dist: 0.15
+    # 参考时刻最多超前实测进度多少秒（0 表示不跟随）
+    time_lead: 0.2
+    # 轨迹整体超时：收到后超过 duration + 该值仍未被替换 → 丢弃并停车（<=0 关闭）
+    traj_timeout_extra: 3.0
+    # 卡住判定：指令想动但实测几乎不动，持续该时长(秒) → 刹停并冻结轨迹时钟
+    stuck_cmd_eps: 0.15
+    stuck_speed_eps: 0.03
+    stuck_time: 1.0
+    # 原地转向冻结的最长时间(秒)：超时后解除冻结，让 FSM 的无进展看门狗生效
+    freeze_timeout: 2.0
+    # /motion_enabled 的初始值：真机等遥控器 START(默认 false)；
+    # 仿真由 run.launch.py 的 auto_enable=true 置 true，否则不发 /cmd_vel。
+    motion_enabled_default: false
+
+# ---- 开环控制器 open_loop_controller ----
+# 它不控制机器人，只把轨迹直接当成里程计发出去（理想执行）。
+open_loop_controller:
+  ros__parameters:
+    use_sim_time: false
+    frame_id: world
+    child_frame_id: base
+    # 每秒发布多少帧假里程计
+    publish_rate: 100.0
+    yaw_min_speed: 0.05
+    hold_final_position: true
+    # 初始位置（必须和地图里机器人的起始位置一致，否则一开始就对不上）
+    init_x: -19.0
+    init_y: 1.0
+    init_z: 0.3
+    init_yaw: 0.0
+
+# ---- 运动学仿真器 go2_kinematic_sim ----
+# 接收 cmd_vel，用简单积分算出机器人位置，再发里程计，形成闭环。
+go2_kinematic_sim:
+  ros__parameters:
+    use_sim_time: false
+    init_x: -19.0
+    init_y: 1.0
+    init_z: 0.3
+    init_yaw: 0.0
+    max_vx: 0.75
+    max_vy: 0.35
+    max_vyaw: 1.0
+    # 超过这个时间(秒)没收到新速度指令，就把速度清零（失联停车）。
+    cmd_timeout: 0.3
+    sim_rate: 100.0
+    # 是否广播 world→base 的坐标变换（RViz 显示需要）
+    publish_tf: true
+    frame_id: world
+    child_frame_id: base
+
+# ---- 步态发布器 go2_gait_publisher ----
+# 纯动画：让 RViz 里的 Go2 腿按速度摆起来，不影响规划。
+go2_gait_publisher:
+  ros__parameters:
+    use_sim_time: false
+    rate: 60.0
+    # 步频(每秒迈几步)
+    gait_frequency: 2.2
+    min_walk_speed: 0.05
+    max_walk_speed: 1.0
+    # true = 不管速度多慢都一直小跑；false = 停下来时保持站立
+    always_trot: false
+    hip_swing: 0.08
+    thigh_swing: 0.32
+    calf_swing: 0.42
+
+
+# ============================================================================
+# 三、仿真环境（地图 / 传感器 / 可视化）
+# ============================================================================
+# ============================================================================
+# 文件：config/common.yaml —— 仿真环境参数（原 simulator.yaml）
+#
+# 【这个文件是干什么的】
+#   只在“仿真模式”(is_real_world:=false) 下用到，用来造一个假世界：
+#   1) mockamap_node      —— 程序化生成随机地图
+#   2) pcl_render_node    —— 假装成激光/相机，从地图里“看”出点云或深度图
+#   3) odom_visualization —— 在 RViz 里画出机器人、路径
+# ============================================================================
+#
+# ---- 随机地图生成器 mockamap_node ----
+mockamap_node:
+  ros__parameters:
+    use_sim_time: false
+    seed: 127
+    update_freq: 0.5
+    # 地图体素分辨率(米)
+    resolution: 0.1
+    x_length: 40
+    y_length: 40
+    z_length: 5
+    # 生成哪种地图：1=柏林噪声, 2=随机方块(本项目默认), 3=2D 迷宫, 4=3D 迷宫
+    type: 2
+    complexity: 0.05
+    fill: 0.12
+    fractal: 1
+    attenuation: 0.1
+    width_min: 0.2
+    width_max: 0.8
+    height_min: 2.0
+    height_max: 2.0
+    # 随机地图里放多少个障碍方块（只在 type=2 时有用）
+    obstacle_number: 500
+    surface_resolution: 0.05
+
+# ---- 传感器仿真器 pcl_render_node ----
+# 它从全局地图里“渲染”出传感器数据，模仿真实激光/相机。
+pcl_render_node:
+  ros__parameters:
+    use_sim_time: false
+    quadrotor_name: quad_0
+    # 仿真哪种传感器：lidar(点云) 或 depth(深度图)。要和 run.launch.py 里一致。
+    sensor_type: lidar
+    body_pose_topic: body_pose
+    map.resolution: 0.1
+    map.x_size: 40.0
+    map.y_size: 40.0
+    map.z_size: 5.0
+    # 传感器能看多远(米)
+    sensing_horizon: 40.0
+    sensing_rate: 10.0
+    estimation_rate: 10.0
+    polar_resolution: 0.2
+    yaw_fov: 360.0
+    vertical_fov: 90.0
+    min_raylength: 1.0
+    downsample_res: 0.1
+    # 激光的俯仰安装角(度)：让激光斜向下打，能看到地面附近
+    lidar_pitch: 45.0
+    # 传感器安装位姿（相对机体）：xyz(米) + rpy(弧度)。
+    # 默认值等于原先硬编码的光学系安装；机型档案的 pcl_render_node 段可覆盖。
+    sensor_mount_xyz: [0.0, 0.0, 0.0]
+    sensor_mount_rpy: [-1.570796, 0.0, -1.570796]
+    # 1 = 360 度全景激光；0 = 只有前方一个扇区
+    is_360lidar: 1
+    use_minicf_pattern: 1
+    use_avia_pattern: 0
+    use_vlp32_pattern: 0
+    use_os64_pattern: 0
+    use_os128_pattern: 0
+    cam_width: 640
+    cam_height: 480
+    cam_fx: 387.229248046875
+    cam_fy: 387.229248046875
+    cam_cx: 321.04638671875
+    cam_cy: 243.44969177246094
+    dynamic.enable: 0
+    dynamic.object_size: 0.0
+    dynamic.object_count: 0
+    dynamic.mode: 0
+    dynamic.velocity: 0.0
+    collision_check.enable: 0
+    collision_check.range: 0.3
+    use_global_map_topic: true
+    pcd_map_file: ''
+
+# ---- 里程计可视化 odom_visualization ----
+# 把机器人的位置/轨迹/速度画成 RViz 里的图形。
+odom_visualization:
+  ros__parameters:
+    use_sim_time: false
+    frame_id: world
+    child_frame_id: base
+    publish_tf: true
+    robot_scale: 1.0
+    color.r: 0.0
+    color.g: 0.0
+    color.b: 0.0
+    color.a: 1.0

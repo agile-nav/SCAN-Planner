@@ -1331,11 +1331,26 @@ int main(int argc, char **argv) {
   dynobj_timer = ros_node->create_wall_timer(
       std::chrono::duration<double>(sensing_duration), dynobjGenerate);
 
-  // 传感器 → 机体的安装矩阵
-  sensor2body << 0.0, 0.0, 1.0, 0.0,
-      -1.0, 0.0, 0.0, 0.0,
-      0.0, -1.0, 0.0, 0.0,
-      0.0, 0.0, 0.0, 1.0;
+  // 传感器 → 机体的安装位姿：xyz(米) + rpy(弧度)。
+  // 默认值等于原先硬编码的光学系安装；机型档案的 pcl_render_node 段可覆盖。
+  const auto mount_xyz = ros_node->declare_parameter<std::vector<double>>(
+      "sensor_mount_xyz", std::vector<double>{0.0, 0.0, 0.0});
+  const auto mount_rpy = ros_node->declare_parameter<std::vector<double>>(
+      "sensor_mount_rpy", std::vector<double>{-M_PI / 2.0, 0.0, -M_PI / 2.0});
+  if (mount_xyz.size() != 3 || mount_rpy.size() != 3)
+  {
+    RCLCPP_ERROR(ros_node->get_logger(), "sensor_mount_{xyz,rpy} must be 3-element arrays");
+    rclcpp::shutdown();
+    return 1;
+  }
+  {
+    Eigen::AngleAxisd roll(mount_rpy[0], Eigen::Vector3d::UnitX());
+    Eigen::AngleAxisd pitch(mount_rpy[1], Eigen::Vector3d::UnitY());
+    Eigen::AngleAxisd yaw(mount_rpy[2], Eigen::Vector3d::UnitZ());
+    sensor2body = Eigen::Matrix4f::Identity();
+    sensor2body.block<3, 3>(0, 0) = (yaw * pitch * roll).toRotationMatrix().cast<float>();
+    sensor2body.block<3, 1>(0, 3) = Eigen::Vector3f(mount_xyz[0], mount_xyz[1], mount_xyz[2]);
+  }
 
   // 单线程执行器，一直运行
   rclcpp::executors::SingleThreadedExecutor executor;

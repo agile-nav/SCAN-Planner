@@ -17,6 +17,9 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <vector>
+#include <stdexcept>
+#include <Eigen/Geometry>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
 namespace
@@ -105,18 +108,31 @@ void GridMap::initMap(rclcpp::Node *node)
   load_parameter(node_, "grid_map.cloud_is_world", mp_.cloud_is_world_, true);
   load_parameter(node_, "grid_map.need_extrinsic", mp_.need_extrinsic_, true);
 
-  // 激光与相机的外参矩阵（这里直接写死在代码里，不从参数读）
-  mp_.lidar_extrinsic_ <<
-      1.0, 0.0, 0.0, -0.01100,
-      0.0, 1.0, 0.0, -0.02329,
-      0.0, 0.0, 1.0,  0.04412,
-      0.0, 0.0, 0.0,  1.00000;
-
-  mp_.depth_extrinsic_ <<
-      0.0,  0.707107, 0.707107, -0.15170,
-     -1.0,  0.000000, 0.000000,  0.00000,
-      0.0, -0.707107, 0.707107,  0.07510,
-      0.0,  0.000000, 0.000000,  1.00000;
+  // 激光与相机的外参：xyz(米) + rpy(弧度)，默认值与原先硬编码值完全一致。
+  // 机型档案里可以用 grid_map.lidar_extrinsic_* / depth_extrinsic_* 覆盖。
+  auto make_extrinsic = [](const std::vector<double> &xyz, const std::vector<double> &rpy) {
+    Eigen::AngleAxisd roll(rpy[0], Eigen::Vector3d::UnitX());
+    Eigen::AngleAxisd pitch(rpy[1], Eigen::Vector3d::UnitY());
+    Eigen::AngleAxisd yaw(rpy[2], Eigen::Vector3d::UnitZ());
+    Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+    T.block<3, 3>(0, 0) = (yaw * pitch * roll).toRotationMatrix();
+    T.block<3, 1>(0, 3) = Eigen::Vector3d(xyz[0], xyz[1], xyz[2]);
+    return T;
+  };
+  std::vector<double> lidar_xyz, lidar_rpy, depth_xyz, depth_rpy;
+  load_parameter(node_, "grid_map.lidar_extrinsic_xyz", lidar_xyz,
+                 std::vector<double>{-0.011, -0.02329, 0.04412});
+  load_parameter(node_, "grid_map.lidar_extrinsic_rpy", lidar_rpy,
+                 std::vector<double>{0.0, 0.0, 0.0});
+  load_parameter(node_, "grid_map.depth_extrinsic_xyz", depth_xyz,
+                 std::vector<double>{-0.1517, 0.0, 0.0751});
+  load_parameter(node_, "grid_map.depth_extrinsic_rpy", depth_rpy,
+                 std::vector<double>{-M_PI / 4.0, 0.0, -M_PI / 2.0});
+  if (lidar_xyz.size() != 3 || lidar_rpy.size() != 3 ||
+      depth_xyz.size() != 3 || depth_rpy.size() != 3)
+    throw std::runtime_error("grid_map.*_extrinsic_{xyz,rpy} must be 3-element arrays");
+  mp_.lidar_extrinsic_ = make_extrinsic(lidar_xyz, lidar_rpy);
+  mp_.depth_extrinsic_ = make_extrinsic(depth_xyz, depth_rpy);
       
   // 传感器类型只允许 lidar / depth，写错了就回退成 lidar
   if (mp_.sensor_type_ != "lidar" && mp_.sensor_type_ != "depth")

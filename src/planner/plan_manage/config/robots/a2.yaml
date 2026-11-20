@@ -1,10 +1,17 @@
+robot:
+  name: a2
+  description_package: a2_description
+  model_file: urdf/a2.urdf
+  model_args: []
+  root_link: base
+
 # ============================================================================
 # 文件：config/robots/a2.yaml —— A2 机型档案
 #
 # 【这个文件是干什么的】
 #   只放“与具体机器人 / 场地相关”的参数。启动时叠加在通用默认之上，
 #   覆盖顺序（后者覆盖前者）：
-#     planner.yaml / controllers.yaml 的通用默认
+#     common.yaml 的通用默认
 #       → 本机型档案
 #         → 命令行传的参数
 #
@@ -18,7 +25,7 @@
 #
 # 【两段内容】
 #   scan_planner_node / closed_loop_controller / go2_kinematic_sim
-#     各节点的参数覆盖：只写需要覆盖的项，不用复制整份 planner.yaml
+#     各节点的参数覆盖：只写需要覆盖的项，不用复制整份 common.yaml
 #   robot_topics
 #     不是节点参数，由 run.launch.py 读取，用来生成话题重映射与初始位置
 # ============================================================================
@@ -50,6 +57,11 @@ scan_planner_node:
     optimization.dist0: 0.2
     # 机器人形态（实机调试后定稿，取代原先“按官方站立尺寸换算”的取值）
     grid_map.body_height: 0.0
+    # RealSense 深度内参（真机标定值；如非 RealSense 请按实际相机修改）
+    grid_map.cx: 317.19183349609375
+    grid_map.cy: 256.4806823730469
+    grid_map.fx: 609.5884399414062
+    grid_map.fy: 609.22021484375
     grid_map.double_cylinder_radius: 0.25
     grid_map.double_cylinder_offset: 0.18
     grid_map.self_filter_radius: 0.45
@@ -90,3 +102,9 @@ robot_topics:
   need_extrinsic: true
   # 初始位置 [x, y, z]；命令行 init_x/init_y/init_z 仍可覆盖
   init: [-5.5, 5.5, 0.5]
+
+# 仿真传感器安装位姿（可选；不写则用 common.yaml 的默认值）
+# pcl_render_node:
+#   ros__parameters:
+#     sensor_mount_xyz: [0.0, 0.0, 0.0]
+#     sensor_mount_rpy: [-1.570796, 0.0, -1.570796]

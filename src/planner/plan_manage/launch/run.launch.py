@@ -58,32 +58,42 @@ def _profile_params(profile, node_name):
     return dict(profile.get(node_name, {}).get("ros__parameters", {}) or {})
 
 
-# 机型档案 -> 仿真里要显示的机器人模型：
-#   robot:=a2   → a2_description/urdf/a2.urdf（A2 实机 URDF，21 link / 20 joint，腿可动）
-#   robot:=go2  → go2_description/xacro/robot.xacro
-#   robot:=go2w → go2w_description/xacro/robot.xacro（由 Go2 派生，见该包 README）
-# 表里没有的（含仿真默认的 robot:=none）回退到 Go2，保持原有行为。
-_ROBOT_MODELS = {
-    "a2": ("a2_description", ("urdf", "a2.urdf"), []),
-    "go2": ("go2_description", ("xacro", "robot.xacro"), [" use_gazebo:=false"]),
-    "go2w": ("go2w_description", ("xacro", "robot.xacro"), [" use_gazebo:=false"]),
+# 仿真里显示哪个模型，由机型档案的 robot 段决定，例如：
+#   robot:
+#     name: go2
+#     description_package: go2_description
+#     model_file: xacro/robot.xacro
+#     model_args: ["use_gazebo:=false"]
+#     root_link: base
+#
+# 仿真默认 robot:=none（不叠加档案）时仍需要一个模型给 RViz 显示；
+# 这里只保留一个通用回退模型，不再维护机型表。
+_FALLBACK_ROBOT_META = {
+    "name": "go2",
+    "description_package": "go2_description",
+    "model_file": "xacro/robot.xacro",
+    "model_args": ["use_gazebo:=false"],
+    "root_link": "base",
 }
-_DEFAULT_ROBOT_MODEL = _ROBOT_MODELS["go2"]
 
 
-# 按 robot 机型拼出 robot_description 的 xacro 命令行（纯 URDF 也能被 xacro 处理）。
-def _robot_description_command(robot):
-    package, parts, extra = _ROBOT_MODELS.get(robot, _DEFAULT_ROBOT_MODEL)
-    model = os.path.join(get_package_share_directory(package), *parts)
-    return ["xacro ", model] + extra
+# 按机型档案的 robot 段拼出 robot_description 的 xacro 命令行。
+# 纯 URDF 也能被 xacro 处理。
+def _robot_description_command(robot_meta):
+    meta = robot_meta or _FALLBACK_ROBOT_META
+    package = meta["description_package"]
+    model = os.path.join(get_package_share_directory(package),
+                         *str(meta["model_file"]).split("/"))
+    extra = " ".join(str(arg) for arg in meta.get("model_args", []))
+    # Command 会把列表元素直接拼接，不会自动补空格；这里拼成一个完整字符串。
+    return ("xacro " + model + (" " + extra if extra else ""))
 
 
 # 真正干活的函数：在这里根据参数决定启动哪些节点、做哪些话题重映射。
 # 用 OpaqueFunction 包裹，是为了能在“运行时”拿到参数值再决定。
 def _setup(context):
     scan_share = get_package_share_directory("scan_planner")
-    planner_yaml = os.path.join(scan_share, "config", "planner.yaml")
-    controllers_yaml = os.path.join(scan_share, "config", "controllers.yaml")
+    common_yaml = os.path.join(scan_share, "config", "common.yaml")
     is_real = _as_bool(LaunchConfiguration("is_real_world").perform(context))
     use_sim_time = _as_bool(LaunchConfiguration("use_sim_time").perform(context))
     sensor_type = LaunchConfiguration("sensor_type").perform(context)
@@ -114,13 +124,22 @@ def _setup(context):
     # 机型相关的东西（机器人尺寸、速度上限、地图尺寸、真机话题名、初始位置）放在
     # config/robots/<机型>.yaml 里，换机型只要加一个档案、启动时换名字，不必改代码：
     #   robot:=a2    叠加 config/robots/a2.yaml
-    #   robot:=none  不叠加，纯用 planner.yaml / controllers.yaml 的通用默认（仿真常用）
+    #   robot:=none  不叠加，纯用 common.yaml / common.yaml 的通用默认（仿真常用）
     # 不显式指定时：真机默认用 a2 档案，仿真不叠加。
     robot = LaunchConfiguration("robot").perform(context).strip()
     if not robot:
         robot = "a2" if is_real else "none"
+    if is_real and robot == "none":
+        raise RuntimeError(
+            "is_real_world:=true requires a robot profile; use robot:=a2|go2|go2w")
     profile = {} if robot == "none" else _load_robot_profile(scan_share, robot)
+    robot_meta = profile.get("robot")
+    if robot != "none" and not robot_meta:
+        raise RuntimeError(
+            "robot profile '%s' is missing the 'robot' metadata section" % robot)
     profile_topics = profile.get("robot_topics", {}) or {}
+    profile_path = "" if robot == "none" else os.path.join(
+        scan_share, "config", "robots", robot + ".yaml")
 
     # 初始位置优先级：命令行 init_x/init_y/init_z > 档案例 robot_topics.init
     # > 按导航模式给的默认值（navi_mode=1 与其余模式的起点不同）。
@@ -136,7 +155,7 @@ def _setup(context):
     init_x, init_y, init_z = initial_position
 
     # 下面这段是“二选一”：
-    #   if 分支 = 真机：话题接 LIO 里程计/激光、相机内参用真机标定值；
+    #   if 分支 = 真机：话题接 LIO 里程计/激光；相机内参由机型档案提供；
     #   else 分支 = 仿真：话题接 /quad_0/*，点云已经是世界系、不需要外参。
     # 真机话题名优先取机型档案里的 robot_topics；档案没写就用下面这组默认
     # （当前按 A2 上实际运行的 LIO/super_lio 配置，点云已在世界系下）。
@@ -149,12 +168,6 @@ def _setup(context):
         motion_enabled = profile_topics.get("motion_enabled", "/motion_enabled")
         cloud_is_world = bool(profile_topics.get("cloud_is_world", True))
         need_extrinsic = bool(profile_topics.get("need_extrinsic", True))
-        intrinsics = {
-            "grid_map.cx": 317.19183349609375,
-            "grid_map.cy": 256.4806823730469,
-            "grid_map.fx": 609.5884399414062,
-            "grid_map.fy": 609.22021484375,
-        }
     else:
         body_pose = "/quad_0/body_pose"
         sensor_pose = "/quad_0/camera_pose" if sensor_type == "depth" else "/quad_0/lidar_pose"
@@ -164,7 +177,6 @@ def _setup(context):
         motion_enabled = "/motion_enabled"
         cloud_is_world = True
         need_extrinsic = False
-        intrinsics = {}
 
     common = {"use_sim_time": use_sim_time}
     # 外部使能 /motion_enabled 的初始值：
@@ -178,7 +190,6 @@ def _setup(context):
     sim_profile_params = _profile_params(profile, "go2_kinematic_sim")
     planner_overrides = {
         **common,
-        **intrinsics,
         "fsm.navi_mode": navi_mode,
         "fsm.motion_enabled_default": motion_default,
         "grid_map.sensor_type": sensor_type,
@@ -186,14 +197,14 @@ def _setup(context):
         "grid_map.need_extrinsic": need_extrinsic,
     }
     # ---- 节点 1：规划器本体（最重要）----
-    # parameters 按顺序叠加：先 planner.yaml，再机型档案，再（可选）航点文件，最后覆盖项。
+    # parameters 按顺序叠加：先 common.yaml，再机型档案，再（可选）航点文件，最后覆盖项。
     actions = [
         Node(
             package="scan_planner",
             executable="scan_planner_node",
             name="scan_planner_node",
             output="screen",
-            parameters=[planner_yaml, planner_profile_params]
+            parameters=[common_yaml, planner_profile_params]
             + ([keypoints_file] if keypoints_file else [])
             + [planner_overrides],
             remappings=[
@@ -212,7 +223,7 @@ def _setup(context):
     ]
     # ---- 节点 2：机器人模型显示（仅仿真）----
     # 用 xacro 生成 robot_description，让 RViz 能画出当前机型的机器人外形
-    # （模型由 robot 档案经 _ROBOT_MODELS 决定，见上方表）。
+    # （模型由机型档案的 robot 段决定）。
     # 真机上机器人模型与 TF 由宇树自身的驱动栈提供，重复发布反而会冲突，
     # 所以只在仿真（is_real_world:=false）时启动这个节点。
     if not is_real:
@@ -224,7 +235,7 @@ def _setup(context):
                 output="screen",
                 parameters=[
                     common,
-                    {"robot_description": Command(_robot_description_command(robot))},
+                    {"robot_description": Command(_robot_description_command(robot_meta))},
                 ],
             )
         )
@@ -239,7 +250,7 @@ def _setup(context):
                 name="open_loop_controller",
                 output="screen",
                 parameters=[
-                    controllers_yaml,
+                    common_yaml,
                     common,
                     {"init_x": init_x, "init_y": init_y, "init_z": init_z},
                 ],
@@ -258,7 +269,7 @@ def _setup(context):
                 executable="closed_loop_controller",
                 name="closed_loop_controller",
                 output="screen",
-                parameters=[controllers_yaml, controller_profile_params, common,
+                parameters=[common_yaml, controller_profile_params, common,
                             {"motion_enabled_default": motion_default}],
                 remappings=[
                     ("body_pose", body_pose),
@@ -277,7 +288,7 @@ def _setup(context):
                     name="go2_kinematic_sim",
                     output="screen",
                     parameters=[
-                        controllers_yaml,
+                        common_yaml,
                         sim_profile_params,
                         common,
                         {
@@ -324,7 +335,7 @@ def _setup(context):
                     executable="go2_gait_publisher",
                     name="go2_gait_publisher",
                     output="screen",
-                    parameters=[controllers_yaml, common],
+                    parameters=[common_yaml, common],
                     remappings=[("body_pose", body_pose)],
                 ),
     # ---- 拉起仿真环境 ----
@@ -334,19 +345,24 @@ def _setup(context):
                         os.path.join(scan_share, "launch", "simulator.launch.py")
                     ),
                     launch_arguments={
-                        name: LaunchConfiguration(name)
-                        for name in (
-                            "is_real_world",
-                            "sensor_type",
-                            "use_gpu",
-                            "use_pcd_map",
-                            "pcd_map_file",
-                            "map_size_x",
-                            "map_size_y",
-                            "map_size_z",
-                            "obstacle_number",
-                            "use_sim_time",
-                        )
+                        **{
+                            name: LaunchConfiguration(name)
+                            for name in (
+                                "is_real_world",
+                                "sensor_type",
+                                "use_gpu",
+                                "use_pcd_map",
+                                "pcd_map_file",
+                                "map_size_x",
+                                "map_size_y",
+                                "map_size_z",
+                                "obstacle_number",
+                                "use_sim_time",
+                            )
+                        },
+                        # 机型档案：simulator.launch.py 用它的 mockamap_node /
+                        # pcl_render_node / odom_visualization 段覆盖公共默认值
+                        "profile_yaml": profile_path,
                     }.items(),
                 ),
             ]

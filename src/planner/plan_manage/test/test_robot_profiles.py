@@ -13,9 +13,11 @@ import pytest
 import yaml
 
 PROFILE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "robots"))
-PLANNER_YAML = os.path.abspath(os.path.join(PROFILE_DIR, "..", "planner.yaml"))
+COMMON_YAML = os.path.abspath(os.path.join(PROFILE_DIR, "..", "common.yaml"))
+REPO_ROOT = os.path.abspath(os.path.join(PROFILE_DIR, "..", "..", "..", "..", ".."))
 ROBOTS = ("a2", "go2", "go2w")
 
+REQUIRED_ROBOT_META = ("name", "description_package", "model_file", "root_link")
 REQUIRED_PARAMS = (
     "grid_map.double_cylinder_radius",
     "grid_map.double_cylinder_offset",
@@ -46,8 +48,8 @@ def params_of(robot):
 
 
 def default_params():
-    """planner.yaml 的通用默认值。档案里没写的键按它解析（launch 也是这个叠加顺序）。"""
-    with open(PLANNER_YAML, "r", encoding="utf-8") as handle:
+    """common.yaml 的通用默认值。档案里没写的键按它解析（launch 也是这个叠加顺序）。"""
+    with open(COMMON_YAML, "r", encoding="utf-8") as handle:
         params = (yaml.safe_load(handle) or {}).get("scan_planner_node", {}).get("ros__parameters", {})
     return params or {}
 
@@ -67,6 +69,22 @@ def test_profile_file_exists_and_has_node_section(robot):
     profile = load_profile(robot)
     assert "scan_planner_node" in profile
     assert "ros__parameters" in profile["scan_planner_node"]
+
+
+@pytest.mark.parametrize("robot", ROBOTS)
+def test_robot_metadata_and_model_file(robot):
+    """机型元数据必须齐全，且模型文件确实存在（launch 用它生成 robot_description）。"""
+    profile = load_profile(robot)
+    meta = profile.get("robot")
+    assert isinstance(meta, dict), f"{robot}: 缺少 robot 元数据段"
+    missing = [key for key in REQUIRED_ROBOT_META if not meta.get(key)]
+    assert not missing, f"{robot}: robot 元数据缺字段: {missing}"
+    assert meta["name"] == robot
+    assert meta["root_link"] == "base"
+
+    model = os.path.join(REPO_ROOT, "src", "simulator", "Utils",
+                         meta["description_package"], meta["model_file"])
+    assert os.path.isfile(model), f"{robot}: 模型文件不存在: {model}"
 
 
 @pytest.mark.parametrize("robot", ROBOTS)
@@ -139,3 +157,65 @@ def test_planning_horizon_fits_local_map(robot):
         f"(range={min(range_x, range_y)}, radius={radius})")
     assert range_x <= size_x / 2.0 + 1e-9 and range_y <= size_y / 2.0 + 1e-9, (
         f"{robot}: local_update_range 不能超过滑动地图半宽")
+
+
+REQUIRED_COMMON_SECTIONS = (
+    "scan_planner_node",
+    "closed_loop_controller",
+    "open_loop_controller",
+    "go2_kinematic_sim",
+    "go2_gait_publisher",
+    "mockamap_node",
+    "pcl_render_node",
+    "odom_visualization",
+)
+
+
+def common_node_params(node_name):
+    with open(COMMON_YAML, "r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    return data.get(node_name, {}).get("ros__parameters", {}) or {}
+
+
+def test_common_has_required_node_sections():
+    """common.yaml 必须包含所有节点的默认段，避免合并时漏节。"""
+    with open(COMMON_YAML, "r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    missing = [name for name in REQUIRED_COMMON_SECTIONS if name not in data]
+    assert not missing, f"common.yaml 缺少节点段: {missing}"
+
+
+@pytest.mark.parametrize("robot", ROBOTS)
+def test_effective_sensor_params(robot):
+    """外参/深度内参必须存在、长度正确且为有限值。"""
+    params = effective_params(robot)
+    for key in ("grid_map.lidar_extrinsic_xyz", "grid_map.lidar_extrinsic_rpy",
+                "grid_map.depth_extrinsic_xyz", "grid_map.depth_extrinsic_rpy"):
+        assert key in params, f"{robot}: 缺少 {key}"
+        assert len(params[key]) == 3, f"{robot}: {key} 必须是 3 元数组"
+        assert all(math.isfinite(float(v)) for v in params[key])
+    for key in ("grid_map.fx", "grid_map.fy", "grid_map.cx", "grid_map.cy"):
+        assert key in params, f"{robot}: 缺少深度内参 {key}"
+        assert math.isfinite(float(params[key]))
+    assert float(params["grid_map.fx"]) > 0.0
+    assert float(params["grid_map.fy"]) > 0.0
+
+
+@pytest.mark.parametrize("robot", ROBOTS)
+def test_robot_topics_init_shape(robot):
+    init = topics_of(robot).get("init")
+    if init is not None:
+        assert len(init) == 3, f"{robot}: robot_topics.init 必须是 [x, y, z]"
+
+
+@pytest.mark.parametrize("robot", ROBOTS)
+def test_robot_model_args_is_list(robot):
+    meta = load_profile(robot).get("robot", {}) or {}
+    assert isinstance(meta.get("model_args", []), list)
+
+
+def test_common_sensor_mount_present():
+    params = common_node_params("pcl_render_node")
+    for key in ("sensor_mount_xyz", "sensor_mount_rpy"):
+        assert key in params, f"common.yaml pcl_render_node 缺少 {key}"
+        assert len(params[key]) == 3

@@ -1,3 +1,10 @@
+robot:
+  name: go2
+  description_package: go2_description
+  model_file: xacro/robot.xacro
+  model_args: ["use_gazebo:=false"]
+  root_link: base
+
 # ============================================================================
 # 文件：config/robots/go2.yaml —— Go2 机型档案
 #
@@ -36,6 +43,11 @@ scan_planner_node:
     # 注意：严格说这里应填「机身中心离地高度」（按 xacro 腿长/站立关节角约 0.33 m），
     # 0.40 是整机高度；拿到实机实测值后建议替换。
     grid_map.body_height: 0.40
+    # RealSense 深度内参（真机标定值；如非 RealSense 请按实际相机修改）
+    grid_map.cx: 317.19183349609375
+    grid_map.cy: 256.4806823730469
+    grid_map.fx: 609.5884399414062
+    grid_map.fy: 609.22021484375
 
     # 自身点云过滤半径(米)：真机激光会打到自己的腿/机身，必须滤掉。
     # 0=关闭；这是初始值，请按实机点云核对（A2 实测为 0.45）。
@@ -78,3 +90,9 @@ robot_topics:
   need_extrinsic: true
   # 初始位置 [x, y, z]；不写则按 navi_mode 取默认值
   # init: [-19.0, 1.0, 0.25]
+
+# 仿真传感器安装位姿（可选；不写则用 common.yaml 的默认值）
+# pcl_render_node:
+#   ros__parameters:
+#     sensor_mount_xyz: [0.0, 0.0, 0.0]
+#     sensor_mount_rpy: [-1.570796, 0.0, -1.570796]

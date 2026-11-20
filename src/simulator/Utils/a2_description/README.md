@@ -22,7 +22,7 @@ ros2 launch scan_planner run.launch.py is_real_world:=false navi_mode:=1 \
 
 1. 网格路径 `../meshes/*.STL` → `package://a2_description/meshes/*.STL`（17 处）。
 2. 顶部新增虚拟根 `base` 及固定关节 `base → base_link`。仿真的 TF 约定是
-   `world → base`（见 `config/simulator.yaml`、`config/controllers.yaml` 的
+   `world → base`（见 `config/common.yaml` 的
    `child_frame_id: base`），模型必须以 `base` 为根才不会与 TF 脱链。
 3. SolidWorks 导出遗留的空材质名 `<material name="">` → `a2_mat_N`（17 处）。
 

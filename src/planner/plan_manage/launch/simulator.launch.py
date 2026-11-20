@@ -12,6 +12,8 @@
 
 import os
 
+import yaml
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
@@ -40,6 +42,18 @@ def _setup(context):
     map_z = float(LaunchConfiguration("map_size_z").perform(context))
     # 随机地图的障碍数量；自检时可置 0 得到“确定性空地图”
     obstacle_number = int(LaunchConfiguration("obstacle_number").perform(context))
+    # 机型档案（可选）：profile 里的 mockamap_node / pcl_render_node /
+    # odom_visualization 段可以覆盖 common.yaml 的默认值（含传感器安装位姿）。
+    profile_yaml = LaunchConfiguration("profile_yaml").perform(context)
+    # 机型档案里既有 robot 元数据，也有各节点覆盖段；不能整份作为 ROS 参数文件
+    # 传给节点（顶层 robot: 不是节点名）。这里解析后只取节点自己的 ros__parameters。
+    profile = {}
+    if profile_yaml:
+        with open(profile_yaml, "r", encoding="utf-8") as handle:
+            profile = yaml.safe_load(handle) or {}
+
+    def profile_params(node_name):
+        return dict(profile.get(node_name, {}).get("ros__parameters", {}) or {})
 
     if use_pcd_map and (not pcd_map_file or not os.path.isfile(pcd_map_file)):
         raise RuntimeError(
@@ -47,7 +61,7 @@ def _setup(context):
         )
 
     scan_share = get_package_share_directory("scan_planner")
-    simulator_yaml = os.path.join(scan_share, "config", "simulator.yaml")
+    common_yaml = os.path.join(scan_share, "config", "common.yaml")
     nodes = []
 
     # ---- 地图来源二选一 ----
@@ -82,16 +96,13 @@ def _setup(context):
                 executable="mockamap_node",
                 name="mockamap_node",
                 output="screen",
-                parameters=[
-                    simulator_yaml,
-                    {
-                        "use_sim_time": use_sim_time,
-                        "x_length": int(map_x),
-                        "y_length": int(map_y),
-                        "z_length": int(map_z),
-                        "obstacle_number": obstacle_number,
-                    },
-                ],
+                parameters=[common_yaml, profile_params("mockamap_node"), {
+                    "use_sim_time": use_sim_time,
+                    "x_length": int(map_x),
+                    "y_length": int(map_y),
+                    "z_length": int(map_z),
+                    "obstacle_number": obstacle_number,
+                }],
                 remappings=[("mock_map", "/map_generator/global_cloud")],
             )
         )
@@ -107,19 +118,16 @@ def _setup(context):
                 executable="opengl_render_node" if use_gpu else "pcl_render_node",
                 name="pcl_render_node",
                 output="screen",
-                parameters=[
-                    simulator_yaml,
-                    {
-                        "use_sim_time": use_sim_time,
-                        "sensor_type": sensor_type,
-                        "body_pose_topic": "body_pose",
-                        "map.x_size": map_x,
-                        "map.y_size": map_y,
-                        "map.z_size": map_z,
-                        "use_global_map_topic": True,
-                        "pcd_map_file": pcd_map_file,
-                    },
-                ],
+                parameters=[common_yaml, profile_params("pcl_render_node"), {
+                    "use_sim_time": use_sim_time,
+                    "sensor_type": sensor_type,
+                    "body_pose_topic": "body_pose",
+                    "map.x_size": map_x,
+                    "map.y_size": map_y,
+                    "map.z_size": map_z,
+                    "use_global_map_topic": True,
+                    "pcd_map_file": pcd_map_file,
+                }],
                 remappings=[
                     ("global_map", "/map_generator/global_cloud"),
                     ("body_pose", "/quad_0/body_pose"),
@@ -136,7 +144,8 @@ def _setup(context):
                 executable="odom_visualization",
                 name="odom_visualization",
                 output="screen",
-                parameters=[simulator_yaml, {"use_sim_time": use_sim_time}],
+                parameters=[common_yaml, profile_params("odom_visualization"),
+                            {"use_sim_time": use_sim_time}],
                 remappings=[
                     ("body_pose", "/quad_0/body_pose"),
                     ("pose", "/quad_0/pose"),
@@ -165,6 +174,7 @@ def generate_launch_description():
             DeclareLaunchArgument("map_size_y", default_value="40.0"),
             DeclareLaunchArgument("map_size_z", default_value="5.0"),
             DeclareLaunchArgument("obstacle_number", default_value="500"),
+            DeclareLaunchArgument("profile_yaml", default_value=""),
             DeclareLaunchArgument("use_sim_time", default_value="false"),
             OpaqueFunction(function=_setup),
         ]

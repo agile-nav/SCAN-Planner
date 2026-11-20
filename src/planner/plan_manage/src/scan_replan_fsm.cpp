@@ -81,7 +81,7 @@ namespace scan_planner
     last_freeze_update_time_ = node_->now();
 
     /*  fsm param  */
-    // ---------- 第2步：读取全部参数（名字对应 planner.yaml） ----------
+    // ---------- 第2步：读取全部参数（名字对应 common.yaml） ----------
     navi_mode_ = load_parameter<int>(node_, "fsm.navi_mode", -1);
     // 起点与当前位置相差超过这个距离 → 触发重规划
     replan_thresh_ = load_parameter<double>(node_, "fsm.thresh_replan", -1.0);

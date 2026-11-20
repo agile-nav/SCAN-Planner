@@ -90,7 +90,7 @@ namespace scan_planner
       if (!node->has_parameter(name)) node->declare_parameter<double>(name, default_value);
       return node->get_parameter(name).as_double();
     };
-    // 依次读取全部参数。名字对应 planner.yaml 里的 manager.* 和 optimization.*
+    // 依次读取全部参数。名字对应 common.yaml 里的 manager.* 和 optimization.*
     pp_.max_vel_ = get_double("manager.max_vel", -1.0);
     pp_.max_acc_ = get_double("manager.max_acc", -1.0);
     pp_.max_jerk_ = get_double("manager.max_jerk", -1.0);

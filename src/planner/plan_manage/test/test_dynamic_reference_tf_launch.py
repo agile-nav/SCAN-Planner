@@ -53,8 +53,8 @@ PATH_QOS = QoSProfile(
 
 @pytest.mark.launch_test
 def generate_test_description():
-    """起规划器节点（用仓库自带的 planner.yaml，覆盖 navi_mode=3 与自动使能）。"""
-    config = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "planner.yaml"))
+    """起规划器节点（用仓库自带的 common.yaml，覆盖 navi_mode=3 与自动使能）。"""
+    config = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "common.yaml"))
     planner = launch_ros.actions.Node(
         package="scan_planner",
         executable="scan_planner_node",

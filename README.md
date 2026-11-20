@@ -110,17 +110,16 @@ ros2 launch scan_planner run.launch.py \
 
 ## 配置与接口
 
-规划器、控制器和仿真器的参数分别位于：
-- `src/planner/plan_manage/config/planner.yaml`
-- `src/planner/plan_manage/config/controllers.yaml`
-- `src/planner/plan_manage/config/simulator.yaml`
+规划器、控制器和仿真器的**通用参数**集中在：
+- `src/planner/plan_manage/config/common.yaml`（按节点分节，所有机型共用）
 
 ### 机型档案（多机器人切换）
 
 与具体机器人 / 场地相关的内容**不写进通用默认**，而是放在机型档案里：`src/planner/plan_manage/config/robots/<机型>.yaml`。
 
-档案只写“要覆盖的项”（不用复制整份 `planner.yaml`），启动时按 **`planner.yaml` → 机型档案 → 命令行参数** 的顺序叠加（后者覆盖前者）。档案里有两部分：
+档案只写“要覆盖的项”（不用复制整份 `common.yaml`），启动时按 **`common.yaml` → 机型档案 → 命令行参数** 的顺序叠加（后者覆盖前者）。档案里主要有三部分：
 
+- `robot`：机型元数据（描述包、模型文件、xacro 参数、根节点）
 - `scan_planner_node` / `closed_loop_controller` / `go2_kinematic_sim`：各节点的参数覆盖
 - `robot_topics`：不是节点参数，由启动文件读取，用来生成真机话题重映射与初始位置
 
@@ -156,7 +155,7 @@ ros2 launch scan_planner run.launch.py robot:=none is_real_world:=false navi_mod
 
 ### 机型 × 需要配什么
 
-加新机型照着这张表配齐即可（不用改规划/控制代码）：
+加新机型照着这张表配齐即可（不用改规划/控制代码，模型也由档案的 `robot` 段驱动）：
 
 | 要配的东西 | A2 | Go2 | Go2-W |
 |---|---|---|---|
@@ -164,11 +163,14 @@ ros2 launch scan_planner run.launch.py robot:=none is_real_world:=false navi_mod
 | 描述包 | `a2_description` | `go2_description` | `go2w_description`（由 Go2 派生） |
 | 模型文件 | `urdf/a2.urdf` | `xacro/robot.xacro` | `xacro/robot.xacro` |
 | URDF 根节点 | `base` | `base` | `base` |
-| `_ROBOT_MODELS` 表项 | ✅ | ✅ | ✅ |
+| 机型元数据 `robot`（描述包/模型/xacro 参数） | ✅ | ✅ | ✅ |
 | 腿部关节命名 | `FL/FR/RL/RR_hip/thigh/calf_joint` | 同左 | 同左 |
 | 碰撞 offset / radius | 0.18 / 0.25 | 0.175 / 0.234 | 0.175 / 0.277 |
 | 竖直膨胀 z_up / z_down | 0.1 / 0.1 | 通用默认 | 通用默认 |
 | 话题 `robot_topics` | 真机 super_lio 实测 | 已预留 cmd_vel/motion_enabled/depth，按实际驱动栈核对 | 同左 |
+| 传感器外参 `grid_map.*_extrinsic_*` | common 默认 | 按实际安装覆盖 | 按实际安装覆盖 |
+| 深度内参 `grid_map.fx/fy/cx/cy` | 档案内 RealSense | 档案内 RealSense（按实际相机核对） | 同左 |
+| 仿真安装位姿 `pcl_render_node.sensor_mount_*` | common 默认 | 按实际安装覆盖 | 按实际安装覆盖 |
 
 ### 仿真自检清单（三机型各跑一次）
 
