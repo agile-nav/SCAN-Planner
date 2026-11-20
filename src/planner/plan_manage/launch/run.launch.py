@@ -163,6 +163,11 @@ def _setup(context):
         intrinsics = {}
 
     common = {"use_sim_time": use_sim_time}
+    # 外部使能 /motion_enabled 的初始值：
+    #   真机必须等遥控器 START（默认 false）；仿真没有遥控器，默认放开，
+    #   否则规划器和控制器会一直等使能信号、机器人不动。
+    auto_enable = _as_bool(LaunchConfiguration("auto_enable").perform(context))
+    motion_default = (not is_real) if auto_enable else False
     # 机型档案里与各节点对应的参数段（没有就是空 dict，等于不覆盖）
     planner_profile_params = _profile_params(profile, "scan_planner_node")
     controller_profile_params = _profile_params(profile, "closed_loop_controller")
@@ -171,6 +176,7 @@ def _setup(context):
         **common,
         **intrinsics,
         "fsm.navi_mode": navi_mode,
+        "fsm.motion_enabled_default": motion_default,
         "grid_map.sensor_type": sensor_type,
         "grid_map.cloud_is_world": cloud_is_world,
         "grid_map.need_extrinsic": need_extrinsic,
@@ -247,7 +253,8 @@ def _setup(context):
                 executable="closed_loop_controller",
                 name="closed_loop_controller",
                 output="screen",
-                parameters=[controllers_yaml, controller_profile_params, common],
+                parameters=[controllers_yaml, controller_profile_params, common,
+                            {"motion_enabled_default": motion_default}],
                 remappings=[
                     ("body_pose", body_pose),
                     ("cmd_vel", "/cmd_vel" if is_real else "/quad_0/cmd_vel"),
@@ -362,6 +369,8 @@ def generate_launch_description():
             DeclareLaunchArgument("init_y", default_value=""),
             DeclareLaunchArgument("init_z", default_value=""),
             DeclareLaunchArgument("use_sim_time", default_value="false"),
+            # 仿真是否自动放开 /motion_enabled（真机忽略：始终等遥控器 START）
+            DeclareLaunchArgument("auto_enable", default_value="true"),
             OpaqueFunction(function=_setup),
         ]
     )

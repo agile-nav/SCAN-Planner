@@ -43,7 +43,7 @@ for robot in "${ROBOTS[@]}"; do
   echo "机型 ${robot}：拉起仿真栈…"
   LOG="${LOGDIR}/${robot}.log"
   ros2 launch scan_planner run.launch.py \
-      is_real_world:=false navi_mode:=1 robot:="${robot}" >"${LOG}" 2>&1 &
+      is_real_world:=false navi_mode:=1 robot:="${robot}" auto_enable:=false >"${LOG}" 2>&1 &
 
   ready=0
   for _ in $(seq 1 45); do

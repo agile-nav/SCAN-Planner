@@ -30,6 +30,9 @@ scan_planner_node:
     fsm.fail_safe: true
     # 连续规划失败超过这个次数，就强制进入紧急停止
     fsm.max_replan_fail_count: 20
+    # /motion_enabled 的初始值：真机必须等遥控器 START(默认 false)；
+    # 仿真没有遥控器，run.launch.py 的 auto_enable=true 会在仿真下把它置 true，否则不会动。
+    fsm.motion_enabled_default: false
 
     # ---- 运行状态(running/goal_reached)判定（发到 /local_planner/status）----
     # 到达目标的 2D 水平距离容差(米)：与控制器 finish_dist 口径一致

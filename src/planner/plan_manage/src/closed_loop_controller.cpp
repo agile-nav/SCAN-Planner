@@ -66,6 +66,10 @@ public:
     stuck_time_ = declare_parameter<double>("stuck_time", 1.0);
     // 原地转向冻结的最长时间：超过后解除冻结，让 FSM 的无进展看门狗生效
     freeze_timeout_ = declare_parameter<double>("freeze_timeout", 2.0);
+    // 外部使能（/motion_enabled）的初始值：真机默认 false（等遥控器 START）；
+    // 仿真没有遥控器，launch 把它置 true，否则控制器一直不发 /cmd_vel。
+    motion_enabled_default_ = declare_parameter<bool>("motion_enabled_default", false);
+    motion_enabled_ = motion_enabled_default_;
 
     // 订阅规划器发布的轨迹
     bspline_sub_ = create_subscription<scan_planner_msgs::msg::Bspline>(
@@ -433,6 +437,7 @@ private:
   rclcpp::TimerBase::SharedPtr cmd_timer_;
   bool receive_traj_{false};
   bool motion_enabled_{false};
+  bool motion_enabled_default_{false};
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr motion_enabled_sub_;
   bool have_odom_{false};
   bool paused_{false};
