@@ -4,7 +4,8 @@
   真正把 scan_planner_node 以 navi_mode=3 起起来，然后由测试端扮演“外部”：
   持续发里程计、发一条 map 系下的参考路径、并按需广播 map→world 的 TF，
   检查规划器在各种 TF 状况下的行为是否安全：
-    1. TF 缺失/过旧 → 机器人必须停下（发布一条原地不动的轨迹）；
+    1. TF 缺失/过旧 → 机器人必须停下（发布一条原地不动的轨迹），
+       且期间不能被误判为“已到达”（状态话题不能变 goal_reached/idle）；
     2. TF 恢复新鲜 → 应该恢复规划；
     3. TF 短暂丢失（未超宽限）→ 不应丢弃仍然有效的世界系轨迹；
     4. 参考系突然跳变 → 应该换一条新轨迹，并且新轨迹跟随跳变后的路线；
@@ -13,6 +14,12 @@
 
 【怎么跑】
   colcon test --packages-select scan_planner --ctest-args -R reference
+
+【两个容易踩的点（已在本文件里修好）】
+  * 规划器/控制器默认 motion_enabled=false（等遥控器 START）。仿真/测试没有遥控器，
+    这里显式传 fsm.motion_enabled_default=true 打开，否则 FSM 什么都不做。
+  * 规划器用 TRANSIENT_LOCAL 订阅 initial_path；测试发布器必须用同样的 QoS，
+    否则一条消息都收不到（旧版测试就是因此一直失败）。
 """
 
 import math
@@ -29,20 +36,40 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Odometry, Path
 from rclpy.executors import SingleThreadedExecutor
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from scan_planner_msgs.msg import Bspline
+from std_msgs.msg import String
 from tf2_ros import TransformBroadcaster
+
+
+# 与规划器订阅 initial_path 的 QoS 保持一致（RELIABLE + TRANSIENT_LOCAL）。
+# 用 VOLATILE 发布器会握手失败，规划器收不到任何路径。
+PATH_QOS = QoSProfile(
+    depth=1,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+)
 
 
 @pytest.mark.launch_test
 def generate_test_description():
-    """起规划器节点（用仓库自带的 planner.yaml，只把 navi_mode 覆盖成 3）。"""
+    """起规划器节点（用仓库自带的 planner.yaml，覆盖 navi_mode=3 与自动使能）。"""
     config = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "planner.yaml"))
     planner = launch_ros.actions.Node(
         package="scan_planner",
         executable="scan_planner_node",
         name="scan_planner_node",
-        parameters=[config, {"fsm.navi_mode": 3}],
+        parameters=[
+            config,
+            {
+                "fsm.navi_mode": 3,
+                # 测试里没有遥控器：直接放开使能，专注验证 TF 安全逻辑
+                "fsm.motion_enabled_default": True,
+                # 本测试的里程计是静止的，把“无进展看门狗”的窗口放宽，
+                # 避免它在本测试的时间尺度内抢先把本段判成“走完”。
+                "fsm.finish_stuck_window": 30.0,
+            },
+        ],
         output="screen",
     )
     return (
@@ -76,11 +103,14 @@ class TestDynamicReferenceTf(unittest.TestCase):
         executor.add_node(node)
         # 模拟外部世界：里程计、参考路径、map→world 变换
         odom_pub = node.create_publisher(Odometry, "body_pose", qos_profile_sensor_data)
-        path_pub = node.create_publisher(Path, "initial_path", 10)
+        path_pub = node.create_publisher(Path, "initial_path", PATH_QOS)
         tf_pub = TransformBroadcaster(node)
         # 收集规划器发出的轨迹，用来判断“是否停下 / 是否换了新轨迹”
         received = []
         node.create_subscription(Bspline, "planning/bspline", received.append, 10)
+        # 收集运行状态，用来断言“没有误判到达”
+        statuses = []
+        node.create_subscription(String, "/local_planner/status", statuses.append, 10)
 
         # 参考路径：map 系下沿 x 轴的两个点
         path = Path()
@@ -125,11 +155,21 @@ class TestDynamicReferenceTf(unittest.TestCase):
             )
 
         try:
-            # 场景 1：给了参考路径，但始终没有 TF → 应停下（收到原地不动的轨迹）
-            pump(0.3, send_path=True)
-            pump(0.8)
+            # 预热：DDS 发现需要时间，先喂一段时间 odom + 路径，让规划器真正订阅上。
+            # 这期间没有 TF，规划器会在宽限超时后发一次急停轨迹；
+            # 注意不要清空 received —— reference_tf_stop_ 后不会重复发急停轨迹，
+            # 场景 1 要检查的正是这条已经发出的轨迹。
+            pump(1.2, send_path=True)
+
+            # 场景 1：给了参考路径，但始终没有 TF → 应停下（收到原地不动的轨迹），
+            # 且这期间不能被误判为“已到达”（end_pt_ 还没换算到 world 系）。
+            pump(0.5, send_path=True)
+            pump(1.5)
             self.assertTrue(any(stationary(msg) for msg in received),
                             "stale/missing TF did not stop the robot")
+            reached = [s for s in statuses if '"goal_reached"' in s.data]
+            self.assertFalse(reached,
+                             "planner reported goal_reached before any reference TF was available")
 
             # 场景 2：TF 出现且新鲜 → 应恢复规划（出现非原地轨迹）
             pump(2.0, tf_y=0.0)

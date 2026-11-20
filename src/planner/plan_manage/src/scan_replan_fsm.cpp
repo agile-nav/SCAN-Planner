@@ -101,6 +101,10 @@ namespace scan_planner
     self_double_cylinder_offset_ = load_parameter<double>(node_, "grid_map.double_cylinder_offset", 0.0);
     body_height_ = load_parameter<double>(node_, "grid_map.body_height", 0.4);
     self_inflation_frame_id_ = load_parameter<std::string>(node_, "grid_map.frame_id", "world");
+    // 外部使能（/motion_enabled）的初始值。真机必须等遥控器 START，默认 false；
+    // 仿真没有这个遥控器，launch 会把它置 true，否则规划器和控制器一直不动。
+    motion_enabled_default_ = load_parameter<bool>(node_, "fsm.motion_enabled_default", false);
+    motion_enabled_ = motion_enabled_default_;
     reference_tf_max_age_ = load_parameter<double>(node_, "fsm.reference_tf_max_age", 0.3);
     reference_tf_grace_ = load_parameter<double>(node_, "fsm.reference_tf_grace", 0.5);
     reference_tf_jump_translation_ = load_parameter<double>(node_, "fsm.reference_tf_jump_translation", 0.2);
@@ -359,6 +363,8 @@ namespace scan_planner
       // 标记“已有目标”“这是一个新目标”
       have_target_ = true;
       have_new_target_ = true;
+      // mode1/mode2 的目标点直接就是 world 系坐标，无需等参考 TF
+      status_target_valid_ = true;
       // 新目标 → 运行状态置为 running
       armPlannerStatus();
 
@@ -491,6 +497,8 @@ namespace scan_planner
     end_vel_.setZero();
     have_target_ = true;
     have_new_target_ = true;
+    // 航点坐标本身就在 world 系，目标立即可用于到达判定
+    status_target_valid_ = true;
     // 显示全局路径与当前航点
     visualization_->displayGlobalPathList(gloabl_traj, 0.1, 0);
     visualization_->displayGoalPoint(end_pt_, Eigen::Vector4d(0, 0.5, 0.5, 1), 0.3, current_wp_);
@@ -659,6 +667,27 @@ namespace scan_planner
       exec_no_progress_ = false;
       exec_progress_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
       status_is_stop_ = false;
+      // 只有“真正的新目标”才清掉到达判定缓存；重复收到同一条路径
+      // （外部全局规划器可能周期性重发）不应该反复重置去抖计时。
+      if (status_new_goal)
+      {
+        status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+        status_goal_snapshot_ = Eigen::Vector3d::Zero();
+      }
+
+      // 目标点必须立刻换算到 world 系，否则 updatePlannerStatus 会拿陈旧/未初始化的
+      // end_pt_ 做距离判定，机器人在旧目标附近且静止时会被误判为“已到达”。
+      // 拿不到参考 TF 时先标记无效，等 monitorReferenceTransform 成功后再置位。
+      Eigen::Isometry3d reference_to_world;
+      if (lookupReferenceTransform(reference_to_world))
+      {
+        end_pt_ = reference_to_world * reference_end_pt_;
+        status_target_valid_ = true;
+      }
+      else
+      {
+        status_target_valid_ = false;
+      }
 
       // 目标变化 → 进入 running（重复路径不重置）
       if (status_new_goal)
@@ -1108,6 +1137,12 @@ namespace scan_planner
       // 已到达目标、且 goal_reached 已发过一次 → 转为 idle，等待新目标
       state = "idle";
     }
+    else if (!status_target_valid_)
+    {
+      // 目标点还没换算到 world 系（mode3 刚收到新路径、参考 TF 尚未就绪）。
+      // 此时 end_pt_ 不可信，不能做到达判定，否则会拿陈旧/未初始化的目标误判“已到达”。
+      state = "running";
+    }
     else if (status_error_latched_)
     {
       // 硬错误已锁存：error 不自动恢复，只有重启节点才清除
@@ -1327,6 +1362,8 @@ namespace scan_planner
     reference_end_pt_.setZero();
     end_pt_.setZero();
     end_vel_.setZero();
+    // 目标已清空：到达判定必须先失效，等新路径重新换算后再置位
+    status_target_valid_ = false;
     have_target_ = false;
     have_new_target_ = false;
     trigger_ = false;
@@ -2670,6 +2707,8 @@ namespace scan_planner
     // 拿到了 → 清空“缺失起始时刻”，并按最新变换刷新终点
     reference_tf_missing_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     end_pt_ = current * reference_end_pt_;
+    // 目标点已经能换算到 world 系，到达判定从这里开始才可信
+    status_target_valid_ = true;
     // 执行轨迹期间，参考系若突然跳了一大步，旧轨迹的预测状态已不可信 → 重规划
     if (exec_state_ == EXEC_TRAJ && have_last_reference_transform_ &&
         referenceTransformJumped(last_reference_to_world_, current, odom_pos_,
@@ -2818,12 +2857,15 @@ namespace scan_planner
         last_target_failure_ = ReplanFailure::NO_FREE_TARGET;
         return false;
       }
-      if (!target_found && target_t < duration)
-      {
-        reference_end_pt_ = planner_manager_->global_data_.getPosition(target_t);
-        planner_manager_->global_data_.global_duration_ = target_t;
-        end_pt_ = local_target_pt_;
-      }
+      // 【修复】这里原来会做三件事：
+      //   reference_end_pt_ = getPosition(target_t);
+      //   global_data_.global_duration_ = target_t;
+      //   end_pt_ = local_target_pt_;
+      // 结果是“局部目标撞到障碍、后退找了一个替代点”时，整条参考路径被截断到该点。
+      // 路径一截断，机器人走完这一小段就以为到了终点，永远到不了真正的目标。
+      // 局部目标只影响“这一轮往哪走”，不应该改动全局路径与最终终点：
+      //   end_pt_ 仍是最终目标（到达判定用它），reference_end_pt_ 仍保留原始路径终点。
+      // target_t 只作为本轮的局部目标时刻，已在上面记录到 last_progress_time_。
     }
 
     // 如果局部目标已经非常接近最终终点（进入刹车距离之内）

@@ -160,6 +160,8 @@ namespace scan_planner
     bool go2_execution_frozen_;
     // 外部使能（/motion_enabled，遥控器 START/B）：false 时冻结轨迹不规划不下发
     bool motion_enabled_{false};
+    // 无外部使能时的初始值：真机默认 false（必须等 START）；仿真由 launch 置 true 才能跑起来
+    bool motion_enabled_default_{false};
     // 重规划起点脱困：起点落在膨胀层里时，沿"起点→局部目标"方向最多前推这么多米
     double start_escape_max_offset_{1.0};
     // [replan-geom] 节流(ms)；0=不节流
@@ -201,7 +203,8 @@ namespace scan_planner
     Eigen::Quaterniond odom_orient_;
 
     Eigen::Vector3d init_pt_, start_pt_, start_vel_, start_acc_, start_yaw_; // start state
-    Eigen::Vector3d end_pt_, end_vel_;                                       // goal state
+    Eigen::Vector3d end_pt_{Eigen::Vector3d::Zero()};                        // goal state
+    Eigen::Vector3d end_vel_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d local_target_pt_, local_target_vel_;                     // local target state
     Eigen::Vector3d reference_end_pt_{Eigen::Vector3d::Zero()};
     Eigen::Isometry3d planning_reference_to_world_{Eigen::Isometry3d::Identity()};
@@ -217,6 +220,9 @@ namespace scan_planner
     // ---------- 运行状态发布(running/goal_reached) ----------
     // 是否收到过目标：没收到过属于 idle，不上话题
     bool status_have_goal_{false};
+    // 当前目标点是否已换算到 world 系（mode3 需要等第一帧参考 TF）
+    // false 时 updatePlannerStatus 不做到达判定，避免用陈旧/未初始化的 end_pt_ 误判“已到达”
+    bool status_target_valid_{false};
     // 当前是否已判为 goal_reached（锁存，直到收到新目标）
     bool status_is_stop_{false};
     // 是否已有"上一次目标点"，用于重复路径去重
