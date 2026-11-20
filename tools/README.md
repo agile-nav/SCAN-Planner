@@ -18,26 +18,51 @@ The generated file is a ROS 2 parameter file containing the flat
 再用 `sim_check_probe.py` 做闭环检查。
 
 ```bash
-# 三个机型都跑（a2 / go2 / go2w）
+# 三个机型 + empty_3m（默认）
 ./tools/sim_check.sh
 
-# 只跑一个
+# 只跑一个（兼容旧用法）
 ./tools/sim_check.sh go2w
+
+# 10 m 直线空地图（验证 horizon / 长距离局部目标）
+./tools/sim_check.sh --scenario straight_10m
+
+# 指定场景和机型
+./tools/sim_check.sh --scenario straight_10m a2
+./tools/sim_check.sh --scenario straight_10m --robot go2w
 
 # GPU 渲染后端（需先用 -DUSE_GPU=ON 构建）
 USE_GPU=true ./tools/sim_check.sh
 ```
+
+场景文件在 `tools/scenarios/<scenario>.yaml`，由 `tools/scenario_env.py` 转成
+shell 参数。当前场景：
+
+- `empty_3m`：3 m 平地短路 + 空地图，快速烟测。
+- `straight_10m`：10 m 直线 + 空地图，抓 horizon/地图不匹配和长距离退化。
+- `corridor_obstacle`：10 m 直线 + 固定 PCD 横墙，验证绕障；断言与障碍物的
+  最小间隙 ≥ `min_clearance`，不允许“直接穿墙也算到达”。
+
+场景 YAML 可配置：`path_file / navi_mode / obstacle_number / use_pcd_map /
+pcd_map_file / timeout / min_move / goal_x / goal_y / goal_tol / goal_settle /
+obstacle_bbox / min_clearance / map_size_*`。
+
+到点后会再观察 `goal_settle` 秒（默认 1 s），避免“刚冲过阈值就退出”。
+有 `obstacle_bbox` 时，实际间隙阈值取
+`max(min_clearance, 机型圆柱半径 + 0.05 m)`，不会让比机器人半径还小的间隙通过。
 
 检查项：
 
 1. `/robot_description` 的 `<robot name>` 与机型一致；
    A2/Go2 为 12 个腿关节，Go2-W 为 12 腿 + 4 轮（共 16）。
 2. TF `world -> base` 存在。
-3. 规划器收到 `/planning/bspline`、状态进入 `running`、机器人产生实际位移。
+3. 规划器收到 `/planning/bspline`、状态进入 `running`、机器人产生实际位移；
+   场景给了 `goal_x/goal_y` 时，还要求最终到终点距离 <= `goal_tol`；
+   场景给了 `obstacle_bbox` 时，还要求轨迹与障碍物的最小间隙 >= `min_clearance`。
 4. `/joint_states` 的腿/轮关节数量符合机型。
 5. `/self_inflation` 前后双圆柱的半径/偏移/高度与机型档案一致。
 
-日志：`log/sim_check/<机型>.log`。
+日志：`log/sim_check/<scenario>_<机型>.log`。
 
 注意：
 

@@ -1,0 +1,20 @@
+# ============================================================================
+# 场景：straight_10m —— 10 m 直线空地图
+#
+# 用来抓“planning_horizon 与局部地图不匹配、长距离局部目标退化、
+# 中途卡住/反复重试”这类 3 m 烟测覆盖不到的问题。
+# ============================================================================
+name: straight_10m
+path_file: scenarios/straight_10m_path.yaml
+navi_mode: 3
+obstacle_number: 0
+use_pcd_map: false
+pcd_map_file: ""
+timeout: 90
+min_move: 8.0
+goal_x: -5.5
+goal_y: -4.5
+goal_tol: 0.8
+map_size_x: 40.0
+map_size_y: 40.0
+map_size_z: 5.0

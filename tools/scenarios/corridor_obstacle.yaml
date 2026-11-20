@@ -1,0 +1,25 @@
+# ============================================================================
+# 场景：corridor_obstacle —— 10 m 直线 + 固定横墙
+#
+# 使用固定 PCD 地图（不是随机 mockamap），保证每次回归的障碍位置一致。
+# 期望：规划器绕开 y=1.0 的横墙，最终到达 (-5.5, -4.5)。
+# ============================================================================
+name: corridor_obstacle
+path_file: scenarios/corridor_obstacle_path.yaml
+navi_mode: 3
+obstacle_number: 0
+use_pcd_map: true
+pcd_map_file: tools/scenarios/corridor_obstacle.pcd
+timeout: 90
+min_move: 6.0
+goal_x: -5.5
+goal_y: -4.5
+goal_tol: 0.6
+# 障碍物包围盒 [xmin, xmax, ymin, ymax]；这里是一面 y=1.0 的横墙
+obstacle_bbox: [-6.5, -4.5, 1.0, 1.0]
+# 要求轨迹与障碍物的最小间隙（米），防止直接穿墙。
+# 探针实际阈值会取 max(0.20, 机型圆柱半径 + 0.05)。
+min_clearance: 0.20
+map_size_x: 40.0
+map_size_y: 40.0
+map_size_z: 5.0

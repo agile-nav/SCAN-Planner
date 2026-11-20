@@ -5,7 +5,9 @@
 # 在仿真栈已经拉起后，检查：
 #   ① 模型身份   ：/robot_description 的 <robot name=...> 与机型一致，12 个腿关节（Go2-W 另含 4 轮）
 #   ② TF         ：world -> base 可查
-#   ③ 规划闭环   ：收到 planning/bspline、状态进入 running、机器人实际位移足够
+#   ③ 规划闭环   ：收到 planning/bspline、状态进入 running、位移足够；
+#                   场景有终点时检查到终点距离并等待 settle，有 obstacle_bbox 时
+#                   检查最小间隙（阈值至少为机型圆柱半径 + 0.05 m）
 #   ④ 关节动画   ：/joint_states 有 12 个腿关节（Go2-W 共 16）
 #   ⑤ 碰撞几何   ：/self_inflation 的前后圆柱半径/偏移/高度与机型档案一致
 #
@@ -14,6 +16,7 @@
 # ============================================================================
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -32,9 +35,25 @@ from visualization_msgs.msg import Marker
 ROBOT = sys.argv[1] if len(sys.argv) > 1 else "?"
 PROFILE = sys.argv[2] if len(sys.argv) > 2 else ""
 
-# 闭环等待上限：参考路径约 10 m，按 1 m/s 留足余量
-MOVE_TIMEOUT = 45.0
-MIN_MOVE = 1.0
+# 场景参数由 sim_check.sh 通过环境变量传入；缺省保持原来的烟测行为。
+MOVE_TIMEOUT = float(os.environ.get("SCENARIO_TIMEOUT", "45.0"))
+MIN_MOVE = float(os.environ.get("SCENARIO_MIN_MOVE", "1.0"))
+GOAL_TOL = float(os.environ.get("SCENARIO_GOAL_TOL", "0.5"))
+GOAL_SETTLE = float(os.environ.get("SCENARIO_GOAL_SETTLE", "1.0"))
+_goal_x = os.environ.get("SCENARIO_GOAL_X", "")
+_goal_y = os.environ.get("SCENARIO_GOAL_Y", "")
+GOAL = (float(_goal_x), float(_goal_y)) if _goal_x and _goal_y else None
+_bbox = os.environ.get("SCENARIO_OBSTACLE_BBOX", "")
+OBSTACLE_BBOX = tuple(float(v) for v in _bbox.split(",")) if _bbox else None
+MIN_CLEARANCE = float(os.environ.get("SCENARIO_MIN_CLEARANCE", "0.0"))
+
+
+def bbox_distance(x, y, bbox):
+    """点到矩形包围盒的二维距离；点在盒内返回 0。"""
+    xmin, xmax, ymin, ymax = bbox
+    dx = max(xmin - x, 0.0, x - xmax)
+    dy = max(ymin - y, 0.0, y - ymax)
+    return math.hypot(dx, dy)
 
 
 def load_expectations(profile_path):
@@ -147,22 +166,59 @@ def main():
                     f"OK  base=({p0[0]:.2f}, {p0[1]:.2f})" if p0
                     else "FAIL 查不到 world->base"))
 
-    # ③ 规划闭环：收到轨迹 + 状态 running + 实际位移（相对最开始记录的 p0）
+    # ③ 规划闭环：收到轨迹 + 状态 running + 实际位移；
+    #    场景给了终点时，还要求最终到终点距离 <= 阈值。
     ok3 = False
     detail3 = "FAIL 无 TF，无法判断"
     if p0:
         deadline = time.time() + MOVE_TIMEOUT
         p1 = p0
+        moved = 0.0
+        goal_dist = None
+        path_xy = []
+        reached_since = None
         while time.time() < deadline:
             rclpy.spin_once(p, timeout_sec=0.05)
             p1 = p.base_xy()
-            if p1 and math.hypot(p1[0] - p0[0], p1[1] - p0[1]) >= MIN_MOVE:
+            if not p1:
+                continue
+            path_xy.append(p1)
+            moved = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+            if GOAL is not None:
+                goal_dist = math.hypot(p1[0] - GOAL[0], p1[1] - GOAL[1])
+                if goal_dist <= GOAL_TOL:
+                    if reached_since is None:
+                        reached_since = time.time()
+                    # 到达阈值后再观察一小段时间，确认不是“冲过阈值又离开”
+                    if time.time() - reached_since >= GOAL_SETTLE:
+                        break
+                else:
+                    reached_since = None
+            elif moved >= MIN_MOVE:
                 break
-        moved = math.hypot(p1[0] - p0[0], p1[1] - p0[1]) if p1 else 0.0
         ok3 = p.bsplines > 0 and moved >= MIN_MOVE and p.saw_state("running")
-        detail3 = (f"OK  轨迹={p.bsplines}, 位移={moved:.2f} m, running={p.saw_state('running')}"
-                   if ok3 else
-                   f"FAIL 轨迹={p.bsplines}, 位移={moved:.2f} m, running={p.saw_state('running')}")
+        if GOAL is not None:
+            ok3 = ok3 and goal_dist is not None and goal_dist <= GOAL_TOL
+        clearance = None
+        effective_min_clearance = MIN_CLEARANCE
+        if expect["radius"] > 0.0:
+            # 路径间隙至少覆盖机型圆柱半径，再加一点余量
+            effective_min_clearance = max(
+                effective_min_clearance, expect["radius"] + 0.05)
+        if OBSTACLE_BBOX is not None:
+            if path_xy:
+                clearance = min(bbox_distance(x, y, OBSTACLE_BBOX)
+                                for x, y in path_xy)
+                ok3 = ok3 and clearance >= effective_min_clearance
+            else:
+                ok3 = False
+        detail3 = (f"轨迹={p.bsplines}, 位移={moved:.2f} m, running={p.saw_state('running')}")
+        if GOAL is not None:
+            detail3 += f", goal_dist={goal_dist:.2f} m" if goal_dist is not None else ", goal_dist=?"
+        if OBSTACLE_BBOX is not None:
+            detail3 += (f", clearance={clearance:.2f}/{effective_min_clearance:.2f} m"
+                        if clearance is not None else ", clearance=?")
+        detail3 = ("OK  " if ok3 else "FAIL ") + detail3
     results.append(("③ 规划闭环", detail3))
 
     # ④ 关节动画

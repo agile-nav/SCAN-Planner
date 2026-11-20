@@ -1,0 +1,13 @@
+# ============================================================================
+# 文件：tools/scenarios/corridor_obstacle_path.yaml
+#
+# 与 straight_10m 相同的 10 m 直线路径；路径中间 y=1.0 处有一面固定横墙
+# （见 corridor_obstacle.pcd），用于验证局部规划的绕障/到达行为。
+# ============================================================================
+reference_path_publisher:
+  ros__parameters:
+    frame_id: world
+    publish_delay_sec: 3.0
+    waypoints:
+      [-5.5, 5.5, 0.0,
+       -5.5, -4.5, 0.0]

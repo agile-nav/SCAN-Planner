@@ -1,0 +1,19 @@
+# ============================================================================
+# 场景：empty_3m —— 现有烟测
+#
+# 3 m 平地短路 + 空地图，只验证模型/TF/规划闭环/关节/碰撞几何链路。
+# ============================================================================
+name: empty_3m
+path_file: sim_check_path.yaml
+navi_mode: 3
+obstacle_number: 0
+use_pcd_map: false
+pcd_map_file: ""
+timeout: 45
+min_move: 1.0
+goal_x: -5.5
+goal_y: 3.5
+goal_tol: 0.5
+map_size_x: ""
+map_size_y: ""
+map_size_z: ""
