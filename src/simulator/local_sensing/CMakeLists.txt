@@ -64,4 +64,14 @@ install(TARGETS ${renderer_targets} DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY params DESTINATION share/${PROJECT_NAME})
 install(FILES include/camera.vs include/camera.fs include/360camera.vs
   DESTINATION share/${PROJECT_NAME}/shaders)
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_pointcloud_transform test/test_pointcloud_transform.cpp)
+  target_include_directories(test_pointcloud_transform PRIVATE
+    include ${PCL_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIR})
+  target_link_libraries(test_pointcloud_transform
+    Eigen3::Eigen ${PCL_LIBRARIES})
+endif()
+
 ament_package()

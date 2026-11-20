@@ -21,6 +21,7 @@
 #include <plan_manage/reference_path_utils.h>
 #include <plan_manage/reference_frame_utils.h>
 #include <plan_manage/replan_retry.h>
+#include <plan_manage/local_target_utils.h>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -2820,29 +2821,25 @@ namespace scan_planner
       planning_reference_to_world_ = reference_to_world;
       end_pt_ = reference_to_world * reference_end_pt_;
     }
-    // 起点也换算到参考系下，后面的距离都在同一个坐标系里算
-    const Eigen::Vector3d reference_start = reference_to_world.inverse() * start_pt_;
     auto toWorld = [&](const Eigen::Vector3d &reference_point) {
       return reference_to_world * reference_point;
     };
     const double max_vel = planner_manager_->pp_.max_vel_;
     const double max_acc = planner_manager_->pp_.max_acc_;
     const double duration = planner_manager_->global_data_.global_duration_;
-    // 【地图一致性】前视距离不能超过局部地图真正可信的范围：
-    //   滑动地图只有 sliding_map_size（半宽 5 m），局部更新范围更小；
-    //   若 planning_horizon 取 7.5 m，前视点必然落在图外，
-    //   getInflateOccupancy 会返回 -1（被所有调用方当作障碍），
-    //   于是每一轮都要走“局部目标调整”的兜底分支。
-    // 这里按 local_update_range 夹紧，并对未来新增机型自动生效。
+
+    // 【地图一致性】前视距离不能超过局部地图真正可信的范围。
     double horizon = planning_horizon_;
     if (planner_manager_ && planner_manager_->grid_map_)
     {
       const Eigen::Vector3d range = planner_manager_->grid_map_->getLocalUpdateRange();
-      const double usable = std::min(range(0), range(1)) - self_double_cylinder_radius_;
-      if (usable > 0.5)
-        horizon = std::min(horizon, usable);
+      horizon = scan_planner::clampLocalHorizon(
+          planning_horizon_, range(0), range(1), self_double_cylinder_radius_, 0.5);
     }
-    horizon = std::max(0.5, horizon);
+    else
+    {
+      horizon = std::max(0.5, horizon);
+    }
     if (horizon + 1e-6 < planning_horizon_)
     {
       RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
@@ -2850,52 +2847,24 @@ namespace scan_planner
                            "clamped to %.2f m",
                            planning_horizon_, horizon);
     }
+
     // 采样步长：把规划视野长度分成 20 份
     double t_step = max_vel > 1e-6 ? horizon / 20.0 / max_vel : 0.01;
     t_step = std::max(t_step, 0.01);
 
-    // 先在全局轨迹上找“离起点最近”的时刻 t_proj，避免轨迹回绕时取错段
-    double t_proj = 0.0;
-    double min_dist_to_start = 9999.0;
-    // t：沿全局轨迹遍历用的时间变量
-    for (double t = 0.0; t < duration; t += t_step)
-    {
-      // 该时刻的位置
-      Eigen::Vector3d pos_t = planner_manager_->global_data_.getPosition(t);
-      // 它离当前起点有多远
-      double dist_to_start = (pos_t - reference_start).norm();
-      // 记录“离起点最近的点”，后面回退搜索时不能越过它
-      if (dist_to_start < min_dist_to_start)
-      {
-        min_dist_to_start = dist_to_start;
-        t_proj = t;
-      }
-    }
+    // 纯函数：路径投影 + 前视目标 + 被占时的前后替代点。
+    auto world_path = [&](double t) {
+      return toWorld(planner_manager_->global_data_.getPosition(t));
+    };
+    const auto projection = scan_planner::projectOntoPath(
+        world_path, duration, t_step, start_pt_);
+    const double t_proj = projection.t_proj;
 
-    // target_t：局部目标在全局轨迹上对应的时刻（默认取全局终点）
-    double target_t = duration;
-    double total_dist = 0.0;
-    bool target_found = false;
-    Eigen::Vector3d prev_pos = planner_manager_->global_data_.getPosition(t_proj);
-    // 局部目标 = 最终终点
-    local_target_pt_ = end_pt_;
-
-    // 从 t_proj 往后走，累计走过的弧长；达到规划视野长度就以那里为局部目标
-    for (double t = t_proj; t < duration; t += t_step)
-    {
-      Eigen::Vector3d pos_t = planner_manager_->global_data_.getPosition(t);
-      total_dist += (pos_t - prev_pos).norm();
-      // 一旦距离达到规划视野长度 → 就把这个点作为局部目标
-      if (total_dist >= horizon)
-      {
-        local_target_pt_ = toWorld(pos_t);
-        target_t = t;
-        target_found = true;
-        break;
-      }
-      prev_pos = pos_t;
-    }
-    // 把“进度时间”记成局部目标时刻，保证下一轮从这里继续（不会回头看）
+    const auto forward_target = scan_planner::findForwardTarget(
+        world_path, duration, t_proj, horizon, t_step, end_pt_);
+    double target_t = forward_target.t;
+    const bool target_found = forward_target.found;
+    local_target_pt_ = forward_target.point;
     planner_manager_->global_data_.last_progress_time_ = target_found ? target_t : duration;
 
     // 小工具：查询某个点是否被障碍占据（查询时带上朝向）
@@ -2911,61 +2880,23 @@ namespace scan_planner
     auto acceptableTarget = [&](const Eigen::Vector3d &pt, double t) {
       if (targetOccupancy(pt) != 0)
         return false;
-      if (t >= duration - 1e-3)
-        return true;
-      return (pt - start_pt_).head<2>().norm() >= min_target_dist;
+      return scan_planner::targetFarEnough(
+          pt, t, duration, start_pt_, min_target_dist);
     };
 
     // 如果局部目标恰好落在障碍里 → 前后各找一个“能站人”的点代替
     if (targetOccupancy(local_target_pt_) != 0)
     {
-      // 是否已找到可用的替代点
-      bool found_free_target = false;
-      // adjusted_t：替代点对应的时刻
-      double adjusted_t = target_t;
-
-      // 从目标时刻出发，向两侧逐步扩大搜索范围
-      for (double dt = 0.0; dt <= duration; dt += t_step)
+      const auto fallback = scan_planner::findFallbackTarget(
+          world_path, duration, t_proj, target_t, t_step,
+          acceptableTarget, end_pt_);
+      if (fallback.found)
       {
-        // 先往“前”找（更靠近终点的那一侧）
-        double t_forward = target_t + dt;
-        // 不能超出全局轨迹的范围
-        if (t_forward <= duration)
-        {
-          Eigen::Vector3d pt = toWorld(planner_manager_->global_data_.getPosition(t_forward));
-          // 找到一个空点 → 采用它并结束搜索
-          if (acceptableTarget(pt, t_forward))
-          {
-            local_target_pt_ = pt;
-            adjusted_t = t_forward;
-            found_free_target = true;
-            break;
-          }
-        }
-
-        // 再往“后”找，但不能退到“离起点最近的点”之前
-        double t_backward = target_t - dt;
-        if (t_backward >= std::max(0.0, t_proj))
-        {
-          Eigen::Vector3d pt = toWorld(planner_manager_->global_data_.getPosition(t_backward));
-          if (acceptableTarget(pt, t_backward))
-          {
-            local_target_pt_ = pt;
-            adjusted_t = t_backward;
-            found_free_target = true;
-            break;
-          }
-        }
-      }
-
-      // 找到了替代点 → 打提示日志并更新目标时刻
-      if (found_free_target)
-      {
+        local_target_pt_ = fallback.point;
+        target_t = fallback.t;
         RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                              "Local target was adjusted to a nearby collision-free point");
-        target_t = adjusted_t;
       }
-      // 没找到 → 打警告（保持原目标，稍后会因碰撞触发重规划）
       else
       {
         RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
@@ -2973,15 +2904,7 @@ namespace scan_planner
         last_target_failure_ = ReplanFailure::NO_FREE_TARGET;
         return false;
       }
-      // 【修复】这里原来会做三件事：
-      //   reference_end_pt_ = getPosition(target_t);
-      //   global_data_.global_duration_ = target_t;
-      //   end_pt_ = local_target_pt_;
-      // 结果是“局部目标撞到障碍、后退找了一个替代点”时，整条参考路径被截断到该点。
-      // 路径一截断，机器人走完这一小段就以为到了终点，永远到不了真正的目标。
-      // 局部目标只影响“这一轮往哪走”，不应该改动全局路径与最终终点：
-      //   end_pt_ 仍是最终目标（到达判定用它），reference_end_pt_ 仍保留原始路径终点。
-      // target_t 只作为本轮的局部目标时刻，已在上面记录到 last_progress_time_。
+      // 局部目标只影响“这一轮往哪走”，不改全局路径与最终终点。
     }
 
     // 如果局部目标已经非常接近最终终点（进入刹车距离之内）

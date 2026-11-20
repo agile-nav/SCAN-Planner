@@ -34,6 +34,7 @@
 #include <pcl/search/impl/kdtree.hpp>
 #include <pcl/features/normal_3d.h>
 #include <pcl/common/common.h>
+#include "pointcloud_transform.h"
 #include <algorithm>
 #include <chrono>
 #include <vector>
@@ -2152,17 +2153,10 @@ shared(use_avia_pattern, use_vlp32_pattern, use_minicf_pattern, is_360lidar,    
   world2sensor = sensor2world.inverse();
 
   // pointcloud
-  point_in_sensor.points.clear();
-  // 空地图（或当前视野内没有点）时 local_map_filled 为空，width=0；
-  // pcl::transformPointCloud 内部会用 width 做除法，width=0 会触发 SIGFPE
-  // 把渲染节点打死。空的传感器点云直接发布即可，不需要做坐标变换。
-  if (!local_map_filled.points.empty())
-  {
-    pcl::transformPointCloud(local_map_filled, point_in_sensor, world2sensor);
-  }
-  point_in_sensor.width = point_in_sensor.points.size();
-  point_in_sensor.height = 1;
-  point_in_sensor.is_dense = true;
+  // 空输入由 transformPointCloudSafe 统一处理，避免 pcl::transformPointCloud
+  // 在 width=0 时做除法触发 SIGFPE；该行为有独立单测。
+  local_sensing::transformPointCloudSafe(
+      local_map_filled, world2sensor, point_in_sensor);
   pcl::toROSMsg(point_in_sensor, sensor_map_pcd);
   sensor_map_pcd.header.frame_id = sensor_frame_id_;
   sensor_map_pcd.header.stamp = time_stamp_;

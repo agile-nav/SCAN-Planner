@@ -105,6 +105,11 @@ if(BUILD_TESTING)
   ament_add_gtest(test_replan_retry test/test_replan_retry.cpp)
   target_include_directories(test_replan_retry PRIVATE include)
 
+  # 局部目标纯函数：前视夹紧、路径投影、前视点被占/兜底点选择
+  ament_add_gtest(test_local_target_utils test/test_local_target_utils.cpp)
+  target_include_directories(test_local_target_utils PRIVATE include)
+  target_link_libraries(test_local_target_utils Eigen3::Eigen)
+
   # Python 单测临时关掉 pytest 插件自动加载，避免环境里的第三方插件干扰
   set(_pytest_disable_plugin_autoload "$ENV{PYTEST_DISABLE_PLUGIN_AUTOLOAD}")
   set(ENV{PYTEST_DISABLE_PLUGIN_AUTOLOAD} "1")
@@ -124,6 +129,7 @@ if(BUILD_TESTING)
   # 两个启动测试：把发布器 / 规划器真正起起来，验证动态 TF 下的行为
   add_launch_test(test/test_reference_path_publisher_launch.py TIMEOUT 30)
   add_launch_test(test/test_dynamic_reference_tf_launch.py TIMEOUT 35)
+
 endif()
 
 ament_package()
