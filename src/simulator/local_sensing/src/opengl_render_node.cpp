@@ -81,6 +81,10 @@ rclcpp::Time t_init(0, 0, RCL_ROS_TIME);
 // 数据到齐的标志
 bool has_odom(false);
 bool has_global_map(false);
+// 收到过“空地图”（例如 mockamap obstacle_number=0）：
+// GPU 渲染器无法从 0 个点初始化，但规划器仍需要 sensor_pose。
+// 这种模式下只发布位姿（不发布点云），让规划器在空地图上正常工作。
+bool global_map_empty(false);
 // 地图来源开关：true=订阅话题，false=从 PCD 文件读
 bool use_global_map_topic(false);
 
@@ -641,6 +645,26 @@ void rcvOdometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr message) 
   // convert to cam pose
   sensor2world = body2world * sensor2body;
 
+  // 空地图模式：渲染器无法从 0 个点初始化，但规划器仍需要 sensor_pose。
+  // 这里按 odom + 激光安装角直接发布位姿，让栅格地图能随机器人滑动。
+  if (global_map_empty) {
+    if (useLidarSensor()) {
+      const double theta = lidar_pitch * M_PI / 180.0;
+      Eigen::Matrix3f rot_body2lidar;
+      rot_body2lidar << cos(theta), 0, sin(theta),
+                        0, 1, 0,
+                        -sin(theta), 0, cos(theta);
+      Eigen::Matrix3f rot = pose.toRotationMatrix() * rot_body2lidar;
+      Eigen::Quaternionf quat(rot);
+      Eigen::Vector3f pos(odom.pose.pose.position.x,
+                          odom.pose.pose.position.y,
+                          odom.pose.pose.position.z);
+      publishLidarPose(odom, rclcpp::Time(odom.header.stamp), pos, quat);
+    } else if (useDepthSensor()) {
+      publishCameraPose(odom);
+    }
+  }
+
   // collision check function
   // running time statistics
   const auto t1 = std::chrono::steady_clock::now();
@@ -835,9 +859,14 @@ void rcvGlobalPointCloudCallBack(const sensor_msgs::msg::PointCloud2::ConstShare
     cloud_input.is_dense = xyz_cloud.is_dense;
   }
   if (cloud_input.empty()) {
-    RCLCPP_WARN(ros_node->get_logger(), "Received empty global pointcloud, waiting for next map.");
+    if (!global_map_empty) {
+      RCLCPP_WARN(ros_node->get_logger(),
+                  "Received empty global pointcloud; GPU renderer will publish pose only.");
+    }
+    global_map_empty = true;
     return;
   }
+  global_map_empty = false;
 
   if (useLidarSensor()) {
     render.read_pointcloud_fromcloud(cloud_input);
@@ -1312,6 +1341,32 @@ int main(int argc, char **argv) {
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(ros_node);
   executor.spin();
+
+  // 先销毁所有 ROS 实体，再 rclcpp::shutdown()。
+  // 与 CPU 版相同：全局 SharedPtr 若留到静态析构阶段才释放，
+  // context 已 shutdown，会打印 "cannot publish data / Failed to delete datareader"，
+  // 严重时直接 SIGSEGV，并留下 Fast-DDS 共享内存残留。
+  executor.remove_node(ros_node);
+  local_sensing_timer.reset();
+  dynobj_timer.reset();
+  global_map_sub.reset();
+  odom_sub.reset();
+  other_odom_subs.clear();
+  pub_cloud.reset();
+  pub_intercloud.reset();
+  pub_dyncloud.reset();
+  pub_uavcloud.reset();
+  pub_collisioncloud.reset();
+  pinhole_depth_pub_.reset();
+  camera_pose_pub_.reset();
+  lidar_pose_pub_.reset();
+  comp_time_pub.reset();
+  tf_broadcaster.reset();
+  ros_node.reset();
+
+  // 在静态析构之前释放 GLFW/OpenGL 资源；空地图时 window==nullptr，直接返回。
+  render.shutdown();
+
   rclcpp::shutdown();
   return 0;
 }

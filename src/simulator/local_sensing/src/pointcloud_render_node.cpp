@@ -2152,7 +2152,13 @@ shared(use_avia_pattern, use_vlp32_pattern, use_minicf_pattern, is_360lidar,    
 
   // pointcloud
   point_in_sensor.points.clear();
-  pcl::transformPointCloud(local_map_filled, point_in_sensor, world2sensor);
+  // 空地图（或当前视野内没有点）时 local_map_filled 为空，width=0；
+  // pcl::transformPointCloud 内部会用 width 做除法，width=0 会触发 SIGFPE
+  // 把渲染节点打死。空的传感器点云直接发布即可，不需要做坐标变换。
+  if (!local_map_filled.points.empty())
+  {
+    pcl::transformPointCloud(local_map_filled, point_in_sensor, world2sensor);
+  }
   point_in_sensor.width = point_in_sensor.points.size();
   point_in_sensor.height = 1;
   point_in_sensor.is_dense = true;
@@ -2362,6 +2368,29 @@ int main(int argc, char **argv)
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(ros_node);
   executor.spin();
+
+  // 先销毁所有 ROS 实体，再 rclcpp::shutdown()。
+  // 这些句柄是全局 SharedPtr，如果放着不管，它们会在 main 返回后的静态析构阶段
+  // 才释放 rmw 句柄；那时 context 已经 shutdown，会打印
+  // "cannot publish data / Failed to delete datareader"，严重时直接 SIGSEGV，
+  // 并留下 Fast-DDS 共享内存残留，影响下一次启动。
+  executor.remove_node(ros_node);
+  local_sensing_timer.reset();
+  dynobj_timer.reset();
+  global_map_sub.reset();
+  odom_sub.reset();
+  other_odom_subs.clear();
+  pub_cloud.reset();
+  pub_intercloud.reset();
+  pub_dyncloud.reset();
+  pub_uavcloud.reset();
+  pinhole_depth_pub_.reset();
+  camera_pose_pub_.reset();
+  lidar_pose_pub_.reset();
+  comp_time_pub.reset();
+  tf_broadcaster.reset();
+  ros_node.reset();
+
   rclcpp::shutdown();
   return 0;
 }

@@ -90,6 +90,9 @@ class opengl_pointcloud_render
     // 从 ROS 点云消息加载全局地图（在线订阅模式）
     void read_pointcloud_fromcloud(const pcl::PointCloud<PointType>& input_cloud);
     ~opengl_pointcloud_render();
+    // 显式释放 GLFW/OpenGL 资源；可重复调用（window==nullptr 时直接返回）。
+    // 空地图时渲染器从未初始化，析构不能盲目 glDelete/glfwTerminate。
+    void shutdown();
     // 设置渲染参数：图像尺寸、焦距、下采样分辨率、视场、射程、扫描图案
     void setParameters(int width, int height, float fx, float fy, float downsample_res, float polar_res_, float yaw_fov_,\
                  float vertical_fov_,float near,float far,int sensing_rate,int use_avia_pattern, int use_os128_pattern, int use_minicf_pattern);
@@ -119,9 +122,9 @@ class opengl_pointcloud_render
     float v0 = width*0.5;
     // OpenGL 的矩阵与缓冲对象（VBO/VAO/EBO 是 GL 的固定套路）
     glm::mat4 projection, view;
-    unsigned int VBO, VAO, EBO;
+    unsigned int VBO = 0, VAO = 0, EBO = 0;
     // 隐藏窗口的句柄（渲染在这个窗口里进行，但不会显示出来）
-    GLFWwindow* window;
+    GLFWwindow* window = nullptr;
     Shader ourShader;
     std::string shader_directory_;
 
@@ -325,8 +328,8 @@ void opengl_pointcloud_render::read_pointcloud_fromfile(std::string map_filename
     // glfw: initialize and configure
     // ------------------------------
     glfwInit();
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
     glfwWindowHint(GLFW_VISIBLE, GL_FALSE); // invisible window
@@ -494,8 +497,8 @@ void opengl_pointcloud_render::read_pointcloud_fromcloud(const pcl::PointCloud<P
     // glfw: initialize and configure
     // ------------------------------
     glfwInit();
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
     glfwWindowHint(GLFW_VISIBLE, GL_FALSE); // invisible window
@@ -566,10 +569,20 @@ void opengl_pointcloud_render::read_pointcloud_fromcloud(const pcl::PointCloud<P
 }
 
 opengl_pointcloud_render::~opengl_pointcloud_render(){
+    shutdown();
+}
 
-    glDeleteVertexArrays(1, &VAO);
-    glDeleteBuffers(1, &VBO);
-    
+void opengl_pointcloud_render::shutdown(){
+    // 空地图时渲染器从未初始化（window==nullptr），不能盲目调用 GL/GLFW。
+    if (window == nullptr)
+        return;
+    glfwMakeContextCurrent(window);
+    if (VAO != 0)
+        glDeleteVertexArrays(1, &VAO);
+    if (VBO != 0)
+        glDeleteBuffers(1, &VBO);
+    glfwDestroyWindow(window);
+    window = nullptr;
     glfwTerminate();
 }
 
