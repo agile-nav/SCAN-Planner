@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-test-sim:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup ROS 2 Humble
+        uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: humble
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          rosdep update
+          rosdep install --from-paths src --ignore-src -y --rosdistro humble
+
+      - name: Build
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+      - name: Test
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          colcon test --packages-select scan_planner --event-handlers console_direct+
+          colcon test-result --verbose
+
+      - name: Sim smoke (empty_3m)
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          ./tools/ci_sim_check.sh
+
+      - name: Sim regression (manual / weekly)
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          ./tools/ci_sim_check.sh --full
+
+      - name: Upload sim logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-check-logs
+          path: log/sim_check/*.log
+          if-no-files-found: ignore

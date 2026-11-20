@@ -110,3 +110,21 @@ gazebo:
   spawn_name: go2
   xacro_args: ["use_gazebo:=true"]
 ```
+
+## CI
+
+`.github/workflows/ci.yml` **只在手动触发时运行**，不会因 push/PR 自动启动。
+它做三件事：
+
+1. `rosdep install` + `colcon build`；
+2. `colcon test`；
+3. `tools/ci_sim_check.sh` 跑 `empty_3m` 烟测。
+
+手动触发（Actions → CI → Run workflow）还会跑完整回归：
+
+```bash
+./tools/ci_sim_check.sh --full
+```
+
+完整回归包括 `straight_10m / corridor_obstacle / narrow_passage / turning /
+multi_obstacle`。仿真日志会作为 CI artifact 上传到 `log/sim_check/*.log`。
