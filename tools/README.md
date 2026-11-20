@@ -42,10 +42,16 @@ shell 参数。当前场景：
 - `straight_10m`：10 m 直线 + 空地图，抓 horizon/地图不匹配和长距离退化。
 - `corridor_obstacle`：10 m 直线 + 固定 PCD 横墙，验证绕障；断言与障碍物的
   最小间隙 ≥ `min_clearance`，不允许“直接穿墙也算到达”。
+- `narrow_passage`：固定横墙留 0.8 m 窄缝，验证 footprint/膨胀层贴边通过。
+- `turning`：L 形路径 + 固定内墙，强制转弯；断言累计路径转向角 ≥ `min_yaw_change`。
+- `multi_obstacle`：三个交错固定障碍，验证多次绕行/重规划。
 
 场景 YAML 可配置：`path_file / navi_mode / obstacle_number / use_pcd_map /
 pcd_map_file / timeout / min_move / goal_x / goal_y / goal_tol / goal_settle /
-obstacle_bbox / min_clearance / map_size_*`。
+obstacle_bbox / obstacle_bboxes / min_clearance / min_yaw_change / map_size_*`。
+
+- `obstacle_bboxes` 是包围盒列表，用于多障碍/窄通道；
+- `min_yaw_change` 是累计路径转向角阈值（直线≈0，L 形≈π/2）。
 
 到点后会再观察 `goal_settle` 秒（默认 1 s），避免“刚冲过阈值就退出”。
 有 `obstacle_bbox` 时，实际间隙阈值取

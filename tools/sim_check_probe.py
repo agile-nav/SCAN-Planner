@@ -6,8 +6,9 @@
 #   ① 模型身份   ：/robot_description 的 <robot name=...> 与机型一致，12 个腿关节（Go2-W 另含 4 轮）
 #   ② TF         ：world -> base 可查
 #   ③ 规划闭环   ：收到 planning/bspline、状态进入 running、位移足够；
-#                   场景有终点时检查到终点距离并等待 settle，有 obstacle_bbox 时
-#                   检查最小间隙（阈值至少为机型圆柱半径 + 0.05 m）
+#                   场景有终点时检查到终点距离并等待 settle；有 obstacle_bbox(es)
+#                   时检查最小间隙（阈值至少为机型圆柱半径 + 0.05 m）；
+#                   有 min_yaw_change 时检查最终航向变化
 #   ④ 关节动画   ：/joint_states 有 12 个腿关节（Go2-W 共 16）
 #   ⑤ 碰撞几何   ：/self_inflation 的前后圆柱半径/偏移/高度与机型档案一致
 #
@@ -43,9 +44,18 @@ GOAL_SETTLE = float(os.environ.get("SCENARIO_GOAL_SETTLE", "1.0"))
 _goal_x = os.environ.get("SCENARIO_GOAL_X", "")
 _goal_y = os.environ.get("SCENARIO_GOAL_Y", "")
 GOAL = (float(_goal_x), float(_goal_y)) if _goal_x and _goal_y else None
-_bbox = os.environ.get("SCENARIO_OBSTACLE_BBOX", "")
-OBSTACLE_BBOX = tuple(float(v) for v in _bbox.split(",")) if _bbox else None
+_bboxes = os.environ.get("SCENARIO_OBSTACLE_BBOXES", "")
+OBSTACLE_BBOXES = []
+if _bboxes:
+    for item in _bboxes.split(";"):
+        if item.strip():
+            OBSTACLE_BBOXES.append(tuple(float(v) for v in item.split(",")))
+if not OBSTACLE_BBOXES:
+    _bbox = os.environ.get("SCENARIO_OBSTACLE_BBOX", "")
+    if _bbox:
+        OBSTACLE_BBOXES.append(tuple(float(v) for v in _bbox.split(",")))
 MIN_CLEARANCE = float(os.environ.get("SCENARIO_MIN_CLEARANCE", "0.0"))
+MIN_YAW_CHANGE = float(os.environ.get("SCENARIO_MIN_YAW_CHANGE", "0.0"))
 
 
 def bbox_distance(x, y, bbox):
@@ -54,6 +64,27 @@ def bbox_distance(x, y, bbox):
     dx = max(xmin - x, 0.0, x - xmax)
     dy = max(ymin - y, 0.0, y - ymax)
     return math.hypot(dx, dy)
+
+
+def path_turn(points):
+    """累计路径转向角：相邻运动方向的变化量之和（弧度）。
+
+    直线路径为 0；L 形 90° 路径约为 pi/2。
+    这样不会把“最终航向回到初始值”的 L 形路径误判为没转弯。
+    """
+    total = 0.0
+    prev_heading = None
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        dx, dy = x1 - x0, y1 - y0
+        if math.hypot(dx, dy) < 0.005:
+            continue
+        heading = math.atan2(dy, dx)
+        if prev_heading is not None:
+            delta = math.atan2(math.sin(heading - prev_heading),
+                               math.cos(heading - prev_heading))
+            total += abs(delta)
+        prev_heading = heading
+    return total
 
 
 def load_expectations(profile_path):
@@ -105,21 +136,28 @@ class Probe(Node):
         while time.time() < end:
             rclpy.spin_once(self, timeout_sec=0.05)
 
-    def base_xy(self):
+    def base_pose(self):
         try:
             t = self.tf.lookup_transform("world", "base", rclpy.time.Time())
-            return (t.transform.translation.x, t.transform.translation.y)
+            q = t.transform.rotation
+            yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                             1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+            return (t.transform.translation.x, t.transform.translation.y, yaw)
         except Exception:
             return None
 
+    def base_xy(self):
+        pose = self.base_pose()
+        return pose[:2] if pose else None
+
     def wait_for_base(self, timeout):
-        """等 TF 就绪并返回第一帧 base 位置（用于记录运动的起点）。"""
+        """等 TF 就绪并返回第一帧 base 位姿 (x, y, yaw)。"""
         deadline = time.time() + timeout
         while time.time() < deadline:
             rclpy.spin_once(self, timeout_sec=0.05)
-            pos = self.base_xy()
-            if pos:
-                return pos
+            pose = self.base_pose()
+            if pose:
+                return pose
         return None
 
     def saw_state(self, state):
@@ -179,10 +217,10 @@ def main():
         reached_since = None
         while time.time() < deadline:
             rclpy.spin_once(p, timeout_sec=0.05)
-            p1 = p.base_xy()
+            p1 = p.base_pose()
             if not p1:
                 continue
-            path_xy.append(p1)
+            path_xy.append((p1[0], p1[1]))
             moved = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
             if GOAL is not None:
                 goal_dist = math.hypot(p1[0] - GOAL[0], p1[1] - GOAL[1])
@@ -205,19 +243,28 @@ def main():
             # 路径间隙至少覆盖机型圆柱半径，再加一点余量
             effective_min_clearance = max(
                 effective_min_clearance, expect["radius"] + 0.05)
-        if OBSTACLE_BBOX is not None:
+        if OBSTACLE_BBOXES:
             if path_xy:
-                clearance = min(bbox_distance(x, y, OBSTACLE_BBOX)
-                                for x, y in path_xy)
+                clearance = min(
+                    bbox_distance(x, y, box)
+                    for x, y in path_xy for box in OBSTACLE_BBOXES)
                 ok3 = ok3 and clearance >= effective_min_clearance
             else:
                 ok3 = False
+        yaw_change = None
+        if MIN_YAW_CHANGE > 0.0:
+            # 路径转向角按相邻运动方向变化累计
+            yaw_change = path_turn(path_xy)
+            ok3 = ok3 and yaw_change >= MIN_YAW_CHANGE
         detail3 = (f"轨迹={p.bsplines}, 位移={moved:.2f} m, running={p.saw_state('running')}")
         if GOAL is not None:
             detail3 += f", goal_dist={goal_dist:.2f} m" if goal_dist is not None else ", goal_dist=?"
-        if OBSTACLE_BBOX is not None:
+        if OBSTACLE_BBOXES:
             detail3 += (f", clearance={clearance:.2f}/{effective_min_clearance:.2f} m"
                         if clearance is not None else ", clearance=?")
+        if MIN_YAW_CHANGE > 0.0:
+            detail3 += (f", path_turn={yaw_change:.2f}/{MIN_YAW_CHANGE:.2f} rad"
+                        if yaw_change is not None else ", path_turn=?")
         detail3 = ("OK  " if ok3 else "FAIL ") + detail3
     results.append(("③ 规划闭环", detail3))
 

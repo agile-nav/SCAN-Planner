@@ -1,0 +1,26 @@
+# ============================================================================
+# 场景：turning —— L 形 90° 转弯 + 固定内墙
+#
+# L 形内墙（x=-4.7 的竖墙 + y=2.0 的横墙）挡住起点到终点的对角线，
+# 强制机器人先沿 -y 走，再向右转。要求累计路径转向 >= 1.0 rad。
+# ============================================================================
+name: turning
+path_file: scenarios/turning_path.yaml
+navi_mode: 3
+obstacle_number: 0
+use_pcd_map: true
+pcd_map_file: tools/scenarios/turning.pcd
+timeout: 90
+min_move: 4.0
+goal_x: -1.5
+goal_y: 1.0
+goal_tol: 0.6
+goal_settle: 1.0
+min_yaw_change: 1.0
+obstacle_bboxes:
+  - [-4.7, -4.7, 2.0, 5.5]
+  - [-4.7, -1.5, 2.0, 2.0]
+min_clearance: 0.20
+map_size_x: 40.0
+map_size_y: 40.0
+map_size_z: 5.0

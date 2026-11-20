@@ -1,0 +1,25 @@
+# ============================================================================
+# 场景：narrow_passage —— 10 m 直线 + 中间 0.8 m 窄缝
+#
+# 两面固定横墙在 y=1.0 处留出 x∈(-5.9,-5.1) 的缝；
+# 验证机器人 footprint、膨胀层和贴边通过能力。
+# ============================================================================
+name: narrow_passage
+path_file: scenarios/straight_10m_path.yaml
+navi_mode: 3
+obstacle_number: 0
+use_pcd_map: true
+pcd_map_file: tools/scenarios/narrow_passage.pcd
+timeout: 90
+min_move: 6.0
+goal_x: -5.5
+goal_y: -4.5
+goal_tol: 0.6
+goal_settle: 1.0
+obstacle_bboxes:
+  - [-7.5, -5.9, 1.0, 1.0]
+  - [-5.1, -3.5, 1.0, 1.0]
+min_clearance: 0.20
+map_size_x: 40.0
+map_size_y: 40.0
+map_size_z: 5.0

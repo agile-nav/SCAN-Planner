@@ -26,7 +26,9 @@ DEFAULTS = {
     "goal_tol": 0.5,
     "goal_settle": 1.0,
     "obstacle_bbox": "",
+    "obstacle_bboxes": [],
     "min_clearance": 0.2,
+    "min_yaw_change": 0.0,
     "map_size_x": "",
     "map_size_y": "",
     "map_size_z": "",
@@ -46,7 +48,9 @@ VARIABLES = {
     "goal_tol": "GOAL_TOL",
     "goal_settle": "GOAL_SETTLE",
     "obstacle_bbox": "OBSTACLE_BBOX",
+    "obstacle_bboxes": "OBSTACLE_BBOXES",
     "min_clearance": "MIN_CLEARANCE",
+    "min_yaw_change": "MIN_YAW_CHANGE",
     "map_size_x": "MAP_SIZE_X",
     "map_size_y": "MAP_SIZE_Y",
     "map_size_z": "MAP_SIZE_Z",
@@ -63,6 +67,8 @@ def main():
         value = data.get(key, DEFAULTS[key])
         if isinstance(value, bool):
             value = "true" if value else "false"
+        elif key == "obstacle_bboxes" and isinstance(value, (list, tuple)):
+            value = ";".join(",".join(str(item) for item in box) for box in value)
         elif isinstance(value, (list, tuple)):
             value = ",".join(str(item) for item in value)
         print(f"{variable}={shlex.quote(str(value))}")

@@ -1,0 +1,25 @@
+# ============================================================================
+# 场景：multi_obstacle —— 10 m 直线 + 三个交错障碍
+#
+# 三个固定横墙片段交替挡在路径左右两侧，验证多次绕行/重规划。
+# ============================================================================
+name: multi_obstacle
+path_file: scenarios/straight_10m_path.yaml
+navi_mode: 3
+obstacle_number: 0
+use_pcd_map: true
+pcd_map_file: tools/scenarios/multi_obstacle.pcd
+timeout: 90
+min_move: 6.0
+goal_x: -5.5
+goal_y: -4.5
+goal_tol: 0.6
+goal_settle: 1.0
+obstacle_bboxes:
+  - [-7.0, -5.6, 3.0, 3.0]
+  - [-5.4, -4.0, 0.0, 0.0]
+  - [-7.0, -6.0, -2.5, -2.5]
+min_clearance: 0.20
+map_size_x: 40.0
+map_size_y: 40.0
+map_size_z: 5.0

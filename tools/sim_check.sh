@@ -172,7 +172,9 @@ for robot in "${ROBOTS[@]}"; do
        SCENARIO_GOAL_TOL="${GOAL_TOL}" \
        SCENARIO_GOAL_SETTLE="${GOAL_SETTLE}" \
        SCENARIO_OBSTACLE_BBOX="${OBSTACLE_BBOX}" \
+       SCENARIO_OBSTACLE_BBOXES="${OBSTACLE_BBOXES}" \
        SCENARIO_MIN_CLEARANCE="${MIN_CLEARANCE}" \
+       SCENARIO_MIN_YAW_CHANGE="${MIN_YAW_CHANGE}" \
        python3 "${TOOLS_DIR}/sim_check_probe.py" "${robot}" "${PROFILE}"; then
     fail_total=$((fail_total + 1))
   fi
