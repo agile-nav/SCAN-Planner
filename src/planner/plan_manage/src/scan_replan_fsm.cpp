@@ -701,11 +701,30 @@ namespace scan_planner
     // mode3 的终点每 tick 由 getLocalTarget / monitorReferenceTransform 从
     //   reference_end_pt_ 重算。必须同步写回，否则降级点立刻被覆盖回原目标
     //   （实测 go2：降级成功后同一毫秒内 getLocalTarget 报 no_free_target）。
+    //
+    //   写回失败时**必须整体回滚**，不能只跳过写回：
+    //     end_pt_ 已是降级点、mission_goal_degraded_ 也已置 true，
+    //     但到下个 tick monitorReferenceTransform() 会做
+    //       end_pt_ = current * reference_end_pt_   （reference_end_pt_ 仍是原目标）
+    //       mission_goal_pt_ = end_pt_              （连任务目标也一起打回）
+    //     于是到达判定指向原目标、而 mission_goal_degraded_ 让
+    //     goal_is_final 成立 → 既到不了、也不会重新降级，任务卡死。
     if (navi_mode_ == NAVI_MODE::REFERENCE_PATH)
     {
       Eigen::Isometry3d ref_to_world;
-      if (lookupReferenceTransform(ref_to_world))
-        reference_end_pt_ = ref_to_world.inverse() * end_pt_;
+      if (!lookupReferenceTransform(ref_to_world))
+      {
+        RCLCPP_WARN(node_->get_logger(),
+                    "Degrade to [%.2f, %.2f] needs a reference-frame writeback but TF is "
+                    "unavailable; roll back this round",
+                    degraded(0), degraded(1));
+        end_pt_ = goal_pt;
+        mission_goal_degraded_ = false;
+        have_truncated_reachable_pt_ = false;
+        truncated_reachable_pt_ = Eigen::Vector3d::Zero();
+        return false;
+      }
+      reference_end_pt_ = ref_to_world.inverse() * end_pt_;
     }
 
     const bool rebuilt = planner_manager_->planGlobalTraj(
