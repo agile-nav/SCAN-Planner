@@ -5,7 +5,8 @@
 # 检查：
 #   1. 旧文件名 / 旧节点名 / 旧说法是否还出现在用户文档里；
 #   2. Markdown 本地链接指向的文件是否存在；
-#   3. 关键文档是否仍覆盖 sim_check / 通用 launch / CI。
+#   3. 文档表格里不应出现“精确行数”（极易过期）；
+#   4. 关键文档是否仍覆盖 sim_check / 通用 launch / CI。
 #
 # 用法：python3 tools/docs_audit.py
 # ============================================================================
@@ -81,6 +82,28 @@ def audit_local_links():
     return errors
 
 
+def audit_no_exact_line_counts():
+    """行数极易过期；表格里的“行数”列应为 —。
+
+    只检查形如 `| \`a.cpp\` | 123 | ...` 的“文件 + 纯数字”单元格。
+    """
+    errors = []
+    # 只匹配“文件路径”条目（有 .ext 或含 /），避免把枚举表（INIT = 0）算进来
+    row = re.compile(r"^\|\s*`([^`]*(?:\.[A-Za-z0-9]+|/)[^`]*)`\s*\|\s*(\d+)\s*\|")
+    for path in DOC_FILES:
+        if not os.path.isfile(path):
+            continue
+        rel = os.path.relpath(path, ROOT)
+        with open(path, "r", encoding="utf-8") as handle:
+            for line_no, line in enumerate(handle, 1):
+                match = row.match(line)
+                if match:
+                    errors.append(
+                        f"{rel}:{line_no}: 不要写精确行数 "
+                        f"({match.group(1)} = {match.group(2)})，请用 —")
+    return errors
+
+
 def audit_required_mentions():
     errors = []
     checks = {
@@ -106,6 +129,7 @@ def main():
     errors = []
     errors += audit_banned_text()
     errors += audit_local_links()
+    errors += audit_no_exact_line_counts()
     errors += audit_required_mentions()
     if errors:
         print("文档审计失败：")
