@@ -29,7 +29,7 @@ TEST(GoalDegradeUtils, AcceptsGoalItself)
   Eigen::Vector3d out;
   int calls = 0;
   const bool ok = findNearestAcceptedOnRings(
-      goal, 1.0, kStep,
+      goal, 1.0, kStep, goal,
       [&](const Eigen::Vector3d &) {
         ++calls;
         return true;
@@ -47,7 +47,7 @@ TEST(GoalDegradeUtils, FindsNearestOutsideObstacle)
   Eigen::Vector3d out;
   const double blocked_r = 0.30;
   const bool ok =
-      findNearestAcceptedOnRings(goal, 1.0, kStep, beyondRadius(0.0, 0.0, blocked_r), out);
+      findNearestAcceptedOnRings(goal, 1.0, kStep, goal, beyondRadius(0.0, 0.0, blocked_r), out);
   ASSERT_TRUE(ok);
   const double d = std::hypot(out(0), out(1));
   // 必须位于障碍圈之外，且足够接近边界（不能跳到很远的环上）
@@ -62,7 +62,7 @@ TEST(GoalDegradeUtils, ReturnsFalseWhenNothingWithinRadius)
   const Eigen::Vector3d goal(0.0, 0.0, 0.25);
   Eigen::Vector3d out;
   EXPECT_FALSE(findNearestAcceptedOnRings(
-      goal, 0.5, kStep,
+      goal, 0.5, kStep, goal,
       [](const Eigen::Vector3d &) {
         return false;
       },
@@ -79,9 +79,9 @@ TEST(GoalDegradeUtils, RejectsNonPositiveRadiusOrStep)
     ++calls;
     return true;
   };
-  EXPECT_FALSE(findNearestAcceptedOnRings(goal, 0.0, kStep, accept, out));
-  EXPECT_FALSE(findNearestAcceptedOnRings(goal, -1.0, kStep, accept, out));
-  EXPECT_FALSE(findNearestAcceptedOnRings(goal, 1.0, 0.0, accept, out));
+  EXPECT_FALSE(findNearestAcceptedOnRings(goal, 0.0, kStep, goal, accept, out));
+  EXPECT_FALSE(findNearestAcceptedOnRings(goal, -1.0, kStep, goal, accept, out));
+  EXPECT_FALSE(findNearestAcceptedOnRings(goal, 1.0, 0.0, goal, accept, out));
   EXPECT_EQ(calls, 0);
 }
 
@@ -94,7 +94,7 @@ TEST(GoalDegradeUtils, RingDensityGrowsWithRadius)
   double max_ang_gap = 0.0;
   Eigen::Vector3d unused;
   const bool ok = findNearestAcceptedOnRings(
-      goal, R, kStep,
+      goal, R, kStep, goal,
       [](const Eigen::Vector3d &) {
         return false;
       },
@@ -129,7 +129,7 @@ TEST(GoalDegradeUtils, VisitsRingsInIncreasingRadius)
   bool monotonic = true;
   Eigen::Vector3d out;
   findNearestAcceptedOnRings(
-      goal, 0.3, kStep,
+      goal, 0.3, kStep, goal,
       [&](const Eigen::Vector3d &p) {
         const double r = std::hypot(p(0), p(1));
         if (r + 1e-9 < last_r)
@@ -139,4 +139,64 @@ TEST(GoalDegradeUtils, VisitsRingsInIncreasingRadius)
       },
       out);
   EXPECT_TRUE(monotonic);
+}
+
+// 同一环上有多个可行点时，必须选"离 prefer_near 最近"的那个，
+//   而不是按弧长顺序第一个通过的。
+//   实测背景：go2 的降级点曾被选在 162° 方向，而机器人从 -45° 过来，
+//   差 117°，机器人得绕过柱体才能到，结果停在半路。
+TEST(GoalDegradeUtils, PrefersPointNearestToGivenReference)
+{
+  const Eigen::Vector3d goal(0.0, 0.0, 0.0);
+  // 机器人位于 +y 方向：期望选到环上靠近 +y 的点
+  const Eigen::Vector3d robot(0.0, 2.0, 0.0);
+
+  // 障碍：goal 本身及 x<=0.05 一侧都不可用（否则第 0 环就直接返回 goal 了）
+  auto accept = [](const Eigen::Vector3d &p) { return p(0) > 0.05; };
+
+  Eigen::Vector3d out;
+  ASSERT_TRUE(findNearestAcceptedOnRings(goal, 0.5, kStep, robot, accept, out));
+  // 第一个有可用点的环是 r=0.10（r=0.05 环上所有点的 x 都 <= 0.05）。
+  //   该环 16 个采样点里，x>0.05 且最靠近 (0,2) 的是 45° 方向 -> (0.071, 0.071)。
+  //   关键断言：选出的点必须在 +x 侧、且 y 分量为正（靠近参考点的方向）。
+  EXPECT_GT(out(0), 0.05);
+  EXPECT_GT(out(1), 0.0);
+  const double r = std::hypot(out(0), out(1));
+  EXPECT_NEAR(r, 0.10, 2.0 * kStep);
+  // 若按弧长顺序选，会选中 0° 方向的 (0.10, 0.00)；选最近点则 y 应明显 > 0
+  EXPECT_GT(out(1), 0.05);
+}
+
+// 对照组：同样输入但参考点换成 -y，应选到环上另一个方向
+TEST(GoalDegradeUtils, ReferencePointChangesSelection)
+{
+  const Eigen::Vector3d goal(0.0, 0.0, 0.0);
+  auto accept = [](const Eigen::Vector3d &p) { return p(0) > 0.05; };
+
+  Eigen::Vector3d near_neg_y, near_pos_y;
+  ASSERT_TRUE(findNearestAcceptedOnRings(goal, 0.5, kStep,
+                                         Eigen::Vector3d(0, -2, 0), accept, near_neg_y));
+  ASSERT_TRUE(findNearestAcceptedOnRings(goal, 0.5, kStep,
+                                         Eigen::Vector3d(0, 2, 0), accept, near_pos_y));
+  // 两者都应在 +x 侧，但 y 分量符号相反
+  EXPECT_GT(near_neg_y(0), 0.0);
+  EXPECT_GT(near_pos_y(0), 0.0);
+  EXPECT_LT(near_neg_y(1), 0.0);
+  EXPECT_GT(near_pos_y(1), 0.0);
+}
+
+// 近环优先于远环：即使远环上有更接近参考点的点，也必须先选近环
+TEST(GoalDegradeUtils, NearerRingWinsOverCloserReference)
+{
+  const Eigen::Vector3d goal(0.0, 0.0, 0.0);
+  // 只在半径 >= 0.25 处可接受
+  auto accept = [](const Eigen::Vector3d &p) { return std::hypot(p(0), p(1)) >= 0.24; };
+  const Eigen::Vector3d robot(3.0, 0.0, 0.0);   // 参考点很远
+
+  Eigen::Vector3d out;
+  ASSERT_TRUE(findNearestAcceptedOnRings(goal, 0.5, kStep, robot, accept, out));
+  const double r = std::hypot(out(0), out(1));
+  // 必须落在第一个可接受的环上（约 0.25），不能因为参考点远就跳到更远的环
+  EXPECT_GE(r, 0.24);
+  EXPECT_LT(r, 0.24 + 3.0 * kStep);
 }

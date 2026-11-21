@@ -957,7 +957,7 @@ namespace scan_planner
     // 由近到远找出最近的"站得住"的点（先不验证连通性）。
     //   同心环的几何细节在 goal_degrade_utils.h（纯函数，有单测覆盖）。
     Eigen::Vector3d candidate;
-    if (!findNearestAcceptedOnRings(goal, max_radius, step, standable, candidate))
+    if (!findNearestAcceptedOnRings(goal, max_radius, step, start, standable, candidate))
       return false;
 
     // 第二级：从机器人当前位置能真正走到这个候选点吗。
