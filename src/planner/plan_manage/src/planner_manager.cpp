@@ -933,18 +933,34 @@ namespace scan_planner
 
     // 第二级：从机器人当前位置能真正走到这个候选点吗。
     //   有 A* 就验证；没有（未注入）则退化为旧的纯几何行为，避免直接不可用。
+    //
+    //   【z 必须取同一平面】A* 的搜索面按"起点→终点连线"插值 z：
+    //   若一端 z=0.50（机体中心）、另一端 z=0.00（地面目标），搜索面会斜着
+    //   穿过地面膨胀层（obstacles_inflation_z_down=0.4），实测必然
+    //   SEARCH_ERR(no path inside pool)。现有的 bspline_optimizer 调用者
+    //   传的是轨迹控制点的 z，两端本来就同高，所以没暴露这个问题。
+    //   这里统一成 goal 的 z：只关心水平连通性。
     if (bspline_optimizer_rebound_ && bspline_optimizer_rebound_->a_star_)
     {
+      Eigen::Vector3d astar_start = start;
+      Eigen::Vector3d astar_goal = candidate;
+      astar_start(2) = goal(2);
+      astar_goal(2) = goal(2);
       const ASTAR_RET ret =
-          bspline_optimizer_rebound_->a_star_->AstarSearch(step, start, candidate);
+          bspline_optimizer_rebound_->a_star_->AstarSearch(step, astar_start, astar_goal);
       if (ret != ASTAR_RET::SUCCESS)
       {
-        // 最近的可站点走不过去（典型：目标在一片被封死的空腔里）。
-        //   此时不做降级，让调用方退回"沿全局轨迹截断"的老路。
+        // 两种可能，都退回"沿全局轨迹截断"的老路（功能降级，不崩溃）：
+        //   · SEARCH_ERR：最近的可站点确实走不过去（典型：目标在一片被封死的空腔里）
+        //   · INIT_ERR  ：候选点出了 A* 搜索池。池子以 (start+goal)/2 为中心、
+        //     半宽 = pool*res/2 = ±4.0 m，因此 start 与 goal 相距超过约 6 m 时
+        //     （4.0 - 降级半径）就会出池。滑动地图 10x10 m，目标刚进图时
+        //     距离可能到 7 m，所以这个区间是真实存在的。
         RCLCPP_WARN(node_->get_logger(),
                     "[degrade] nearest standable point (%.2f, %.2f) is not connected to "
-                    "robot at (%.2f, %.2f) (A-star ret=%d); skip degradation",
-                    candidate(0), candidate(1), start(0), start(1), static_cast<int>(ret));
+                    "robot at (%.2f, %.2f) (A-star ret=%d, dist=%.2f m); skip degradation",
+                    candidate(0), candidate(1), start(0), start(1), static_cast<int>(ret),
+                    (candidate - start).head<2>().norm());
         return false;
       }
     }

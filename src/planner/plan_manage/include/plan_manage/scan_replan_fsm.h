@@ -275,6 +275,11 @@ namespace scan_planner
     // 降级搜索半径上限（米）：<=0 关闭降级，退回"沿轨迹截断"的旧行为。
     //   1.0 m 覆盖"目标落在最大障碍块中心"的最坏情况（膨胀后需外移约 0.65 m）。
     double goal_degrade_radius_{1.0};
+    // A* 连通性验证失败后的静默期：失败说明"最近的候选点走不过去"，
+    //   短时间内重试结果不会变，而安全回调是 50 ms 一次、每次 A* 约 17 ms，
+    //   不节流会明显挤占主循环。这里按"上一次失败的时刻"做退避。
+    std::chrono::steady_clock::time_point degrade_verify_failed_at_wall_{};
+    double degrade_verify_backoff_{5.0};
     // 当前是否已判为 goal_reached（锁存，直到收到新目标）
     bool status_is_stop_{false};
     // 是否已有"上一次目标点"，用于重复路径去重

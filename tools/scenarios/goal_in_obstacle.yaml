@@ -1,0 +1,26 @@
+# ============================================================================
+# 场景：goal_in_obstacle —— 目标点故意落在障碍块内部
+#
+# 目的：验证"目标不可达 → 降级到最近可行点 → 正常结束"这条路径。
+#
+# 做法：在目标位置 (0.0, 0.0) 放一个 0.8 x 0.8 x 1.0 的实心柱体，
+# 机器人从 (-5.5, 5.5) 出发走向该点。
+#   期望：不报 failed、不无限重试；走到柱体附近的可达点后
+#         goal_reached 正常收敛到 idle。
+# ============================================================================
+name: goal_in_obstacle
+path_file: scenarios/goal_in_obstacle_path.yaml
+navi_mode: 3
+obstacle_number: 0
+use_pcd_map: true
+pcd_map_file: tools/scenarios/goal_in_obstacle.pcd
+timeout: 120
+min_move: 6.0
+# 目标就在柱体中心：必然不可达
+goal_x: 0.0
+goal_y: 0.0
+# 降级后的落点会偏离原目标，因此容差放到降级半径的量级
+goal_tol: 1.6
+map_size_x: 40.0
+map_size_y: 40.0
+map_size_z: 5.0
