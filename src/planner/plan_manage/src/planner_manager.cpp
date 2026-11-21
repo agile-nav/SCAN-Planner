@@ -924,9 +924,18 @@ namespace scan_planner
     //   若这里再用圆柱半径扫一圈，等价于要求 2×半径 内无障碍 —— 双重膨胀。
     //   实测后果：go2w(半径0.277) 需要 0.954m 净空，1.0m 降级半径内找不到任何点，
     //   降级永远失败；a2 也被逼到 1.0m 边缘。
-    //   机器人是前后双圆柱，两个圆心在 p ± offset·axis；到站朝向未知，
-    //   所以要求半径 offset 的圆盘全部空闲，即覆盖任意朝向下的两个圆心。
-    const double disk_r = std::max(0.0, grid_map_->getDoubleCylinderOffset());
+    //
+    //   但也不能刚好取 offset：降级点会被 getLocalTarget() 用
+    //   getInflateOccupancy(p, yaw) 复核，而那个判据探的是 p ± offset·axis
+    //   两个点。若圆盘半径恰好等于 offset，探测点正好落在圆盘边界上，
+    //   它所在格子中心可能在圆盘之外（最多差半个格子的对角 = step*√2/2），
+    //   于是"我们没检查过的格子"被对方判定占据。
+    //   实测（goal_in_obstacle / go2）：降级点本身 occAt=0，
+    //   但后探测点 occR=1 → getLocalTarget 报 no_free_target 拒绝它，
+    //   降级反复失败、机器人停在半路。
+    //   所以圆盘半径要多留一个格子，确保 offset 处及其所在格子都被覆盖。
+    const double disk_r =
+        std::max(0.0, grid_map_->getDoubleCylinderOffset() + step);
     const int disk_steps = static_cast<int>(std::ceil(disk_r / step));
     const double disk_r2 = disk_r * disk_r;
     auto standable = [&](const Eigen::Vector3d &p) {

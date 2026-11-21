@@ -251,6 +251,7 @@ def main():
         path_xy = []
         reached_since = None
         prev_pose = None
+        arrived_pose = None   # 降级场景：记下判定到达那一刻的位置
         while time.time() < deadline:
             rclpy.spin_once(p, timeout_sec=0.05)
             p1 = p.base_pose()
@@ -277,6 +278,11 @@ def main():
                         if d_deg <= DEGRADE_ARRIVE_TOL:
                             if reached_since is None:
                                 reached_since = time.time()
+                            # 记住"完成任务那一刻"的位置：FSM 判定到达后会 abandonMission
+                            # 转 WAIT_TARGET，但控制器可能还在执行上一条轨迹继续漂移
+                            # （实测 go2 在降级点 (-0.71,0.71) 完成后漂到 (-0.44,0.44)）。
+                            # 断言必须用完成点，否则测到的是漂移后的位置。
+                            arrived_pose = p1
                             if time.time() - reached_since >= GOAL_SETTLE:
                                 break
                         else:
@@ -375,8 +381,8 @@ def main():
             hi = lo + 1.0
         if lo is not None and hi is not None and GOAL is not None:
             # 停车后静置取样：避免把"路过目标附近"当成"停稳"
-            p.spin_for(3.0)
-            final = p.base_pose()
+            p.spin_for(1.0)
+            final = arrived_pose if arrived_pose is not None else p.base_pose()
             if not final:
                 parts.append("FAIL 取不到停稳位置")
                 ok_deg = False
