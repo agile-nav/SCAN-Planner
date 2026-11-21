@@ -367,31 +367,36 @@ def main():
         # (2) 几何证据：停稳后到原目标的距离应落在 [下界, 上界]。
         #     下界默认取"目标到障碍表面距离"（不能停在障碍里），
         #     上界默认取下界 + 1.0 m（不能离降级半径之外还报成功）。
-        # 下界优先用场景显式值；否则用 goal_to_obstacle（障碍半宽）+ 机型半径。
-        #   不同机型圆柱半径不同（a2=0.25 / go2=0.234 / go2w=0.277），
-        #   固定值会让部分机型误判。
-        if GOAL_DIST_MIN is not None:
-            lo = GOAL_DIST_MIN
-        elif GOAL_TO_OBSTACLE is not None:
-            lo = GOAL_TO_OBSTACLE + expect["radius"]
-        else:
-            lo = None
+        # 几何断言用项目既有的 obstacle_bbox + min_clearance 机制
+        #   （corridor_obstacle 等场景一直这么做），而不是另发明一个下界公式。
+        #   "距原目标多远"是间接指标：它既不反映方向，也无法区分
+        #   "停在障碍里"和"停在障碍外"。直接量"停点到障碍包围盒的距离"
+        #   才对得上物理含义：该距离必须 >= 机体圆柱半径。
         hi = GOAL_DIST_MAX
-        if hi is None and lo is not None:
-            hi = lo + 1.0
-        if lo is not None and hi is not None and GOAL is not None:
-            # 停车后静置取样：避免把"路过目标附近"当成"停稳"
-            p.spin_for(1.0)
-            final = arrived_pose if arrived_pose is not None else p.base_pose()
-            if not final:
-                parts.append("FAIL 取不到停稳位置")
+        p.spin_for(1.0)
+        final = arrived_pose if arrived_pose is not None else p.base_pose()
+        if not final:
+            parts.append("FAIL 取不到停稳位置")
+            ok_deg = False
+        else:
+            d_final = math.hypot(final[0] - GOAL[0], final[1] - GOAL[1])
+            # (a) 停点必须真的离开了目标点（降级发生了、且不是原地不动）
+            if GOAL_DIST_MIN is not None and d_final < GOAL_DIST_MIN - 1e-3:
+                parts.append(f"停稳距目标={d_final:.2f} m < 下界 {GOAL_DIST_MIN:.2f}")
                 ok_deg = False
-            else:
-                d_final = math.hypot(final[0] - GOAL[0], final[1] - GOAL[1])
-                within = lo - 1e-3 <= d_final <= hi + 1e-3
-                parts.append(f"停稳距目标={d_final:.2f} m，期望[{lo:.2f}, {hi:.2f}]")
-                if not within:
-                    parts.append("(越界：要么停在障碍里，要么没走到可达点)")
+            # (b) 停点不能离目标过远（否则降级没生效或跑飞了）
+            if hi is not None and d_final > hi + 1e-3:
+                parts.append(f"停稳距目标={d_final:.2f} m > 上界 {hi:.2f}")
+                ok_deg = False
+            if GOAL_DIST_MIN is not None or hi is not None:
+                parts.append(f"停稳距目标={d_final:.2f} m")
+            # (c) 关键：停点到障碍物的距离必须够站得下整机
+            if OBSTACLE_BBOXES:
+                d_obs = min(bbox_distance(final[0], final[1], b) for b in OBSTACLE_BBOXES)
+                need = max(MIN_CLEARANCE, expect["radius"] + 0.02)
+                parts.append(f"停点离障碍={d_obs:.2f} m（需 >= {need:.2f}）")
+                if d_obs < need:
+                    parts.append("(停在障碍里/贴住了)")
                     ok_deg = False
         detail_deg = (", ".join(parts) if parts else "无可用断言")
         results.append(("③b 目标降级", ("OK  " if ok_deg else "FAIL ") + detail_deg))

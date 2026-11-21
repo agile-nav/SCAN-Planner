@@ -1,0 +1,40 @@
+# ============================================================================
+# 场景：goal_in_wall —— 目标点故意落在既有横墙内部
+#
+# 复用 corridor_obstacle.pcd（仓库既有地图，corridor_obstacle 场景长期在用）。
+# 该 PCD 是一面实心横墙：y=1.0, x∈[-6.5,-4.5], z∈[0,1.0]。
+#
+# 与 corridor_obstacle 的唯一区别是参考路径终点：
+#   corridor_obstacle : (-5.5, -4.5)  墙后，可绕行到达
+#   goal_in_wall      : (-5.5,  1.0)  墙体内，必然不可达
+#
+# 用来验证目标降级：应走到墙外的最近可站位置并正常结束，而不是报 failed。
+# ============================================================================
+name: goal_in_wall
+path_file: scenarios/goal_in_wall_path.yaml
+navi_mode: 3
+obstacle_number: 0
+use_pcd_map: true
+pcd_map_file: tools/scenarios/corridor_obstacle.pcd
+timeout: 120
+min_move: 3.0
+# 目标就在墙的实体里
+goal_x: -5.5
+goal_y: 1.0
+# 降级后落点会偏离原目标；这里放宽到降级半径量级
+goal_tol: 1.5
+map_size_x: 40.0
+map_size_y: 40.0
+map_size_z: 5.0
+
+# ---- 目标降级断言 ----
+expect_degrade: true
+# 墙的包围盒 [xmin, xmax, ymin, ymax]；与 corridor_obstacle 场景同一面墙
+obstacle_bbox: [-6.5, -4.5, 1.0, 1.0]
+# 停点离墙的距离至少要容得下整机（探针会取 max(本值, 机型半径+0.02)）
+min_clearance: 0.20
+# 停点不能原地不动（否则等于没降级），也不能跑太远（降级半径 1.0 + 余量）
+goal_dist_min: 0.20
+goal_dist_max: 2.0
+# 同一目标只允许降级 1 次（防止落点漂移的老 bug 复发）
+max_degrade_count: 1

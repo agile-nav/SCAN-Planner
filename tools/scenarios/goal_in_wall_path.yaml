@@ -1,0 +1,19 @@
+# ============================================================================
+# 文件：tools/scenarios/goal_in_wall_path.yaml
+#
+# 复用 corridor_obstacle.pcd 的实心横墙（y=1.0, x∈[-6.5,-4.5], z∈[0,1]），
+# 把参考路径终点直接设在墙体内 (-5.5, 1.0)。
+#
+# 与 corridor_obstacle_path.yaml 的唯一区别：终点从墙后的 (-5.5,-4.5)
+# 改成墙内的 (-5.5, 1.0)。这样终点必然不可达，用来验证目标降级。
+#
+# 不自己造障碍物：墙的位置/尺寸与 corridor_obstacle 场景完全一致，
+# 是仓库里既有的、被 corridor_obstacle 回归长期验证过的那一份。
+# ============================================================================
+reference_path_publisher:
+  ros__parameters:
+    frame_id: world
+    publish_delay_sec: 3.0
+    waypoints:
+      [-5.5, 5.5, 0.0,
+       -5.5, 1.0, 0.0]
