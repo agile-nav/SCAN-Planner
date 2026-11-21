@@ -637,28 +637,16 @@ namespace scan_planner
     if (occ <= 0)
       return true;
 
-    // A* 连通性验证失败后进入静默期：
-    //   失败说明"最近的候选点确实走不过去"，同一目标短时间内重试结果不会变；
-    //   而安全回调 50 ms 一次、每次 A* 约 17 ms，不节流会挤占主循环。
-    //   用墙钟而非 ROS 时钟：这里只是限频，不受仿真时间缩放影响。
-    const auto now_wall = std::chrono::steady_clock::now();
-    if (degrade_verify_failed_at_wall_ != std::chrono::steady_clock::time_point{})
-    {
-      const double since =
-          std::chrono::duration<double>(now_wall - degrade_verify_failed_at_wall_).count();
-      if (since < degrade_verify_backoff_)
-        return false;
-    }
-
+    // 这里**故意不做失败退避**。
+    //   调用频率本来就受 REPLAN_TRAJ 的 planAttemptAllowed() 控制（实测间隔
+    //   1.22~1.23 s），单次 A* 约 17 ms 只占 1.4%，不构成性能问题。
+    //   更重要的是：目标可达性会随滑动地图更新而改变（障碍被清除、或被新建），
+    //   "上一次失败"不代表"这一次也失败"。加静默期会让降级在可达性恢复后
+    //   仍然被锁住，破坏"边走边判"这个设计前提。
     Eigen::Vector3d degraded;
     if (!planner_manager_->findNearestReachableGoal(odom_pos_, goal_pt,
                                                     goal_degrade_radius_, degraded))
-    {
-      degrade_verify_failed_at_wall_ = now_wall;
       return false;
-    }
-    // 验证成功：清掉静默期
-    degrade_verify_failed_at_wall_ = std::chrono::steady_clock::time_point{};
 
     const double shift = (degraded - goal_pt).head<2>().norm();
     if (shift <= 1e-3)
