@@ -147,10 +147,17 @@ namespace scan_planner
     // 脱困后撤的全局次数上限：即使每次都能挪动一点，也不允许无限「重试→后撤→重试」。
     // 有真实进展 / 新目标时清零。
     int max_escape_total_{6};
-    // 连续规划失败上限（0=不限制）：达到后停止重试、放弃任务，并把状态上报为 failed。
-    //   与 replan_fail_count_ 的区别：后者到 max_replan_fail_count_ 会触发脱困后撤，
-    //   而本计数**不随后撤清零**，只有"规划成功 / 真实进展 / 新目标"才归零，
-    //   因此能兜住"目标不可达、反复 optimize_failed"这类没有出路的场景。
+    // 【两个失败计数的分工 —— 服务于不同决策，不要合并】
+    //   · replan_fail_count_     : 短周期，服务于"脱困后撤"。到
+    //                              max_replan_fail_count_ 触发后撤，后撤成功即清零。
+    //   · consecutive_plan_fails_: 长周期，服务于"放弃任务"。**不随后撤清零**，
+    //                              只有 goal_progressed（执行有真实进展）或收到新
+    //                              目标时才归零。
+    //   为什么需要后者：目标不可达时"后撤能挪动一点"就会清掉前者，于是
+    //   "失败→后撤→再失败"可以无限循环。后者只认"真的更靠近目标了"这一条证据，
+    //   所以能兜住"反复 optimize_failed 且没有出路"的死局。
+    //
+    //   连续规划失败上限（0=不限制）：达到后停止重试、放弃任务并上报 failed。
     int max_consecutive_plan_fail_{30};
     // 是否把「必须人工干预」类失败锁存为 error。默认关闭：锁存后只有重启节点才能清除，
     // 对可自恢复的现场过于激进；需要上层告警时再打开。
@@ -189,6 +196,7 @@ namespace scan_planner
     bool enable_fail_safe_{true}, need_hover_stop_{false};
     FSM_EXEC_STATE exec_state_{INIT};
     int continuously_called_times_{0};
+    // 短周期失败计数：服务于脱困后撤（分工说明见 max_consecutive_plan_fail_）
     int replan_fail_count_{0};
     int max_replan_fail_count_{1000};
     rclcpp::Time last_freeze_update_time_{0, 0, RCL_ROS_TIME};
@@ -370,6 +378,10 @@ namespace scan_planner
     // 【目标降级】目标不可达时在 goal_degrade_radius_ 内找最近可行点并改写
     //   end_pt_/mission_goal_pt_。true=已处理，false=没找到可用点。
     //   mode1/mode2 与 mode3 共用（后者需再把结果写回 reference_end_pt_）。
+    // 重置"任务级目标状态"（截断/降级标记与可达点缓存）。
+    //   三个目标入口在确认"这是新目标"后、且必须在
+    //   adjustGlobalTargetIfOccupied 之前调用。
+    void resetMissionGoalState();
     bool tryDegradeTarget(const Eigen::Vector3d &goal_pt);
     // 从全局轨迹上取“前方 planning_horizon 米处”的点，作为局部目标
     bool getLocalTarget();

@@ -368,6 +368,19 @@ namespace scan_planner
     bool success = false;
     // 目标点：x、y 用点选的坐标，高度用之前记录的目标高度
     end_pt_ << msg->poses[0].pose.position.x, msg->poses[0].pose.position.y, rviz_goal_height_;
+    // 【降级幂等】只有"真正的新目标"才重置任务级目标状态，且必须在
+    //   adjustGlobalTargetIfOccupied（会写降级/截断标记）之前做。
+    //   原来这三个标记在 adjust 之后被无条件清零，等于把刚算出的降级/截断
+    //   结果全部抹掉：mode1 下目标被占时截断标记丢失 → 到达判定仍指向
+    //   障碍点 → 永远到不了，最终只能按连续失败放弃。
+    const bool is_new_goal = status_is_stop_ || !status_goal_valid_ ||
+                             (end_pt_ - status_goal_ref_).norm() > status_goal_change_eps_;
+    if (is_new_goal)
+    {
+      resetMissionGoalState();
+      status_goal_ref_ = end_pt_;
+      status_goal_valid_ = true;
+    }
     // 让规划总管生成一条“从当前位置到目标”的全局轨迹
     success = planner_manager_->planGlobalTraj(odom_pos_, odom_vel_, Eigen::Vector3d::Zero(), end_pt_, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
 
@@ -408,11 +421,12 @@ namespace scan_planner
       exec_no_progress_ = false;
       // mode1/mode2 的目标点直接就是 world 系坐标，无需等参考 TF
       status_target_valid_ = true;
-      // 到达判定基准 = 本次任务的真实最终目标（end_pt_ 之后可能被截断改写）
-      mission_goal_pt_ = end_pt_;
-      mission_goal_truncated_ = false;
-      have_truncated_reachable_pt_ = false;
-      mission_goal_degraded_ = false;
+      // 到达判定基准 = 本次任务的真实最终目标。
+      //   降级成功时 end_pt_ 已是降级点、mission_goal_pt_ 也已由 tryDegradeTarget
+      //   写成同一个点，这里不能覆盖；截断/降级的标记同样不能在这里清零
+      //   （重置已在 adjustGlobalTargetIfOccupied 之前按"是否新目标"做过）。
+      if (!mission_goal_degraded_)
+        mission_goal_pt_ = end_pt_;
       // 新目标 → 运行状态置为 running
       armPlannerStatus();
 
@@ -515,6 +529,15 @@ namespace scan_planner
 
     // 终点 = 当前要前往的航点
     end_pt_ = active_waypoints_[current_wp_];
+    // 每个航点都是新的任务目标：任务级目标状态必须在这里重置，
+    //   而且要在 adjustGlobalTargetIfOccupied（会写降级/截断标记）之前。
+    if (status_is_stop_ || !status_goal_valid_ ||
+        (end_pt_ - status_goal_ref_).norm() > status_goal_change_eps_)
+    {
+      resetMissionGoalState();
+      status_goal_ref_ = end_pt_;
+      status_goal_valid_ = true;
+    }
     // 起点：默认用里程计；已有轨迹时用轨迹上的速度/加速度（衔接更平滑）
     setStartStateFromOdomOrCurrentTraj();
 
@@ -556,11 +579,10 @@ namespace scan_planner
     have_new_target_ = true;
     // 航点坐标本身就在 world 系，目标立即可用于到达判定
     status_target_valid_ = true;
-    // 航点模式下每个航点本身就是"本段真实目标"
-    mission_goal_pt_ = end_pt_;
-    mission_goal_truncated_ = false;
-    have_truncated_reachable_pt_ = false;
-    mission_goal_degraded_ = false;
+    // 航点模式下每个航点本身就是"本段真实目标"。
+    //   降级时 end_pt_/mission_goal_pt_ 已指向降级点，不要覆盖。
+    if (!mission_goal_degraded_)
+      mission_goal_pt_ = end_pt_;
     // 显示全局路径与当前航点
     visualization_->displayGlobalPathList(gloabl_traj, 0.1, 0);
     visualization_->displayGoalPoint(end_pt_, Eigen::Vector4d(0, 0.5, 0.5, 1), 0.3, current_wp_);
@@ -584,6 +606,18 @@ namespace scan_planner
   //   目标还没进滑动地图（occ=-1）→ 什么都不做，等走近了再判。
   //   目标在膨胀层里（occ>0）  → 四周由近到远搜一个能站的点。
   // 返回 true = 无需处理 / 已处理；false = 搜了但没找到（调用方兜底）。
+  // 重置"任务级目标状态"：目标是否被截断/降级、以及实际可达点缓存。
+  //   三个入口（waypointCallback / pathCallback / planNextWaypoint）在确认
+  //   "这是新目标"后调用。**必须在 adjustGlobalTargetIfOccupied 之前调用**，
+  //   否则会把那一轮刚算出的降级/截断结果清掉。
+  void SCANReplanFSM::resetMissionGoalState()
+  {
+    mission_goal_truncated_ = false;
+    have_truncated_reachable_pt_ = false;
+    mission_goal_degraded_ = false;
+    truncated_reachable_pt_ = Eigen::Vector3d::Zero();
+  }
+
   bool SCANReplanFSM::tryDegradeTarget(const Eigen::Vector3d &goal_pt)
   {
     auto map = planner_manager_ ? planner_manager_->grid_map_ : nullptr;
@@ -631,7 +665,11 @@ namespace scan_planner
     // 判定基准变了，已进入的"到达候选"要重新计
     status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     status_goal_snapshot_ = Eigen::Vector3d::Zero();
-    setStatusReason(ReplanFailure::TARGET_OCCUPIED);
+    // 降级成功是"已修复"的事件，不是待处理故障：
+    //   status_reasons_ 的语义是"当前还有哪些未解决的问题"，供上层诊断。
+    //   这里若记 TARGET_OCCUPIED，会在"同轮规划仍失败"时被累积，
+    //   超时后上报成 failed；更糟的是它属硬错误，一旦打开
+    //   fsm.status_latch_hard_error 就会把一次成功的降级锁存成 error，直到重启节点。
     return true;
   }
 
@@ -809,11 +847,7 @@ namespace scan_planner
       //   若无条件清零，每收到一次就会重新降级一次 —— 实测同一目标被降级
       //   3~5 次，且落点在小范围内漂移（-5.58,7.13 / -5.42,7.18 …）。
       if (status_new_goal)
-      {
-        mission_goal_truncated_ = false;
-        have_truncated_reachable_pt_ = false;
-        mission_goal_degraded_ = false;
-      }
+        resetMissionGoalState();
 
       // 目标点必须立刻换算到 world 系，否则 updatePlannerStatus 会拿陈旧/未初始化的
       // end_pt_ 做距离判定，机器人在旧目标附近且静止时会被误判为“已到达”。
@@ -2422,6 +2456,13 @@ namespace scan_planner
         //   重复查询会挤占 /tf 订阅回调的时间片，实测会让 TF 消息处理滞后，
         //   反而"永远等不到 TF 恢复"。
         const bool tf_ok = reference_tf_available_;
+
+        // 注意：本分支**故意**不看 enable_fail_safe_，与下面普通急停分支不同。
+        //   两者性质不一样：
+        //     · 碰撞类急停 —— 障碍可能持续存在，自动恢复会导致"恢复→再撞"的
+        //       震荡，所以必须由 enable_fail_safe_ 明确授权；
+        //     · TF 停机   —— 是外部定位系统故障，故障解除即应恢复，
+        //       此时继续停在原地没有安全收益，所以无条件恢复。
 
         // 坡道上速度可能长期降不到 0.1（定位微漂）→ TF 可用时不再等速度归零
         const bool tf_stop_timeout =
