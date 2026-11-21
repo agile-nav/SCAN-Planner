@@ -109,6 +109,11 @@ if(BUILD_TESTING)
   ament_add_gtest(test_replan_retry test/test_replan_retry.cpp)
   target_include_directories(test_replan_retry PRIVATE include)
 
+  # 目标降级的同心环几何：接受/拒绝、环密度、由近到远顺序
+  ament_add_gtest(test_goal_degrade_utils test/test_goal_degrade_utils.cpp)
+  target_include_directories(test_goal_degrade_utils PRIVATE include)
+  target_link_libraries(test_goal_degrade_utils Eigen3::Eigen)
+
   # 局部目标纯函数：前视夹紧、路径投影、前视点被占/兜底点选择
   ament_add_gtest(test_local_target_utils test/test_local_target_utils.cpp)
   target_include_directories(test_local_target_utils PRIVATE include)

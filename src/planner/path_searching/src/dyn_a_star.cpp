@@ -307,6 +307,15 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     // 轮次 +1：用来区分本次和上次搜索，避免每次都清空所有节点
     ++rounds_;
 
+    // 【必须】清空待扩展队列。
+    //   上一次搜索若以 SUCCESS 提前返回、或因超时返回 SEARCH_ERR，openSet_ 里
+    //   仍留着没取完的节点，而它们的 state/rounds/gScore 都是上一轮的。
+    //   主循环从 top() 取 current 时**不校验 rounds_**（只有扩展邻居时才校验），
+    //   于是残留节点会被当成"本轮的当前节点"继续扩展；若它恰好等于新终点，
+    //   还会直接误判 SUCCESS 并沿旧 cameFrom 链倒推出错误路径。
+    //   节点结构体自带 rounds_ 机制（无需 O(pool) 清零），但队列必须显式清空。
+    openSet_ = std::priority_queue<GridNodePtr, std::vector<GridNodePtr>, NodeComparator>();
+
     // 记录格子边长、其倒数，以及搜索中心（起点与终点的中点）
     step_size_ = step_size;
     inv_step_size_ = 1 / step_size;

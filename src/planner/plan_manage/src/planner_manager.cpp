@@ -21,6 +21,7 @@
 #include <plan_manage/planner_manager.h>
 #include <chrono>
 #include <thread>
+#include <plan_manage/goal_degrade_utils.h>
 
 namespace scan_planner
 {
@@ -875,11 +876,17 @@ namespace scan_planner
     UniformBspline::parameterizeToBspline(dt, point_set, start_end_derivative, ctrl_pts);
   }
 
-  // 以 goal 为圆心由近到远找最近的可行点。
-  //   判据是"自身 + 8 邻居都空闲"，不只看自身：目标那格可能是空的、
-  //   但整圈被障碍围住（实测出现过 occ=0 而周边 7/8 被占的情况），
-  //   只查单点会把它误判成可用。
-  //   这里只做局部几何判断；全程是否走得过去由全局轨迹/局部规划负责。
+  // 以 goal 为圆心由近到远找一个"既站得住、又真的走得过去"的点。
+  //
+  // 两级判据，各解决一个不同的问题：
+  //  1) 本地快速筛（standable）：自身与 8 邻居都空闲。
+  //     "能站"不等于"不会被围死" —— 目标那格可能空着、但整圈被障碍包住
+  //     （实测出现过 occ=0 而周边 7/8 被占）。
+  //     这一步很便宜（每点约 9 次格子查询），用来把候选压到 1 个。
+  //  2) 连通性验证（A*）：候选点必须能从 start 真正走过去。
+  //     "站得住"也不等于"去得了" —— 目标可能在一片被封死的空腔里。
+  //     这一步贵（实测单次中位 17 ms），所以**只对最终候选跑一次**，
+  //     而不是对每个环上的点都跑（1681 个候选 × 17 ms 是不可接受的）。
   bool SCANPlannerManager::findNearestReachableGoal(const Eigen::Vector3d &start,
                                                     const Eigen::Vector3d &goal,
                                                     double max_radius,
@@ -888,10 +895,6 @@ namespace scan_planner
     if (!grid_map_)
       return false;
 
-    const double step = std::max(1e-3, grid_map_->getResolution());
-    const int k_max = std::max(1, static_cast<int>(std::ceil(max_radius / step)));
-    const double path_yaw = std::atan2(goal(1) - start(1), goal(0) - start(0));
-
     // 【重要】目标不在当前滑动地图内时**不能**判定为"不可达"：
     //   滑动地图只有 10 m 见方且跟随机器人，刚收到远处目标时目标必然在图外
     //   （实测 occ=-1 inMap=0）。这时应当保持原目标，等机器人走近、地图覆盖到
@@ -899,8 +902,11 @@ namespace scan_planner
     if (!grid_map_->isInMap(goal))
       return false;
 
-    // 候选点"真的能站"：自身自由，且 8 邻居也自由（排除被围死的气泡）
-    auto usable = [&](const Eigen::Vector3d &p) {
+    const double step = std::max(1e-3, grid_map_->getResolution());
+    const double path_yaw = std::atan2(goal(1) - start(1), goal(0) - start(0));
+
+    // 第一级：这个点站得住吗（自身 + 8 邻居都空闲）
+    auto standable = [&](const Eigen::Vector3d &p) {
       if (!grid_map_->isInMap(p))
         return false;
       if (grid_map_->getInflateOccupancy(p, path_yaw) != 0)
@@ -919,31 +925,32 @@ namespace scan_planner
       return true;
     };
 
-    // 第 0 环就是目标本身
-    if (usable(goal))
-    {
-      result = goal;
-      return true;
-    }
+    // 由近到远找出最近的"站得住"的点（先不验证连通性）。
+    //   同心环的几何细节在 goal_degrade_utils.h（纯函数，有单测覆盖）。
+    Eigen::Vector3d candidate;
+    if (!findNearestAcceptedOnRings(goal, max_radius, step, standable, candidate))
+      return false;
 
-    // 同心环：半径 k*step，每环取 8k 个点（保证点密度与半径成正比）
-    for (int k = 1; k <= k_max; ++k)
+    // 第二级：从机器人当前位置能真正走到这个候选点吗。
+    //   有 A* 就验证；没有（未注入）则退化为旧的纯几何行为，避免直接不可用。
+    if (bspline_optimizer_rebound_ && bspline_optimizer_rebound_->a_star_)
     {
-      const int samples = std::max(8, 8 * k);
-      for (int i = 0; i < samples; ++i)
+      const ASTAR_RET ret =
+          bspline_optimizer_rebound_->a_star_->AstarSearch(step, start, candidate);
+      if (ret != ASTAR_RET::SUCCESS)
       {
-        const double ang = 2.0 * M_PI * static_cast<double>(i) / static_cast<double>(samples);
-        Eigen::Vector3d cand = goal;
-        cand(0) += std::cos(ang) * step * k;
-        cand(1) += std::sin(ang) * step * k;
-        // z 沿用目标高度：四足在平地行走，降级只需换水平位置
-        if (!usable(cand))
-          continue;
-        result = cand;
-        return true;
+        // 最近的可站点走不过去（典型：目标在一片被封死的空腔里）。
+        //   此时不做降级，让调用方退回"沿全局轨迹截断"的老路。
+        RCLCPP_WARN(node_->get_logger(),
+                    "[degrade] nearest standable point (%.2f, %.2f) is not connected to "
+                    "robot at (%.2f, %.2f) (A-star ret=%d); skip degradation",
+                    candidate(0), candidate(1), start(0), start(1), static_cast<int>(ret));
+        return false;
       }
     }
-    return false;
+
+    result = candidate;
+    return true;
   }
 
 } // namespace scan_planner
