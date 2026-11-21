@@ -905,6 +905,11 @@ namespace scan_planner
       stuck_retry_count_ = 0;
       escape_active_ = false;
       escape_strategy_ = 0;
+      // 【V9 补充】escape_total_ 也必须清：它是"全局后撤次数上限"（max_escape_total）。
+      //   若不清，上一轮任务用满 6 次后撤后，新目标来了连一次后撤都不允许，
+      //   startBackupEscape 直接返回 false → finishProcess 立刻放弃任务。
+      //   waypointCallback（mode1/2）一直是清的，这里原本漏了。
+      escape_total_ = 0;
       exec_no_progress_ = false;
       exec_progress_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
       status_is_stop_ = false;
@@ -1584,8 +1589,11 @@ namespace scan_planner
     std::string out = state;
     if (!motion_enabled_ && out != status_name_disabled_)
       out = status_name_disabled_;                 // 外部未使能
-    else if (status_error_latched_ && out != status_name_disabled_ &&
-             out != status_name_paused_)
+    // 未使能优先于 error 锁存：没上使能时报 disabled 更有信息量（安全回路没通）。
+    //   注意 paused 不需要在这里单独排除：updatePlannerStatus 里 paused 是
+    //   externally_stopped_ 分支给出的，而 error 锁存只可能出现在"有目标在跑"
+    //   的分支里，两者不会同时成立。
+    else if (status_error_latched_ && out != status_name_disabled_)
       out = "error";
     return out;
   }
@@ -2671,7 +2679,12 @@ namespace scan_planner
   {
     // 【连续失败兜底】"目标不可达 / 反复 optimize_failed"这类场景没有出路：
     //   脱困后撤能挪动一点、replan_fail_count_ 会被清零，于是会无限「退避重试→后撤」。
-    //   consecutive_plan_fails_ 只在"规划成功"时清零，因此能识别出这种死局。
+    //   consecutive_plan_fails_ 的清零条件要精确说清（很容易记错）：
+    //     · 只在「执行有真实进展（更靠近目标）」或「收到新目标」时清零
+    //       （见 updateExecutionProgress 的 goal_progressed 分支 / armPlannerStatus）；
+    //     · **不**按"规划成功"清零 —— notePlanResult(true) 里明确跳过它，
+    //       否则"规划出短轨迹 → 走一点 → 再失败"的循环会让计数永远攒不起来，
+    //       这个兜底就永远不会触发。因此它能识别出上述死局。
     if (max_consecutive_plan_fail_ > 0 &&
         consecutive_plan_fails_ >= max_consecutive_plan_fail_ && have_target_)
     {
