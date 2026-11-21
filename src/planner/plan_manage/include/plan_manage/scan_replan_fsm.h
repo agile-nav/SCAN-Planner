@@ -147,6 +147,14 @@ namespace scan_planner
     // 脱困后撤的全局次数上限：即使每次都能挪动一点，也不允许无限「重试→后撤→重试」。
     // 有真实进展 / 新目标时清零。
     int max_escape_total_{6};
+    // 连续规划失败上限（0=不限制）：达到后停止重试、放弃任务，并把状态上报为 failed。
+    //   与 replan_fail_count_ 的区别：后者到 max_replan_fail_count_ 会触发脱困后撤，
+    //   而本计数**不随后撤清零**，只有"规划成功 / 真实进展 / 新目标"才归零，
+    //   因此能兜住"目标不可达、反复 optimize_failed"这类没有出路的场景。
+    int max_consecutive_plan_fail_{30};
+    // 是否把「必须人工干预」类失败锁存为 error。默认关闭：锁存后只有重启节点才能清除，
+    // 对可自恢复的现场过于激进；需要上层告警时再打开。
+    bool status_latch_hard_error_{false};
     // 收尾时是否发一条“停在原地”轨迹让控制器刹停（P1）
     bool stop_traj_on_finish_{true};
     // 到达且停稳持续多久才判为 goal_reached(秒)
@@ -276,6 +284,10 @@ namespace scan_planner
     // 重试节流：上次真正尝试规划的时刻、连续失败次数（成功即清零）
     rclcpp::Time last_plan_attempt_{0, 0, RCL_ROS_TIME};
     int plan_retry_fails_{0};
+    // 连续规划失败次数（跨脱困保留；只有成功/真实进展/新目标才清零）
+    int consecutive_plan_fails_{0};
+    // 已经因"连续失败超限"放弃任务：状态上报 failed，直到收到新目标
+    bool status_gave_up_{false};
     // 门控状态名（可配置；下游若需兼容旧的 stopped，可把 disabled 配成 stopped）
     std::string status_name_disabled_{"disabled"};
     std::string status_name_paused_{"paused"};

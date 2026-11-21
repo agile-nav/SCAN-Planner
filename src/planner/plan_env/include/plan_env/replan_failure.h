@@ -39,15 +39,23 @@ inline bool replanFailureIsBenign(ReplanFailure f)
   return f == ReplanFailure::CLOSE_TO_GOAL;
 }
 
-// “必须人工干预”的硬错误（→ error）：被堵死 / 目标不可达 / 碰撞急停 / 连续失败超限。
-// A* 无路（astar_no_path）不在此列：它常由局部地图/搜索池的瞬时情况引起，按可自恢复处理，归 failed。
-// 其余（优化、拟合、TF/定位类、超限等可自恢复的）归 failed。
-// 【当前策略】不再区分“必须人工干预”的硬错误：
-// 全部原因都归入软错误 ⇒ 状态只报 failed（不再有 error、也不再锁存）。
-// 保留本函数（而非删除分级），以备将来需要时把某些原因重新划回 error。
-inline bool replanFailureNeedsIntervention(ReplanFailure)
+// “必须人工干预”的硬错误（→ 可选锁存为 error）：被堵死 / 目标不可达 / 碰撞急停 / 连续失败超限。
+// A* 无路（astar_no_path）不在此列：它常由局部地图/搜索池的瞬时情况引起，按可自恢复处理。
+// 其余（优化、拟合、PARAMETERIZE、TF/定位类、动态超限等可自恢复的）归 failed。
+//
+// 【当前策略】默认不把这些原因锁存成 error（fsm.status_latch_hard_error=false 时
+// 一律只报 failed，故障消失即可自恢复）；上层需要"必须人工介入"告警时把参数打开。
+inline bool replanFailureNeedsIntervention(ReplanFailure f)
 {
-  return false;
+  switch (f)
+  {
+  case ReplanFailure::TARGET_OCCUPIED:  // 目标不可达
+  case ReplanFailure::MAX_REPLAN_FAIL:  // 连续失败超限
+  case ReplanFailure::EMERGENCY_SAFETY: // 碰撞急停
+    return true;
+  default:
+    return false;
+  }
 }
 inline const char *replanFailureToString(ReplanFailure f)
 {

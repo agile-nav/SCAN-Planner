@@ -104,6 +104,12 @@ scan_planner_node:
     fsm.replan_retry_max: 1.0
     # 脱困后撤的累计次数上限：防止「重试→后撤→重试」无限循环（0=不限制）
     fsm.max_escape_total: 6
+    # 连续规划失败上限（0=不限制）：从上次"规划成功"起累计的失败次数，跨脱困保留。
+    # 达到后停止重试、放弃任务并上报 failed（直到收到新目标）。
+    # 用来兜住"目标在障碍里/反复 optimize_failed"这类没有出路的场景。
+    fsm.max_consecutive_plan_fail: 30
+    # 是否把「必须人工干预」类失败锁存为 error（锁存后只有重启节点才能清除，默认关闭）
+    fsm.status_latch_hard_error: false
     # 重规划起点脱困(m)：起点若落在膨胀层里（机器人自身位置常在自己的膨胀层内），
     # 沿"起点→局部目标"方向最多前推这么多米去找第一个自由格；0=关闭
     fsm.start_escape_max_offset: 1.0

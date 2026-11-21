@@ -111,6 +111,14 @@ namespace scan_planner
     max_escape_total_ = load_parameter<int>(node_, "fsm.max_escape_total", 6);
     if (max_escape_total_ < 0)
       max_escape_total_ = 0;
+    // 连续规划失败上限：0=不限制（关掉这个兜底）
+    max_consecutive_plan_fail_ =
+        load_parameter<int>(node_, "fsm.max_consecutive_plan_fail", 30);
+    if (max_consecutive_plan_fail_ < 0)
+      max_consecutive_plan_fail_ = 0;
+    // 是否把「必须人工干预」类失败锁存为 error（默认关闭，见头文件说明）
+    status_latch_hard_error_ =
+        load_parameter<bool>(node_, "fsm.status_latch_hard_error", false);
     // 下面几个是机器人外形尺寸（用于画自身膨胀 + 碰撞检测）
     self_inflation_z_up_ = load_parameter<double>(node_, "grid_map.obstacles_inflation_z_up", 0.0);
     self_inflation_z_down_ = load_parameter<double>(node_, "grid_map.obstacles_inflation_z_down", 0.0);
@@ -972,6 +980,9 @@ namespace scan_planner
     // 【V5】新目标意味着"上一轮失败太多"的语义已失效：
     //   若不清掉，EMERGENCY_STOP 的 need_hover_stop_ 分支会立刻把新目标丢掉。
     need_hover_stop_ = false;
+    // 新目标是新局面：清掉"连续失败放弃"的标记与计数，否则状态会一直报 failed
+    status_gave_up_ = false;
+    consecutive_plan_fails_ = 0;
     status_have_goal_ = true;
     status_is_stop_ = false;
     status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
@@ -1084,6 +1095,9 @@ namespace scan_planner
       //   轨迹投影推进（如后撤挪动一点）不算——否则会无限后撤。
       escape_strategy_ = 0;
       escape_total_ = 0;
+      // 连续失败计数也在这里清零：这才是"任务确实在推进"的证据
+      //   （规划成功不算 —— 短轨迹成功会周期性出现，按它清零则兜底永不触发）
+      consecutive_plan_fails_ = 0;
     }
 
     exec_no_progress_ = (now - exec_progress_time_).seconds() >= stuck_window_ &&
@@ -1235,6 +1249,12 @@ namespace scan_planner
       // /mission/control="pause" ⇒ 任务暂停（轨迹已清）
       state = status_name_paused_;
     }
+    else if (status_gave_up_)
+    {
+      // 连续失败超限已放弃任务：必须排在 !status_have_goal_ 之前，
+      //   否则目标已清空会被报成 idle，上层看不到"这次任务失败了"
+      state = "failed";
+    }
     else if (!status_have_goal_)
     {
       state = "idle";
@@ -1330,7 +1350,7 @@ namespace scan_planner
                 (now - status_problem_since_).seconds() >= status_error_time_)
             {
               // 按"原因是否必须人工干预"分级：
-              //   硬错误 → error（需重启或遥控移开）
+              //   硬错误 → error（是否锁存由 fsm.status_latch_hard_error 决定）
               //   软错误 → failed（有错但仍能跑）
               bool needs_intervention = false;
               for (const auto &r : status_reasons_)
@@ -1341,13 +1361,14 @@ namespace scan_planner
                   break;
                 }
               }
-              if (needs_intervention)
+              if (needs_intervention && status_latch_hard_error_)
               {
-                status_error_latched_ = true;  // 锁存：error 不再自动回 running，只有重启节点才清除
+                status_error_latched_ = true;  // 锁存：只有重启节点才清除
                 state = "error";
               }
               else
               {
+                // 未启用锁存（默认）时，硬错误也只报 failed，故障消失即可自恢复
                 state = "failed";
               }
             }
@@ -1822,10 +1843,17 @@ namespace scan_planner
       plan_retry_fails_ = 0;
       // 成功后不保留冷却：下一次（例如安全重规划）应立即允许
       last_plan_attempt_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+      status_gave_up_ = false;
+      // 注意：consecutive_plan_fails_ **不在这里清零**。
+      //   实测（目标在障碍里）会出现"规划出短轨迹 → ok=1 → 走一点 →
+      //   再 optimize_failed"的循环，success 每几秒就出现一次；
+      //   按 success 清零则兜底永远不会触发。
+      //   真正的"有出路"证据是执行有真实进展，清零在 goal_progressed 分支。
     }
     else
     {
       plan_retry_fails_ = std::min(plan_retry_fails_ + 1, 100);
+      consecutive_plan_fails_ = std::min(consecutive_plan_fails_ + 1, 1000000);
     }
   }
 
@@ -1833,6 +1861,9 @@ namespace scan_planner
   {
     plan_retry_fails_ = 0;
     last_plan_attempt_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+    // 注意：故意**不**清 consecutive_plan_fails_。
+    //   本函数在"每次重试/脱困/恢复"时都会被调用；若在那里清零，
+    //   "失败→脱困→再失败"的循环就永远攒不到上限，兜底会失效。
   }
 
   // 放弃当前任务：清目标、清轨迹、复位到达判定，并让状态话题回到 idle。
@@ -1856,7 +1887,7 @@ namespace scan_planner
     status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     status_reason_ = ReplanFailure::NONE;
-    if (!status_error_latched_)
+    if (!status_error_latched_ && !status_gave_up_)
       status_reasons_.clear();
 
     if (isWaypointSequenceMode())
@@ -2421,6 +2452,25 @@ namespace scan_planner
 
   void SCANReplanFSM::finishProcess()
   {
+    // 【连续失败兜底】"目标不可达 / 反复 optimize_failed"这类场景没有出路：
+    //   脱困后撤能挪动一点、replan_fail_count_ 会被清零，于是会无限「退避重试→后撤」。
+    //   consecutive_plan_fails_ 只在"执行有真实进展"时清零，因此能识别出这种死局。
+    if (max_consecutive_plan_fail_ > 0 &&
+        consecutive_plan_fails_ >= max_consecutive_plan_fail_ && have_target_)
+    {
+      const int fails = consecutive_plan_fails_;
+      RCLCPP_ERROR(node_->get_logger(),
+                   "Planning failed %d times in a row with no success in between; giving up task",
+                   fails);
+      // 顺序：先立"已放弃"标记与失败原因，再 abandonMission
+      //   （否则它会按"正常收尾"把 status_reasons_ 清掉、状态回落 idle）
+      status_gave_up_ = true;
+      setStatusReason(ReplanFailure::MAX_REPLAN_FAIL);
+      abandonMission("CONSECUTIVE_FAIL_LIMIT");
+      publishPlannerStatus("failed");
+      return;
+    }
+
     // 失败次数达到上限：先尝试低速后撤；后撤策略也用尽才急停
     if (replan_fail_count_ >= max_replan_fail_count_)
     {
