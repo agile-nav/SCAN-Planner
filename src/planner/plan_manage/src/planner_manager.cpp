@@ -875,4 +875,75 @@ namespace scan_planner
     UniformBspline::parameterizeToBspline(dt, point_set, start_end_derivative, ctrl_pts);
   }
 
+  // 以 goal 为圆心由近到远找最近的可行点。
+  //   判据是"自身 + 8 邻居都空闲"，不只看自身：目标那格可能是空的、
+  //   但整圈被障碍围住（实测出现过 occ=0 而周边 7/8 被占的情况），
+  //   只查单点会把它误判成可用。
+  //   这里只做局部几何判断；全程是否走得过去由全局轨迹/局部规划负责。
+  bool SCANPlannerManager::findNearestReachableGoal(const Eigen::Vector3d &start,
+                                                    const Eigen::Vector3d &goal,
+                                                    double max_radius,
+                                                    Eigen::Vector3d &result)
+  {
+    if (!grid_map_)
+      return false;
+
+    const double step = std::max(1e-3, grid_map_->getResolution());
+    const int k_max = std::max(1, static_cast<int>(std::ceil(max_radius / step)));
+    const double path_yaw = std::atan2(goal(1) - start(1), goal(0) - start(0));
+
+    // 【重要】目标不在当前滑动地图内时**不能**判定为"不可达"：
+    //   滑动地图只有 10 m 见方且跟随机器人，刚收到远处目标时目标必然在图外
+    //   （实测 occ=-1 inMap=0）。这时应当保持原目标，等机器人走近、地图覆盖到
+    //   目标附近后，再由后续轮次重新判断。
+    if (!grid_map_->isInMap(goal))
+      return false;
+
+    // 候选点"真的能站"：自身自由，且 8 邻居也自由（排除被围死的气泡）
+    auto usable = [&](const Eigen::Vector3d &p) {
+      if (!grid_map_->isInMap(p))
+        return false;
+      if (grid_map_->getInflateOccupancy(p, path_yaw) != 0)
+        return false;
+      for (int d = 0; d < 8; ++d)
+      {
+        const double ang = d * M_PI / 4.0;
+        Eigen::Vector3d nb = p;
+        nb(0) += std::cos(ang) * step;
+        nb(1) += std::sin(ang) * step;
+        if (!grid_map_->isInMap(nb))
+          return false;
+        if (grid_map_->getInflateOccupancy(nb, path_yaw) != 0)
+          return false;
+      }
+      return true;
+    };
+
+    // 第 0 环就是目标本身
+    if (usable(goal))
+    {
+      result = goal;
+      return true;
+    }
+
+    // 同心环：半径 k*step，每环取 8k 个点（保证点密度与半径成正比）
+    for (int k = 1; k <= k_max; ++k)
+    {
+      const int samples = std::max(8, 8 * k);
+      for (int i = 0; i < samples; ++i)
+      {
+        const double ang = 2.0 * M_PI * static_cast<double>(i) / static_cast<double>(samples);
+        Eigen::Vector3d cand = goal;
+        cand(0) += std::cos(ang) * step * k;
+        cand(1) += std::sin(ang) * step * k;
+        // z 沿用目标高度：四足在平地行走，降级只需换水平位置
+        if (!usable(cand))
+          continue;
+        result = cand;
+        return true;
+      }
+    }
+    return false;
+  }
+
 } // namespace scan_planner

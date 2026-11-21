@@ -261,6 +261,12 @@ namespace scan_planner
     //   真实目标（那里是障碍）→ 又截断一次 → 每轮重复"规划-截断"。
     Eigen::Vector3d truncated_reachable_pt_{Eigen::Vector3d::Zero()};
     bool have_truncated_reachable_pt_{false};
+    // 目标不可达时的"降级落点"：由 findNearestReachableGoal 搜出的最近可达点。
+    //   任务语义是"走到尽可能靠近目标的可行位置并正常结束"，而不是判失败。
+    bool mission_goal_degraded_{false};
+    // 降级搜索半径上限（米）：<=0 关闭降级，退回"沿轨迹截断"的旧行为。
+    //   1.0 m 覆盖"目标落在最大障碍块中心"的最坏情况（膨胀后需外移约 0.65 m）。
+    double goal_degrade_radius_{1.0};
     // 当前是否已判为 goal_reached（锁存，直到收到新目标）
     bool status_is_stop_{false};
     // 是否已有"上一次目标点"，用于重复路径去重
@@ -361,6 +367,10 @@ namespace scan_planner
     bool planNextWaypoint();
     bool isWaypointSequenceMode() const;
     bool adjustGlobalTargetIfOccupied();
+    // 【目标降级】目标不可达时在 goal_degrade_radius_ 内找最近可行点并改写
+    //   end_pt_/mission_goal_pt_。true=已处理，false=没找到可用点。
+    //   mode1/mode2 与 mode3 共用（后者需再把结果写回 reference_end_pt_）。
+    bool tryDegradeTarget(const Eigen::Vector3d &goal_pt);
     // 从全局轨迹上取“前方 planning_horizon 米处”的点，作为局部目标
     bool getLocalTarget();
     // 查询“参考坐标系 → world”的变换；查不到（超时等）时返回 false

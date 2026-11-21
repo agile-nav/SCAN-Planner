@@ -66,6 +66,16 @@ namespace scan_planner
     // 初始化：读参数、建地图、创建优化器。由状态机在程序启动时调用一次。
     void initPlanModules(rclcpp::Node *node, PlanningVisualization::Ptr vis = nullptr);
 
+    // 【目标降级】目标不可达（被障碍占据 / 被围在气泡里）时，
+    // 在以 goal 为中心、max_radius 为半径的水平范围内，由近到远找
+    // "最近的、且从 start 用 A* 真正可达的自由点"。
+    // 返回 true 表示找到，结果写入 result（世界系，z 沿用 goal 的高度）。
+    // 纯几何 + A* 验证，不修改任何规划状态。
+    bool findNearestReachableGoal(const Eigen::Vector3d &start,
+                                  const Eigen::Vector3d &goal,
+                                  double max_radius,
+                                  Eigen::Vector3d &result);
+
     // ↓↓↓ 下面是 public 数据，状态机会直接访问 ↓↓↓
     PlanParameters pp_;
     LocalTrajData local_data_;
