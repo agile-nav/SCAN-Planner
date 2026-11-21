@@ -1901,17 +1901,18 @@ namespace scan_planner
     updateLocalTrajTimeFreeze();
     // 同步运行状态（running/goal_reached/stopped）；放在最前，避免被后续的提前 return 跳过
     updatePlannerStatus();
+    // 参考 TF 监控必须每拍都跑，包括门控（paused / disabled）期间：
+    //   否则门控期间 reference_tf_missing_since_ 不更新，恢复时可能拿陈旧时间戳
+    //   立刻判超时急停。这里只做监控与记账，状态迁移仍受门控约束。
+    // 【V14】监控结果不能用来"冻结整个 FSM"：monitorReferenceTransform() 自己会在
+    //   超宽限时切 EMERGENCY_STOP，而那个状态的 TF 恢复分支必须能继续跑到。
+    monitorReferenceTransform();
     // 外部停止（/mission/control = pause）：不重规划、不推进，直到 resume
     if (externally_stopped_)
       return;
     // 外部未使能（未按 START / 按了 B）：冻结，不重规划、不发布
     if (!motion_enabled_)
       return;
-    // 【V14】参考 TF 监控结果不能用来"冻结整个 FSM"：
-    //   monitorReferenceTransform() 自己会在超宽限时切 EMERGENCY_STOP，
-    //   而 EMERGENCY_STOP 的 TF 恢复分支必须能继续跑到。
-    //   这里只调用（触发监控副作用），不因返回 false 而 return。
-    monitorReferenceTransform();
 
     // 下面几行：每 100 次（约 1 秒）打印一次当前状态
     static int fsm_num = 0;
