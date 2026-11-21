@@ -215,10 +215,10 @@
     <parent link="FL_calf" />
     <child link="FL_foot" />
     <axis xyz="0 1 0" />
-      
+
       <limit effort="23.7" velocity="30.1" />
   </joint>
-  
+
   <link name="FR_hip">
     <inertial>
       <origin xyz="-0.0054 -0.00194 -0.000105" rpy="0 0 0" />
@@ -369,7 +369,7 @@
       <origin rpy="0 0 0" xyz="0 -0.0 0" />
       <geometry>
         <mesh filename="package://go2w_description/dae/right_wheel.dae" />
-        
+
       </geometry>
     </collision>
   </link>
@@ -532,7 +532,7 @@
       <origin rpy="0 0 0" xyz="0 0.0 0" />
       <geometry>
         <mesh filename="package://go2w_description/dae/left_wheel.dae" />
-        
+
       </geometry>
     </collision>
   </link>
@@ -694,7 +694,7 @@
       <origin rpy="0 0 0" xyz="0 -0.0 0" />
       <geometry>
         <mesh filename="package://go2w_description/dae/right_wheel.dae" />
-        
+
       </geometry>
     </collision>
   </link>
