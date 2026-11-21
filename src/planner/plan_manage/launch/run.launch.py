@@ -19,8 +19,9 @@
 """Main ROS 2 launch entry point for simulation and real-robot remapping."""
 
 import os
+import sys
 
-import yaml
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -29,64 +30,13 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 
-
-# 把字符串形式的开关（如 "true"/"false"）转成 Python 的 True/False。
-def _as_bool(value):
-    return value.lower() in ("1", "true", "yes", "on")
-
-
-# 读取机型档案（config/robots/<机型>.yaml），返回整份内容。
-# 档案里同时放“节点参数段”和“话题段”，换机型只要加一个文件、启动时换名字。
-def _load_robot_profile(scan_share, profile):
-    profile_dir = os.path.join(scan_share, "config", "robots")
-    path = os.path.join(profile_dir, profile + ".yaml")
-    if not os.path.isfile(path):
-        available = []
-        if os.path.isdir(profile_dir):
-            available = sorted(name[:-5] for name in os.listdir(profile_dir)
-                               if name.endswith(".yaml"))
-        raise RuntimeError(
-            "unknown robot profile '%s'; available profiles: %s"
-            % (profile, ", ".join(available) if available else "(none)")
-        )
-    with open(path, "r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle) or {}
-
-
-# 从档案里取出某个节点的参数段（形如 <节点名>: {ros__parameters: {...}}）。
-def _profile_params(profile, node_name):
-    return dict(profile.get(node_name, {}).get("ros__parameters", {}) or {})
-
-
-# 仿真里显示哪个模型，由机型档案的 robot 段决定，例如：
-#   robot:
-#     name: go2
-#     description_package: go2_description
-#     model_file: xacro/robot.xacro
-#     model_args: ["use_gazebo:=false"]
-#     root_link: base
-#
-# 仿真默认 robot:=none（不叠加档案）时仍需要一个模型给 RViz 显示；
-# 这里只保留一个通用回退模型，不再维护机型表。
-_FALLBACK_ROBOT_META = {
-    "name": "go2",
-    "description_package": "go2_description",
-    "model_file": "xacro/robot.xacro",
-    "model_args": ["use_gazebo:=false"],
-    "root_link": "base",
-}
-
-
-# 按机型档案的 robot 段拼出 robot_description 的 xacro 命令行。
-# 纯 URDF 也能被 xacro 处理。
-def _robot_description_command(robot_meta):
-    meta = robot_meta or _FALLBACK_ROBOT_META
-    package = meta["description_package"]
-    model = os.path.join(get_package_share_directory(package),
-                         *str(meta["model_file"]).split("/"))
-    extra = " ".join(str(arg) for arg in meta.get("model_args", []))
-    # Command 会把列表元素直接拼接，不会自动补空格；这里拼成一个完整字符串。
-    return ("xacro " + model + (" " + extra if extra else ""))
+# 机型档案/model 相关逻辑统一在 robot_profile.py，避免多个 launch 各维护一份。
+from robot_profile import (
+    as_bool as _as_bool,
+    load_robot_profile as _load_robot_profile,
+    profile_params as _profile_params,
+    robot_description_command as _robot_description_command,
+)
 
 
 # 真正干活的函数：在这里根据参数决定启动哪些节点、做哪些话题重映射。

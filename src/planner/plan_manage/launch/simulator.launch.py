@@ -11,8 +11,9 @@
 """Native ROS 2 simulation for SCAN-Planner's deterministic regression setup."""
 
 import os
+import sys
 
-import yaml
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -20,10 +21,8 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-
-# 把字符串开关转成 Python 的 True/False。
-def _as_bool(value):
-    return value.lower() in ("1", "true", "yes", "on")
+# 机型档案相关逻辑统一在 robot_profile.py。
+from robot_profile import as_bool as _as_bool, load_profile_file, profile_params as _profile_params
 
 
 # 根据参数决定启动哪些仿真节点。
@@ -47,13 +46,10 @@ def _setup(context):
     profile_yaml = LaunchConfiguration("profile_yaml").perform(context)
     # 机型档案里既有 robot 元数据，也有各节点覆盖段；不能整份作为 ROS 参数文件
     # 传给节点（顶层 robot: 不是节点名）。这里解析后只取节点自己的 ros__parameters。
-    profile = {}
-    if profile_yaml:
-        with open(profile_yaml, "r", encoding="utf-8") as handle:
-            profile = yaml.safe_load(handle) or {}
+    profile = load_profile_file(profile_yaml) if profile_yaml else {}
 
     def profile_params(node_name):
-        return dict(profile.get(node_name, {}).get("ros__parameters", {}) or {})
+        return _profile_params(profile, node_name)
 
     if use_pcd_map and (not pcd_map_file or not os.path.isfile(pcd_map_file)):
         raise RuntimeError(
