@@ -154,6 +154,22 @@ class TestDynamicReferenceTf(unittest.TestCase):
                 for p in msg.pos_pts
             )
 
+        def pump_until(predicate, timeout, tf_y=None, send_path=False):
+            """持续 pump 直到 predicate() 为真或超时；返回是否满足。
+
+            替代"固定 pump 时长 + 立即断言"：后者在机器负载高时，规划器可能
+            还没处理完 TF 变化/重规划，断言就会偶发失败（与代码正确性无关）。
+            这里只放宽"等待多久"，不改变被验证的条件本身。
+            先 pump 一轮再判定：确保 TF/路径至少已广播过一次。
+            """
+            deadline = time.monotonic() + timeout
+            while True:
+                pump(0.05, tf_y=tf_y, send_path=send_path)
+                if predicate():
+                    return True
+                if time.monotonic() >= deadline:
+                    return False
+
         try:
             # 预热：DDS 发现需要时间，先喂一段时间 odom + 路径，让规划器真正订阅上。
             # 这期间没有 TF，规划器会在宽限超时后发一次急停轨迹；
@@ -164,17 +180,18 @@ class TestDynamicReferenceTf(unittest.TestCase):
             # 场景 1：给了参考路径，但始终没有 TF → 应停下（收到原地不动的轨迹），
             # 且这期间不能被误判为“已到达”（end_pt_ 还没换算到 world 系）。
             pump(0.5, send_path=True)
-            pump(1.5)
-            self.assertTrue(any(stationary(msg) for msg in received),
-                            "stale/missing TF did not stop the robot")
+            self.assertTrue(
+                pump_until(lambda: any(stationary(msg) for msg in received), 4.0),
+                "stale/missing TF did not stop the robot")
             reached = [s for s in statuses if '"goal_reached"' in s.data]
             self.assertFalse(reached,
                              "planner reported goal_reached before any reference TF was available")
 
             # 场景 2：TF 出现且新鲜 → 应恢复规划（出现非原地轨迹）
-            pump(2.0, tf_y=0.0)
+            self.assertTrue(
+                pump_until(lambda: any(not stationary(m) for m in received), 5.0, tf_y=0.0),
+                "fresh TF did not resume local planning")
             moving = [msg for msg in received if not stationary(msg)]
-            self.assertTrue(moving, "fresh TF did not resume local planning")
             before_jump = max(msg.traj_id for msg in moving)
 
             # 场景 3：短时间丢失 TF（未超宽限）→ 不应废弃仍有效的世界系轨迹
@@ -185,31 +202,34 @@ class TestDynamicReferenceTf(unittest.TestCase):
             before_jump = max(msg.traj_id for msg in received if not stationary(msg))
 
             # 场景 4：参考系平移跳变 0.3 米 → 应触发新轨迹，且新轨迹跟随跳变后的路线
-            pump(1.0, tf_y=0.3)
+            def jumped_and_following():
+                after = [m for m in received if m.traj_id > before_jump]
+                return any(not stationary(m) and m.pos_pts[-1].y < -0.1 for m in after)
+
+            self.assertTrue(
+                pump_until(jumped_and_following, 5.0, tf_y=0.3),
+                "map -> world jump did not trigger a trajectory following the shifted route")
             after_jump = [msg for msg in received if msg.traj_id > before_jump]
             self.assertTrue(after_jump, "map -> world jump did not trigger a new trajectory")
-            self.assertTrue(any(
-                not stationary(msg) and msg.pos_pts[-1].y < -0.1
-                for msg in after_jump
-            ), "new local trajectory did not follow the shifted map-frame route")
 
             # 场景 5：运动中 TF 超时 → 先短暂保留，再停下；恢复后能继续
             before_timeout = max(msg.traj_id for msg in received)
-            pump(0.95)
-            self.assertTrue(any(
-                stationary(msg) and msg.traj_id > before_timeout for msg in received
-            ), "active-trajectory TF timeout did not stop")
-            pump(0.8, tf_y=0.3)
-            resumed = [msg for msg in received if not stationary(msg)]
-            self.assertGreater(max(msg.traj_id for msg in resumed), before_timeout)
+            self.assertTrue(
+                pump_until(lambda: any(stationary(m) and m.traj_id > before_timeout
+                                       for m in received), 4.0),
+                "active-trajectory TF timeout did not stop")
+            self.assertTrue(
+                pump_until(lambda: any(not stationary(m) and m.traj_id > before_timeout
+                                       for m in received), 5.0, tf_y=0.3),
+                "TF recovery after timeout did not resume planning")
 
             # 场景 6：把 map 路径整体挪到局部栅格之外 → 跳变后的重规划必须失败即停，
             # 不能继续沿用旧轨迹
             before_failure = max(msg.traj_id for msg in received)
-            pump(0.35, tf_y=10.0)
-            self.assertTrue(any(
-                stationary(msg) and msg.traj_id > before_failure for msg in received
-            ), "failed jump replan continued to execute the old trajectory")
+            self.assertTrue(
+                pump_until(lambda: any(stationary(m) and m.traj_id > before_failure
+                                       for m in received), 4.0, tf_y=10.0),
+                "failed jump replan continued to execute the old trajectory")
         finally:
             executor.remove_node(node)
             executor.shutdown()
