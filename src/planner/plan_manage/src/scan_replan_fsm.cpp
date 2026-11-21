@@ -2332,12 +2332,12 @@ namespace scan_planner
     {
       if (reference_tf_stop_)
       {
-        // 【V15】恢复前提是"TF 真的回来了"——必须显式查询，不能凭标志推断：
-        //   monitorReferenceTransform() 在 TF 缺失时只返回 false、**不会**清
-        //   reference_tf_stop_，所以这里若只看速度就会在 TF 仍缺失时反复
-        //   EMERGENCY_STOP ⇄ GEN_NEW_TRAJ 震荡（实测每个 tick 一次）。
-        Eigen::Isometry3d tf_now;
-        const bool tf_ok = lookupReferenceTransform(tf_now);
+        // 【V15】恢复前提是"TF 真的回来了"：
+        //   用 monitorReferenceTransform() 本 tick 已查询并缓存的结果，
+        //   **不要**在这里再调一次 lookupTransform —— 单线程执行器下
+        //   重复查询会挤占 /tf 订阅回调的时间片，实测会让 TF 消息处理滞后，
+        //   反而"永远等不到 TF 恢复"。
+        const bool tf_ok = reference_tf_available_;
 
         // 坡道上速度可能长期降不到 0.1（定位微漂）→ TF 可用时不再等速度归零
         const bool tf_stop_timeout =
@@ -3090,8 +3090,14 @@ namespace scan_planner
   // 就把当前轨迹作废并触发重规划。返回 true 表示参考系正常。
   bool SCANReplanFSM::monitorReferenceTransform()
   {
+    // 每 tick 只查询一次，结果缓存给 EMERGENCY_STOP 复用（见 reference_tf_available_）。
+    reference_tf_available_ = false;
     if (navi_mode_ != NAVI_MODE::REFERENCE_PATH || !have_target_)
+    {
+      // 非 mode3 或没有目标：TF 与本状态机无关，视为"可用"以免误触发恢复判定
+      reference_tf_available_ = true;
       return true;
+    }
 
     Eigen::Isometry3d current;
     if (!lookupReferenceTransform(current))
@@ -3118,7 +3124,9 @@ namespace scan_planner
       return false;
     }
 
-    // 拿到了 → 清空“缺失起始时刻”，并按最新变换刷新终点
+    // 拿到了 → 记下"本 tick TF 可用"，供 EMERGENCY_STOP 判定恢复
+    reference_tf_available_ = true;
+    // 清空“缺失起始时刻”，并按最新变换刷新终点
     reference_tf_missing_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     end_pt_ = current * reference_end_pt_;
     // 到达判定基准跟随参考系刷新（定位会在世界系里漂移，基准必须同步更新）

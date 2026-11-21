@@ -232,6 +232,10 @@ namespace scan_planner
     Eigen::Isometry3d last_reference_to_world_{Eigen::Isometry3d::Identity()};
     bool have_last_reference_transform_{false};
     bool reference_tf_stop_{false};
+    // 本 tick 内"参考 TF 是否可用"（monitorReferenceTransform 统一查询并缓存）。
+    //   规划器是单线程执行器：同一 tick 内重复 lookupTransform 会挤占 /tf
+    //   订阅回调的时间片，导致 TF 消息处理滞后甚至丢失。
+    bool reference_tf_available_{false};
     // 进入 TF 急停的时刻（用于"坡道微漂导致永远停着"的兜底恢复）
     rclcpp::Time reference_tf_stop_since_{0, 0, RCL_ROS_TIME};
     bool reference_tf_jump_failed_{false};
