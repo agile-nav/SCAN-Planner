@@ -60,6 +60,13 @@ done
 
 SCAN_SHARE="$(ros2 pkg prefix scan_planner)/share/scan_planner"
 
+# 场景名只允许字母/数字/下划线/短横线：既防路径穿越，也让日志名可控。
+case "${SCENARIO}" in
+  ""|*[!A-Za-z0-9_-]*)
+    echo "非法场景名: '${SCENARIO}'（只允许 A-Z a-z 0-9 _ -）" >&2
+    exit 2 ;;
+esac
+
 SCENARIO_FILE="${TOOLS_DIR}/scenarios/${SCENARIO}.yaml"
 if [ ! -f "${SCENARIO_FILE}" ]; then
   echo "找不到场景文件: ${SCENARIO_FILE}" >&2
@@ -67,8 +74,38 @@ if [ ! -f "${SCENARIO_FILE}" ]; then
   exit 2
 fi
 
-# 把场景 YAML 转成 shell 变量（值已由 Python shlex.quote 转义）
-eval "$(python3 "${TOOLS_DIR}/scenario_env.py" "${SCENARIO_FILE}")"
+# 不用 eval：scenario_env.py 输出 "key<TAB>value"，这里逐行 case 赋值。
+# 白名单在 Python 侧（ALLOWED_KEYS），值里的换行/制表符也会被拒绝。
+while IFS=$'\t' read -r key value; do
+  case "${key}" in
+    name)                SCENARIO_NAME="${value}" ;;
+    path_file)           PATH_FILE="${value}" ;;
+    navi_mode)           NAVI_MODE="${value}" ;;
+    obstacle_number)     OBSTACLE_NUMBER="${value}" ;;
+    use_pcd_map)         USE_PCD_MAP="${value}" ;;
+    pcd_map_file)        PCD_MAP_FILE="${value}" ;;
+    timeout)             TIMEOUT="${value}" ;;
+    min_move)            MIN_MOVE="${value}" ;;
+    goal_x)              GOAL_X="${value}" ;;
+    goal_y)              GOAL_Y="${value}" ;;
+    goal_tol)            GOAL_TOL="${value}" ;;
+    goal_settle)         GOAL_SETTLE="${value}" ;;
+    obstacle_bbox)       OBSTACLE_BBOX="${value}" ;;
+    obstacle_bboxes)     OBSTACLE_BBOXES="${value}" ;;
+    min_clearance)       MIN_CLEARANCE="${value}" ;;
+    min_yaw_change)      MIN_YAW_CHANGE="${value}" ;;
+    expect_degrade)      EXPECT_DEGRADE="${value}" ;;
+    goal_to_obstacle)    GOAL_TO_OBSTACLE="${value}" ;;
+    goal_dist_min)       GOAL_DIST_MIN="${value}" ;;
+    goal_dist_max)       GOAL_DIST_MAX="${value}" ;;
+    max_degrade_count)   MAX_DEGRADE_COUNT="${value}" ;;
+    map_size_x)          MAP_SIZE_X="${value}" ;;
+    map_size_y)          MAP_SIZE_Y="${value}" ;;
+    map_size_z)          MAP_SIZE_Z="${value}" ;;
+    "")                  ;;
+    *)                   echo "未知场景键: ${key}" >&2; exit 2 ;;
+  esac
+done < <(python3 "${TOOLS_DIR}/scenario_env.py" --tsv "${SCENARIO_FILE}") || exit 2
 if [ -z "${PATH_FILE}" ]; then
   echo "场景 ${SCENARIO} 缺少 path_file" >&2
   exit 2

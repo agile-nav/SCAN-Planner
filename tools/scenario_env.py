@@ -12,6 +12,16 @@ import sys
 
 import yaml
 
+# 允许的变量名（白名单）。tsv 模式只输出这些键，避免任何"意外变量"进入 shell。
+ALLOWED_KEYS = {
+    "name", "path_file", "navi_mode", "obstacle_number", "use_pcd_map",
+    "pcd_map_file", "timeout", "min_move", "goal_x", "goal_y", "goal_tol",
+    "goal_settle", "obstacle_bbox", "obstacle_bboxes", "min_clearance",
+    "min_yaw_change", "expect_degrade", "goal_to_obstacle", "goal_dist_min",
+    "goal_dist_max", "max_degrade_count", "map_size_x", "map_size_y",
+    "map_size_z",
+}
+
 DEFAULTS = {
     "name": "custom",
     "path_file": "",
@@ -73,21 +83,39 @@ VARIABLES = {
 }
 
 
+def _format_value(key, value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if key == "obstacle_bboxes" and isinstance(value, (list, tuple)):
+        return ";".join(",".join(str(item) for item in box) for box in value)
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(item) for item in value)
+    return str(value)
+
+
 def main():
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: scenario_env.py <scenario.yaml>")
-    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    tsv = "--tsv" in sys.argv[1:]
+    if len(args) != 1:
+        raise SystemExit("usage: scenario_env.py [--tsv] <scenario.yaml>")
+    with open(args[0], "r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
+    if not isinstance(data, dict):
+        raise SystemExit("scenario file must be a YAML mapping")
+    unknown = sorted(set(data) - ALLOWED_KEYS)
+    if unknown:
+        raise SystemExit("unknown scenario keys: " + ", ".join(unknown))
 
     for key, variable in VARIABLES.items():
-        value = data.get(key, DEFAULTS[key])
-        if isinstance(value, bool):
-            value = "true" if value else "false"
-        elif key == "obstacle_bboxes" and isinstance(value, (list, tuple)):
-            value = ";".join(",".join(str(item) for item in box) for box in value)
-        elif isinstance(value, (list, tuple)):
-            value = ",".join(str(item) for item in value)
-        print(f"{variable}={shlex.quote(str(value))}")
+        value = _format_value(key, data.get(key, DEFAULTS[key]))
+        # 值里不允许换行/制表符：它们既是 shell 分隔符也是注入面。
+        if "\n" in value or "\t" in value:
+            raise SystemExit(f"scenario value for {key!r} must not contain newline/tab")
+        if tsv:
+            # 受控输出：KEY<TAB>VALUE，交给 sim_check.sh 用 case 赋值，不经过 eval。
+            print(f"{key}\t{value}")
+        else:
+            print(f"{variable}={shlex.quote(value)}")
 
 
 if __name__ == "__main__":
