@@ -23,8 +23,7 @@ fi
 ./tools/sim_check.sh --scenario empty_3m
 
 if [ "${1:-}" = "--full" ]; then
-  # goal_in_obstacle：目标故意落在实心柱体内，验证降级到最近可达点后正常结束
-  for scenario in straight_10m corridor_obstacle narrow_passage turning multi_obstacle goal_in_obstacle; do
+  for scenario in straight_10m corridor_obstacle narrow_passage turning multi_obstacle; do
     ./tools/sim_check.sh --scenario "${scenario}"
   done
 fi

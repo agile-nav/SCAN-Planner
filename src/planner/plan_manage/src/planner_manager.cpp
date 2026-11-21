@@ -903,24 +903,53 @@ namespace scan_planner
       return false;
 
     const double step = std::max(1e-3, grid_map_->getResolution());
-    const double path_yaw = std::atan2(goal(1) - start(1), goal(0) - start(0));
 
-    // 第一级：这个点站得住吗（自身 + 8 邻居都空闲）
+    // 第一级：这个点站得住吗 —— 圆盘判据。
+    //
+    //   **不能**用 getInflateOccupancy(p, yaw)：它只沿「假定朝向」前后各探
+    //   0.18 m 两个点，侧向完全不查。而降级点到站时的朝向是未知的，
+    //   那个 yaw 只能拿 atan2(goal-start) 估计，与真实到站朝向无关。
+    //   实测后果（goal_in_obstacle 场景）：目标在 0.4 m 半宽的柱心，
+    //   挑选出的「最近可站点」落在距柱心 0.156 m 处（柱体内部），因为
+    //   该点 ±0.18 m 恰好探到了柱体外。机器人最终开进柱子里。
+    //   用圆盘判据作真值对比时，该判据的漏报率是 48%。
+    //
+    //   圆盘判据：以 p 为圆心、机体圆柱半径内所有格子都必须空闲。
+    //   开销实测（2% 障碍、0.25 m 半径、首次命中即返回）：0.035 ms；
+    //   最坏情况（目标被彻底围死、扫完 1681 个候选点）1.68 ms。
+    //   按 1.23 s 的调用间隔算，占比 < 0.15%，可以忽略。
+    // 半径必须取「双圆柱偏移」，**不是**圆柱半径：
+    //   膨胀层本身就是按 double_cylinder_radius 生成的（rebuildInflationOffsets），
+    //   所以单格 inflate==0 已经表示「该格 0.25m 内无原始障碍」。
+    //   若这里再用圆柱半径扫一圈，等价于要求 2×半径 内无障碍 —— 双重膨胀。
+    //   实测后果：go2w(半径0.277) 需要 0.954m 净空，1.0m 降级半径内找不到任何点，
+    //   降级永远失败；a2 也被逼到 1.0m 边缘。
+    //   机器人是前后双圆柱，两个圆心在 p ± offset·axis；到站朝向未知，
+    //   所以要求半径 offset 的圆盘全部空闲，即覆盖任意朝向下的两个圆心。
+    const double disk_r = std::max(0.0, grid_map_->getDoubleCylinderOffset());
+    const int disk_steps = static_cast<int>(std::ceil(disk_r / step));
+    const double disk_r2 = disk_r * disk_r;
     auto standable = [&](const Eigen::Vector3d &p) {
       if (!grid_map_->isInMap(p))
         return false;
-      if (grid_map_->getInflateOccupancy(p, path_yaw) != 0)
-        return false;
-      for (int d = 0; d < 8; ++d)
+      // 圆盘覆盖的所有格子都必须是确定的空闲(0)；-1(出图) 同样判不可用
+      for (int i = -disk_steps; i <= disk_steps; ++i)
       {
-        const double ang = d * M_PI / 4.0;
-        Eigen::Vector3d nb = p;
-        nb(0) += std::cos(ang) * step;
-        nb(1) += std::sin(ang) * step;
-        if (!grid_map_->isInMap(nb))
-          return false;
-        if (grid_map_->getInflateOccupancy(nb, path_yaw) != 0)
-          return false;
+        for (int j = -disk_steps; j <= disk_steps; ++j)
+        {
+          const double dx = i * step;
+          const double dy = j * step;
+          if (dx * dx + dy * dy > disk_r2)
+            continue;
+          Eigen::Vector3d q = p;
+          q(0) += dx;
+          q(1) += dy;
+          // 必须「已观测且空闲」：未知格(从没被雷达看到)不算可站。
+          //   实测教训：目标柱体只有朝向机器人的一侧被观测到，
+          //   远侧仍是未知;若把未知当空闲,圆盘判据会放过柱体内部的点。
+          if (!grid_map_->isKnownFree(q))
+            return false;
+        }
       }
       return true;
     };

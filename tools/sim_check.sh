@@ -175,6 +175,12 @@ for robot in "${ROBOTS[@]}"; do
        SCENARIO_OBSTACLE_BBOXES="${OBSTACLE_BBOXES}" \
        SCENARIO_MIN_CLEARANCE="${MIN_CLEARANCE}" \
        SCENARIO_MIN_YAW_CHANGE="${MIN_YAW_CHANGE}" \
+       SCENARIO_EXPECT_DEGRADE="${EXPECT_DEGRADE}" \
+       SCENARIO_GOAL_TO_OBSTACLE="${GOAL_TO_OBSTACLE}" \
+       SCENARIO_GOAL_DIST_MIN="${GOAL_DIST_MIN}" \
+       SCENARIO_GOAL_DIST_MAX="${GOAL_DIST_MAX}" \
+       SCENARIO_MAX_DEGRADE_COUNT="${MAX_DEGRADE_COUNT}" \
+       SCENARIO_SCAN_LOG="${LOG}" \
        python3 "${TOOLS_DIR}/sim_check_probe.py" "${robot}" "${PROFILE}"; then
     fail_total=$((fail_total + 1))
   fi

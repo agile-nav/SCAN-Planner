@@ -294,6 +294,10 @@ public:
 // 实现：分别检查前后两个圆柱中心所在的格子。
 // 返回 1=有障碍，0=空，-1=超出地图范围。
   inline int getInflateOccupancy(Eigen::Vector3d pos, double yaw);
+  // 只查单格的膨胀标志（0/1，出图 -1），不看朝向与双圆柱。
+  //   用于「该格离障碍多远」这类需要逐格扫描的判定（如圆盘判据）；
+  //   单次碰撞检测请用上面的 getInflateOccupancy。
+  inline int getInflateOccupancyAt(const Eigen::Vector3d &pos);
 
   // 更新/读取平滑后的机体姿态。setBodyAttitude 由 body_pose 回调调用。
   void setBodyAttitude(const Eigen::Quaterniond &q);
@@ -301,6 +305,9 @@ public:
   double getBodyRoll() const { return body_roll_; }
   double getBodyYaw() const { return body_yaw_; }
   double getDoubleCylinderOffset() const { return mp_.double_cylinder_offset_; }
+  // 机体圆柱半径（膨胀层按这个半径生成）。用于"该点能不能站"这类与朝向
+  //   无关的判定：以该点为圆心、本半径内所有格子都空闲，才认为站得住。
+  double getSelfCylinderRadius() const { return mp_.double_cylinder_radius_; }
   const Eigen::Quaterniond &getBodyQuaternion() const { return body_q_; }
 
   // 把一个索引夹到地图边界内（越界时就近取边界）
@@ -310,6 +317,8 @@ public:
   inline bool isUnknown(const Eigen::Vector3d& pos);
   // 已观测且空闲 / 已判定为障碍
   inline bool isKnownFree(const Eigen::Vector3i& id);
+  // 同上，输入是世界坐标。注意：未知格（从没被观测到）**不算** free。
+  inline bool isKnownFree(const Eigen::Vector3d& pos);
   inline bool isKnownOccupied(const Eigen::Vector3i& id);
 
 // ---------- 生命周期 ----------
@@ -517,6 +526,13 @@ inline bool GridMap::isUnknown(const Eigen::Vector3d& pos) {
   return isUnknown(idc);
 }
 
+inline bool GridMap::isKnownFree(const Eigen::Vector3d& pos) {
+  if (!isInMap(pos)) return false;
+  Eigen::Vector3i idc;
+  posToIndex(pos, idc);
+  return isKnownFree(idc);
+}
+
 // 某格是否"已观测且空闲"：概率高于下限且膨胀标志为 0（即可通行）
 inline bool GridMap::isKnownFree(const Eigen::Vector3i& id) {
   Eigen::Vector3i id1 = id;
@@ -605,6 +621,12 @@ inline int GridMap::getInflateOccupancyFromBuffer(Eigen::Vector3d pos, const std
   posToIndex(pos, id);
 
   return int(buffer[toAddress(id)]);
+}
+
+// 只查单格膨胀标志。与 getInflateOccupancy 的区别：不做俯仰倾斜、
+//   不查前后双圆柱，只回答「这个格子本身有没有被膨胀占据」。
+inline int GridMap::getInflateOccupancyAt(const Eigen::Vector3d &pos) {
+  return getInflateOccupancyFromBuffer(pos, md_.occupancy_buffer_inflate_);
 }
 
 // 同上，但输入是格子编号

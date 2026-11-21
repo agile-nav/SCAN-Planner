@@ -32,6 +32,17 @@ DEFAULTS = {
     "map_size_x": "",
     "map_size_y": "",
     "map_size_z": "",
+    # ---- 目标降级断言（可选）----
+    # expect_degrade: 本次运行必须出现"目标不可达→降级"的证据
+    "expect_degrade": False,
+    # goal_to_obstacle: 原目标点到最近障碍表面的距离（米）。
+    #   用于把"停点应紧贴障碍外侧"表达成区间断言。
+    "goal_to_obstacle": "",
+    # 允许的停点距离区间；缺省时按 [goal_to_obstacle, goal_to_obstacle + 1.0] 推
+    "goal_dist_min": "",
+    "goal_dist_max": "",
+    # 同一目标最多允许降级几次（幂等性：正常应为 1）
+    "max_degrade_count": 1,
 }
 
 VARIABLES = {
@@ -54,6 +65,11 @@ VARIABLES = {
     "map_size_x": "MAP_SIZE_X",
     "map_size_y": "MAP_SIZE_Y",
     "map_size_z": "MAP_SIZE_Z",
+    "expect_degrade": "EXPECT_DEGRADE",
+    "goal_to_obstacle": "GOAL_TO_OBSTACLE",
+    "goal_dist_min": "GOAL_DIST_MIN",
+    "goal_dist_max": "GOAL_DIST_MAX",
+    "max_degrade_count": "MAX_DEGRADE_COUNT",
 }
 
 

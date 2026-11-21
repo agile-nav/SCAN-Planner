@@ -58,6 +58,41 @@ MIN_CLEARANCE = float(os.environ.get("SCENARIO_MIN_CLEARANCE", "0.0"))
 MIN_YAW_CHANGE = float(os.environ.get("SCENARIO_MIN_YAW_CHANGE", "0.0"))
 
 
+def _opt_float(name):
+    raw = os.environ.get(name, "")
+    return float(raw) if raw not in ("", None) else None
+
+
+# 降级场景：判定"已到达降级点"的距离阈值（FSM 的 status_goal_tol 是 0.20）
+DEGRADE_ARRIVE_TOL = 0.35
+
+
+def _read_degraded_point(log_path):
+    """从运行日志里读最近一次降级点（world 系 xy）。读不到返回 None。"""
+    if not log_path or not os.path.isfile(log_path):
+        return None
+    last = None
+    try:
+        with open(log_path, "r", errors="ignore") as fh:
+            for line in fh:
+                m = re.search(r"degraded to nearest reachable \[([-\d.]+), ([-\d.]+)", line)
+                if m:
+                    last = (float(m.group(1)), float(m.group(2)))
+    except OSError:
+        return None
+    return last
+
+
+# ---- 目标降级断言（仅当场景声明 expect_degrade 时才生效）----
+EXPECT_DEGRADE = os.environ.get("SCENARIO_EXPECT_DEGRADE", "false").lower() == "true"
+GOAL_TO_OBSTACLE = _opt_float("SCENARIO_GOAL_TO_OBSTACLE")
+GOAL_DIST_MIN = _opt_float("SCENARIO_GOAL_DIST_MIN")
+GOAL_DIST_MAX = _opt_float("SCENARIO_GOAL_DIST_MAX")
+MAX_DEGRADE_COUNT = int(os.environ.get("SCENARIO_MAX_DEGRADE_COUNT", "1") or 1)
+# 降级日志所在文件（由 sim_check.sh 传入），用于统计降级次数与连通性失败
+SCAN_LOG = os.environ.get("SCENARIO_SCAN_LOG", "")
+
+
 def bbox_distance(x, y, bbox):
     """点到矩形包围盒的二维距离；点在盒内返回 0。"""
     xmin, xmax, ymin, ymax = bbox
@@ -215,6 +250,7 @@ def main():
         goal_dist = None
         path_xy = []
         reached_since = None
+        prev_pose = None
         while time.time() < deadline:
             rclpy.spin_once(p, timeout_sec=0.05)
             p1 = p.base_pose()
@@ -224,7 +260,29 @@ def main():
             moved = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
             if GOAL is not None:
                 goal_dist = math.hypot(p1[0] - GOAL[0], p1[1] - GOAL[1])
-                if goal_dist <= GOAL_TOL:
+                # 降级场景不能用"距目标近"当结束条件：目标本身不可达，
+                #   机器人要走到降级点才算完，而 goal_tol 可能比降级点还远，
+                #   会在半路就误判"已到达"（实测 go2w 在 1.71 m 处就停了观察，
+                #   降级根本没来得及发生）。改为"位置不再变化"的停稳判定。
+                if EXPECT_DEGRADE:
+                    # 降级场景：目标本身不可达，不能拿"距目标近"当结束条件。
+                    #   判据改为「已经降级成功 且 到达了降级点」：
+                    #     · 日志里出现 degraded 说明降级已发生；
+                    #     · 之后距降级点的距离进入 status_goal_tol 量级即算到达。
+                    #   若一直没降级，就让 MOVE_TIMEOUT 兜底（此时断言会失败，
+                    #   这正是我们想要的信号：该降级却没降级）。
+                    deg_pt = _read_degraded_point(SCAN_LOG)
+                    if deg_pt is not None:
+                        d_deg = math.hypot(p1[0] - deg_pt[0], p1[1] - deg_pt[1])
+                        if d_deg <= DEGRADE_ARRIVE_TOL:
+                            if reached_since is None:
+                                reached_since = time.time()
+                            if time.time() - reached_since >= GOAL_SETTLE:
+                                break
+                        else:
+                            reached_since = None
+                    prev_pose = p1
+                elif goal_dist <= GOAL_TOL:
                     if reached_since is None:
                         reached_since = time.time()
                     # 到达阈值后再观察一小段时间，确认不是“冲过阈值又离开”
@@ -267,6 +325,70 @@ def main():
                         if yaw_change is not None else ", path_turn=?")
         detail3 = ("OK  " if ok3 else "FAIL ") + detail3
     results.append(("③ 规划闭环", detail3))
+
+    # ③b 目标降级：仅当场景声明 expect_degrade 时检查。
+    #   目的：把"降级确实发生了、且落在合理位置"变成可判定的断言，
+    #   而不是只看 goal_dist 一个数字（它无法区分"降级成功"与"卡在半路"）。
+    if EXPECT_DEGRADE:
+        ok_deg = True
+        parts = []
+        # (1) 日志证据：必须真的出现降级，且次数不超过上限（幂等）
+        degrade_cnt = None
+        not_connected_cnt = None
+        if SCAN_LOG and os.path.isfile(SCAN_LOG):
+            try:
+                with open(SCAN_LOG, "r", errors="ignore") as fh:
+                    text = fh.read()
+                degrade_cnt = text.count("degraded to nearest reachable")
+                not_connected_cnt = text.count("not connected to robot")
+            except OSError:
+                pass
+        if degrade_cnt is None:
+            parts.append("FAIL 读不到运行日志，无法确认降级是否发生")
+            ok_deg = False
+        else:
+            if degrade_cnt < 1:
+                parts.append(f"FAIL 降级次数={degrade_cnt}（应至少 1 次：目标不可达却没降级）")
+                ok_deg = False
+            elif degrade_cnt > MAX_DEGRADE_COUNT:
+                parts.append(f"FAIL 降级次数={degrade_cnt} > {MAX_DEGRADE_COUNT}（幂等失效，落点会漂移）")
+                ok_deg = False
+            else:
+                parts.append(f"降级={degrade_cnt} 次")
+            if not_connected_cnt:
+                parts.append(f"A*不通={not_connected_cnt} 次")
+                ok_deg = False
+        # (2) 几何证据：停稳后到原目标的距离应落在 [下界, 上界]。
+        #     下界默认取"目标到障碍表面距离"（不能停在障碍里），
+        #     上界默认取下界 + 1.0 m（不能离降级半径之外还报成功）。
+        # 下界优先用场景显式值；否则用 goal_to_obstacle（障碍半宽）+ 机型半径。
+        #   不同机型圆柱半径不同（a2=0.25 / go2=0.234 / go2w=0.277），
+        #   固定值会让部分机型误判。
+        if GOAL_DIST_MIN is not None:
+            lo = GOAL_DIST_MIN
+        elif GOAL_TO_OBSTACLE is not None:
+            lo = GOAL_TO_OBSTACLE + expect["radius"]
+        else:
+            lo = None
+        hi = GOAL_DIST_MAX
+        if hi is None and lo is not None:
+            hi = lo + 1.0
+        if lo is not None and hi is not None and GOAL is not None:
+            # 停车后静置取样：避免把"路过目标附近"当成"停稳"
+            p.spin_for(3.0)
+            final = p.base_pose()
+            if not final:
+                parts.append("FAIL 取不到停稳位置")
+                ok_deg = False
+            else:
+                d_final = math.hypot(final[0] - GOAL[0], final[1] - GOAL[1])
+                within = lo - 1e-3 <= d_final <= hi + 1e-3
+                parts.append(f"停稳距目标={d_final:.2f} m，期望[{lo:.2f}, {hi:.2f}]")
+                if not within:
+                    parts.append("(越界：要么停在障碍里，要么没走到可达点)")
+                    ok_deg = False
+        detail_deg = (", ".join(parts) if parts else "无可用断言")
+        results.append(("③b 目标降级", ("OK  " if ok_deg else "FAIL ") + detail_deg))
 
     # ④ 关节动画
     p.spin_for(2.0)

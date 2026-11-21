@@ -113,6 +113,10 @@ namespace scan_planner
       max_escape_total_ = 0;
     // 目标不可达时的降级搜索半径：0=关闭（退回"沿轨迹截断"的旧行为）
     goal_degrade_radius_ = load_parameter<double>(node_, "fsm.goal_degrade_radius", 1.0);
+    degrade_verify_after_fails_ =
+        load_parameter<int>(node_, "fsm.degrade_verify_after_fails", 5);
+    if (degrade_verify_after_fails_ < 0)
+      degrade_verify_after_fails_ = 0;
     if (goal_degrade_radius_ < 0.0)
       goal_degrade_radius_ = 0.0;
     // 连续规划失败上限：0=不限制（关掉这个兜底）
@@ -633,8 +637,25 @@ namespace scan_planner
 
     const double yaw = estimateYawFromSegment(odom_pos_, goal_pt);
     const int occ = map->getInflateOccupancy(goal_pt, yaw);
-    // -1 = 不在滑动地图内，属于"还不知道"，不是"不可达"
-    if (occ <= 0)
+
+    // -1 = 目标不在滑动地图内，属于「还不知道」，不是「不可达」：
+    //   滑动地图会随机器人移动而覆盖到目标，等到那时再判断。
+    if (occ < 0)
+      return true;
+
+    // occ == 0（目标格本身空闲）**不能**直接放行。
+    //   "格子空闲"只说明这里没有障碍，既不保证站得住（该判据只看朝向
+    //   前后两点，侧向不查），也不保证走得到（目标可能在一片被封死的
+    //   空腔里：格子是空的、8 邻居也空，但与机器人不连通）。
+    //   实测（enclosed_goal 场景）：目标在四面墙内的空腔正中，occ=0，
+    //   原实现直接 return true → 降级从不触发 → 机器人反复重试直到
+    //   "连续失败上限"把任务判成 failed。
+    //
+    // 但也不能无条件验证：occ==0 在绝大多数情况下就是正常可达的目标，
+    //   每次都跑圆盘+A* 是白花开销，还可能因 A* 的瞬时失败把好目标误降级。
+    //   所以只在「已经为这个目标连续失败过若干次」时才升级为完整验证——
+    //   这时才有证据怀疑是"站得住但去不了"。
+    if (occ == 0 && replan_fail_count_ < degrade_verify_after_fails_)
       return true;
 
     // 这里**故意不做失败退避**。
@@ -668,6 +689,40 @@ namespace scan_planner
     mission_goal_truncated_ = false;
     truncated_reachable_pt_ = degraded;
     have_truncated_reachable_pt_ = true;
+
+    // 【必须在降级点确定后立刻重建全局轨迹】
+    //   否则 getLocalTarget 仍从旧轨迹取样，前视点还指着原障碍终点，
+    //   于是降级成功后紧接着就报 no_free_target（实测 go2 在同一毫秒内
+    //   连续失败、直到任务被放弃）。
+    //   放在这里而不是调用方，是因为这条路径有两个入口：
+    //     · callReboundReplan 入口（会自己重建，但只在首次降级时走到）
+    //     · adjustGlobalTargetIfOccupied（原本完全不重建）
+    //   统一到这里，两处都正确。
+    // mode3 的终点每 tick 由 getLocalTarget / monitorReferenceTransform 从
+    //   reference_end_pt_ 重算。必须同步写回，否则降级点立刻被覆盖回原目标
+    //   （实测 go2：降级成功后同一毫秒内 getLocalTarget 报 no_free_target）。
+    if (navi_mode_ == NAVI_MODE::REFERENCE_PATH)
+    {
+      Eigen::Isometry3d ref_to_world;
+      if (lookupReferenceTransform(ref_to_world))
+        reference_end_pt_ = ref_to_world.inverse() * end_pt_;
+    }
+
+    const bool rebuilt = planner_manager_->planGlobalTraj(
+        start_pt_, start_vel_, start_acc_, end_pt_,
+        Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+    if (!rebuilt)
+    {
+      // 重建失败（典型：起点还在膨胀层里）。此时不能宣称降级成功，
+      //   否则 getLocalTarget 会用旧轨迹取样并报 no_free_target。
+      RCLCPP_WARN(node_->get_logger(),
+                  "Degrade to [%.2f, %.2f] failed to rebuild global traj; keep original target",
+                  degraded(0), degraded(1));
+      end_pt_ = goal_pt;
+      mission_goal_degraded_ = false;
+      have_truncated_reachable_pt_ = false;
+      return false;
+    }
     // 判定基准变了，已进入的"到达候选"要重新计
     status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     status_goal_snapshot_ = Eigen::Vector3d::Zero();
@@ -2998,9 +3053,7 @@ namespace scan_planner
         if (lookupReferenceTransform(ref_to_world))
           reference_end_pt_ = ref_to_world.inverse() * end_pt_;
       }
-      // 旧全局轨迹仍指向原障碍终点，按新终点重建，否则局部目标依旧撞障碍
-      planner_manager_->planGlobalTraj(start_pt_, start_vel_, start_acc_, end_pt_,
-                                       Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+      // 全局轨迹的重建已在 tryDegradeTarget 内部完成（两个入口统一处理）
     }
 
     // 第一步：从全局轨迹上取“前方 planning_horizon 处”的点作为局部目标；
