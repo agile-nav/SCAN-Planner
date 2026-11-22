@@ -393,7 +393,6 @@ Maps::recursiveDivision(int xl, int xh, int yl, int yh, Eigen::MatrixXi& maze)
       }
     }
 
-    std::cout << maze << std::endl;
     // 递归处理四个子区域
     recursiveDivision(xl, xm - 1, yl, ym - 1, maze);
     recursiveDivision(xm + 1, xh, yl, ym - 1, maze);
@@ -403,7 +402,6 @@ Maps::recursiveDivision(int xl, int xh, int yl, int yh, Eigen::MatrixXi& maze)
     RCLCPP_INFO(info.node->get_logger(), "finished generating maze with width %d , height %d",
              xh - xl + 1,
              yh - yl + 1);
-    std::cout << maze << std::endl;
     return;
   } // when the remaining area is larger than or equal to 5*5
 
@@ -501,12 +499,10 @@ Maps::recursiveDivision(int xl, int xh, int yl, int yh, Eigen::MatrixXi& maze)
         maze(xm, d4) = 0;
         break;
     } // the doors are opened for this cell
-    std::cout << maze << std::endl;
 
     RCLCPP_INFO(info.node->get_logger(), "finished generating maze with width %d , height %d",
              xh - xl + 1,
              yh - yl + 1);
-    std::cout << maze << std::endl;
     return;
   }
 
@@ -753,7 +749,6 @@ Maps::maze2D()
     }
   }
 
-  std::cout << maze << std::endl;
 
   // 把二维迷宫“竖直拉伸”：凡是墙的格子，沿 z 方向填满点
   for (int i = 0; i < mx; ++i)

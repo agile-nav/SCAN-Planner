@@ -1128,7 +1128,7 @@ int main(int argc, char **argv) {
     string topic = "/quad_";
     topic += to_string(i);
     topic += "/body_pose";
-    cout << topic << endl;
+    RCLCPP_DEBUG(ros_node->get_logger(), "[sim] event=other_drone_sub topic=%s", topic.c_str());
     other_odom_subs.push_back(ros_node->create_subscription<nav_msgs::msg::Odometry>(
         topic, rclcpp::SensorDataQoS(),
         [i](nav_msgs::msg::Odometry::ConstSharedPtr msg) { multiOdometryCallback(msg, i); }));
@@ -1142,11 +1142,11 @@ int main(int argc, char **argv) {
     uav_model_path = ament_index_cpp::get_package_share_directory("odom_visualization"); //=
                            //"/home/mars/catkin_ws2/src/Exploration_sim/octomap_mapping/octomap_server"
     uav_model_path.append("/meshes/yunque001.pcd");
-    std::cout << "\nFound pkg_path = " << uav_model_path << std::endl;
+    RCLCPP_DEBUG(ros_node->get_logger(), "[sim] event=uav_model path=%s", uav_model_path.c_str());
 
     pcd_read_status = pcl::io::loadPCDFile<PointType>(uav_model_path, uav_extra_model);
     if (pcd_read_status == -1) {
-      cout << "can't read uav extra model file." << endl;
+      RCLCPP_ERROR(ros_node->get_logger(), "[sim] event=uav_model_read_failed path=%s", uav_model_path.c_str());
       return 0;
     }
     // downsample uav model
@@ -1209,7 +1209,7 @@ int main(int argc, char **argv) {
   if (collisioncheck_enable) {
     if (cloud_all_map.empty()) {
       if (file_name.empty() || !loadPinholeMapFromFile(file_name)) {
-        cout << "can't read global" << endl;
+        RCLCPP_ERROR(ros_node->get_logger(), "[sim] event=global_map_read_failed");
         return 0;
       }
     }
@@ -1248,7 +1248,7 @@ int main(int argc, char **argv) {
   if (dynobj_enable == 1) {
     if (!collisioncheck_enable && cloud_all_map.empty()) {
       if (file_name.empty() || !loadPinholeMapFromFile(file_name)) {
-        cout << "can't read global" << endl;
+        RCLCPP_ERROR(ros_node->get_logger(), "[sim] event=global_map_read_failed");
         return 0;
       }
     }

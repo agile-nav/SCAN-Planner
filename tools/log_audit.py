@@ -30,6 +30,7 @@ THIRD_PARTY_MARKERS = (
     os.sep + "third_party" + os.sep,
     os.sep + "ikd-Tree" + os.sep,
     os.sep + "FOV_Checker" + os.sep,
+    os.sep + "shader_m.h",
     os.sep + "opengl_sim.hpp",
 )
 SOURCE_SUFFIXES = (".cpp", ".h", ".hpp")
