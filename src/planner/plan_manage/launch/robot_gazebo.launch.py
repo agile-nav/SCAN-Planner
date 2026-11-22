@@ -60,6 +60,12 @@ def _setup(context):
     spawn_name = gazebo.get("spawn_name", robot)
     xacro_args = gazebo.get("xacro_args") or ["use_gazebo:=true"]
     use_sim_time = as_bool(LaunchConfiguration("use_sim_time").perform(context))
+    log_level = LaunchConfiguration("log_level").perform(context).strip().lower()
+    if log_level not in ("debug", "info", "warn", "error", "fatal"):
+        raise RuntimeError("log_level must be one of: debug, info, warn, error, fatal")
+
+    def log_args(node_name):
+        return ["--ros-args", "--log-level", f"{node_name}:={log_level}"]
 
     ros_gz_share = get_package_share_directory("ros_gz_sim")
     resource_root = os.path.dirname(description_share)
@@ -81,6 +87,7 @@ def _setup(context):
         executable="robot_state_publisher",
         name="robot_state_publisher",
         output="screen",
+        arguments=log_args("robot_state_publisher"),
         parameters=[robot_description],
     )
     spawn = Node(
@@ -94,7 +101,7 @@ def _setup(context):
             "-x", LaunchConfiguration("x"),
             "-y", LaunchConfiguration("y"),
             "-z", LaunchConfiguration("z"),
-        ],
+        ] + log_args("ros_gz_create"),
     )
     actions = [
         SetEnvironmentVariable(
@@ -117,6 +124,7 @@ def _setup(context):
             executable="parameter_bridge",
             name=spawn_name + "_gz_bridge",
             output="screen",
+            arguments=log_args(spawn_name + "_gz_bridge"),
             parameters=[{"config_file": bridge_config}],
         ))
     controller_nodes = [
@@ -140,5 +148,6 @@ def generate_launch_description():
         DeclareLaunchArgument("y", default_value="0.0"),
         DeclareLaunchArgument("z", default_value="0.5"),
         DeclareLaunchArgument("use_sim_time", default_value="true"),
+        DeclareLaunchArgument("log_level", default_value="info"),
         OpaqueFunction(function=_setup),
     ])

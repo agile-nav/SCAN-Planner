@@ -47,12 +47,20 @@ def _setup(context):
         rviz_config = os.path.join(scan_share, "launch", "robot_view.rviz")
 
     use_sim_time = as_bool(LaunchConfiguration("use_sim_time").perform(context))
+    log_level = LaunchConfiguration("log_level").perform(context).strip().lower()
+    if log_level not in ("debug", "info", "warn", "error", "fatal"):
+        raise RuntimeError("log_level must be one of: debug, info, warn, error, fatal")
+
+    def log_args(node_name):
+        return ["--ros-args", "--log-level", f"{node_name}:={log_level}"]
+
     return [
         Node(
             package="robot_state_publisher",
             executable="robot_state_publisher",
             name="robot_state_publisher",
             output="screen",
+            arguments=log_args("robot_state_publisher"),
             parameters=[{
                 "robot_description": Command(robot_description_command(meta)),
                 "use_sim_time": use_sim_time,
@@ -63,13 +71,14 @@ def _setup(context):
             executable="joint_state_publisher_gui",
             name="joint_state_publisher_gui",
             output="screen",
+            arguments=log_args("joint_state_publisher_gui"),
         ),
         Node(
             package="rviz2",
             executable="rviz2",
             name="rviz2",
             output="screen",
-            arguments=["-d", rviz_config],
+            arguments=["-d", rviz_config] + log_args("rviz2"),
         ),
     ]
 
@@ -79,5 +88,6 @@ def generate_launch_description():
         DeclareLaunchArgument("robot", default_value="a2"),
         DeclareLaunchArgument("rviz_config", default_value=""),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
+        DeclareLaunchArgument("log_level", default_value="info"),
         OpaqueFunction(function=_setup),
     ])
