@@ -136,6 +136,27 @@ ROS_LOG_DIR=~/runs/2026-11-22 ros2 launch scan_planner run.launch.py log_level:=
 python3 tools/log_audit.py --strict
 ```
 
+查询/统计日志：
+
+```bash
+python3 tools/log_query.py summary run.log
+python3 tools/log_query.py rid 42 run.log
+python3 tools/log_query.py last-failure run.log
+python3 tools/log_query.py errors run.log
+python3 tools/log_query.py slow run.log
+python3 tools/log_query.py timeline run.log
+python3 tools/log_query.py export run.log --out run.jsonl
+```
+
+实时诊断：
+
+```bash
+ros2 topic echo /local_planner/status
+ros2 topic echo /local_planner/diagnostics
+```
+
+`/local_planner/status` 面向任务状态；`/local_planner/diagnostics` 每秒发布计数器、失败原因分布和规划耗时，适合 rqt/仪表盘。节点每 10 秒还会打印一条 `[sys] event=health` 摘要，退出时打印 `[sys] event=shutdown_summary`。
+
 ## 配置与接口
 
 规划器、控制器和仿真器的**通用参数**集中在：

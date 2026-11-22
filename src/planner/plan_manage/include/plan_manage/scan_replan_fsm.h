@@ -37,6 +37,7 @@
 #include <Eigen/Eigen>
 #include <Eigen/Geometry>
 #include <algorithm>
+#include <array>
 #include <deque>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <iostream>
@@ -193,6 +194,16 @@ namespace scan_planner
     uint64_t replan_rid_{0};
     bool diag_verbose_{false};
     rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr diag_param_cb_;
+    // ---------- 运行统计（health / 诊断话题 / 退出摘要） ----------
+    uint64_t replan_total_{0}, replan_ok_{0};
+    std::array<uint64_t, static_cast<size_t>(ReplanFailure::UNKNOWN) + 1> failure_counts_{};
+    uint64_t degrade_count_{0}, backup_count_{0}, backup_short_count_{0};
+    double plan_ms_last_{0.0}, plan_ms_sum_{0.0}, plan_ms_max_{0.0};
+    uint64_t plan_ms_n_{0};
+    std::deque<double> plan_ms_window_;
+    rclcpp::Time start_wall_time_{0, 0, RCL_ROS_TIME};
+    rclcpp::Time last_health_log_time_{0, 0, RCL_ROS_TIME};
+    rclcpp::Time last_diag_pub_time_{0, 0, RCL_ROS_TIME};
     bool enable_fail_safe_{true}, need_hover_stop_{false};
     FSM_EXEC_STATE exec_state_{INIT};
     int continuously_called_times_{0};
@@ -348,6 +359,8 @@ namespace scan_planner
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr body_pose_visual_pub_;
     // 运行状态话题：只发 running / goal_reached（idle 不发）
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
+    // 诊断话题：计数器/失败分布/规划耗时，供 rqt/仪表盘直接消费
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr diagnostics_pub_;
 
     // ---------- 辅助函数（内部使用） ----------
     /* helper functions */
@@ -426,6 +439,12 @@ namespace scan_planner
     std::string gateStatusName(const std::string &state) const;
     // 把状态拼成 JSON（state / msgs）
     std::string buildStatusJson(const std::string &state);
+    // 运行统计与诊断
+    void recordReplanResult(bool ok, ReplanFailure reason, double ms);
+    void updateHealthSummary();
+    std::string buildDiagnosticsJson();
+    std::string buildFailureCountsJson() const;
+    void logRunSummary(const char *event);
     // “如果没有门控，本该报什么状态”（只读、无副作用），供 JSON 的 inner 字段使用
     std::string statusInnerState() const;
     // 记录一次失败原因（设为当前原因，并累积到本次 error 的原因列表）
@@ -455,9 +474,7 @@ namespace scan_planner
     SCANReplanFSM(/* args */)
     {
     }
-    ~SCANReplanFSM()
-    {
-    }
+    ~SCANReplanFSM();
 
     // 唯一对外入口：做全部初始化（读参数、订阅话题、建定时器）
     void init(rclcpp::Node *node);

@@ -23,6 +23,7 @@
 #include <plan_manage/replan_retry.h>
 #include <plan_manage/local_target_utils.h>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <limits>
 #include <stdexcept>
@@ -277,6 +278,13 @@ namespace scan_planner
     // 运行状态话题：只发 running / goal_reached（idle 不发），用 transient_local 让后订阅者也能拿到当前状态
     status_pub_ = node_->create_publisher<std_msgs::msg::String>(
         "/local_planner/status", rclcpp::QoS(1).reliable().transient_local());
+    // 诊断话题：计数器/失败分布/规划耗时，供 rqt 或仪表盘直接消费
+    diagnostics_pub_ = node_->create_publisher<std_msgs::msg::String>(
+        "local_planner/diagnostics", rclcpp::QoS(1).reliable().transient_local());
+
+    start_wall_time_ = node_->now();
+    last_health_log_time_ = start_wall_time_;
+    last_diag_pub_time_ = start_wall_time_;
 
     // ---------- 第8步：按导航模式订阅对应的“目标来源” ----------
     if (navi_mode_ == NAVI_MODE::MANUAL_TARGET)
@@ -772,6 +780,7 @@ namespace scan_planner
     //   这里若记 TARGET_OCCUPIED，会在"同轮规划仍失败"时被累积，
     //   超时后上报成 failed；更糟的是它属硬错误，一旦打开
     //   fsm.status_latch_hard_error 就会把一次成功的降级锁存成 error，直到重启节点。
+    ++degrade_count_;
     return true;
   }
 
@@ -1398,6 +1407,7 @@ namespace scan_planner
     traj_commit_wall_ = node_->now();
     stuck_retry_count_ = 0;
     ++escape_total_;
+    ++backup_count_;
 
     RCLCPP_WARN(node_->get_logger(),
                 "[fsm] event=backup_start rid=%llu reason=%s dist=%.2fm duration=%.1fs to=(%.2f,%.2f,%.2f)",
@@ -1675,10 +1685,111 @@ namespace scan_planner
     json += ",\"traj_id\":" + std::to_string(planner_manager_ ? planner_manager_->local_data_.traj_id_ : -1);
     json += ",\"replan_fail\":" + std::to_string(replan_fail_count_);
     json += ",\"retry\":" + std::to_string(plan_retry_fails_);
+    json += ",\"last_reason\":\"" + std::string(replanFailureToString(status_reason_)) + "\"";
+    json += ",\"degrade\":" + std::to_string(degrade_count_);
+    json += ",\"backup\":" + std::to_string(backup_count_);
+    json += ",\"plan_ms_last\":" + std::to_string(plan_ms_last_);
     json += ",\"inner\":\"" + inner + "\"";
     json += "}";
     return json;
   }
+
+  void SCANReplanFSM::recordReplanResult(bool ok, ReplanFailure reason, double ms)
+  {
+    ++replan_total_;
+    if (ok)
+      ++replan_ok_;
+    else
+    {
+      const ReplanFailure r = (reason == ReplanFailure::NONE) ? ReplanFailure::UNKNOWN : reason;
+      const size_t idx = static_cast<size_t>(r);
+      if (idx < failure_counts_.size()) ++failure_counts_[idx];
+    }
+    plan_ms_last_ = ms;
+    plan_ms_sum_ += ms;
+    ++plan_ms_n_;
+    if (ms > plan_ms_max_) plan_ms_max_ = ms;
+    plan_ms_window_.push_back(ms);
+    while (plan_ms_window_.size() > 100) plan_ms_window_.pop_front();
+  }
+
+  std::string SCANReplanFSM::buildFailureCountsJson() const
+  {
+    std::string out = "{";
+    bool first = true;
+    for (size_t i = 0; i < failure_counts_.size(); ++i)
+    {
+      if (failure_counts_[i] == 0) continue;
+      const char *name = replanFailureToString(static_cast<ReplanFailure>(i));
+      if (!name || !*name) continue;
+      if (!first) out += ",";
+      first = false;
+      out += "\"" + std::string(name) + "\":" + std::to_string(failure_counts_[i]);
+    }
+    out += "}";
+    return out;
+  }
+
+  std::string SCANReplanFSM::buildDiagnosticsJson()
+  {
+    const double avg = plan_ms_n_ ? plan_ms_sum_ / static_cast<double>(plan_ms_n_) : 0.0;
+    std::string json = "{\"state\":\"" + gateStatusName(statusInnerState()) + "\"";
+    json += ",\"rid\":" + std::to_string(replan_rid_);
+    json += ",\"traj_id\":" + std::to_string(planner_manager_ ? planner_manager_->local_data_.traj_id_ : -1);
+    json += ",\"replans\":" + std::to_string(replan_total_);
+    json += ",\"replan_ok\":" + std::to_string(replan_ok_);
+    json += ",\"replan_fail\":" + std::to_string(replan_total_ - replan_ok_);
+    json += ",\"degrade\":" + std::to_string(degrade_count_);
+    json += ",\"backup\":" + std::to_string(backup_count_);
+    json += ",\"backup_short\":" + std::to_string(backup_short_count_);
+    json += ",\"last_reason\":\"" + std::string(replanFailureToString(status_reason_)) + "\"";
+    json += ",\"plan_ms_last\":" + std::to_string(plan_ms_last_);
+    json += ",\"plan_ms_avg\":" + std::to_string(avg);
+    json += ",\"plan_ms_max\":" + std::to_string(plan_ms_max_);
+    json += ",\"failures\":" + buildFailureCountsJson();
+    json += "}";
+    return json;
+  }
+
+  void SCANReplanFSM::logRunSummary(const char *event)
+  {
+    const double uptime = start_wall_time_.nanoseconds() == 0
+                              ? 0.0
+                              : (node_->now() - start_wall_time_).seconds();
+    const double avg = plan_ms_n_ ? plan_ms_sum_ / static_cast<double>(plan_ms_n_) : 0.0;
+    RCLCPP_INFO(node_->get_logger(),
+                "[sys] event=%s uptime=%.1fs state=%s replans=%llu ok=%llu fail=%llu "
+                "degrade=%llu backup=%llu backup_short=%llu last_reason=%s "
+                "plan_ms_last=%.1f avg=%.1f max=%.1f",
+                event, uptime, gateStatusName(statusInnerState()).c_str(),
+                static_cast<unsigned long long>(replan_total_),
+                static_cast<unsigned long long>(replan_ok_),
+                static_cast<unsigned long long>(replan_total_ - replan_ok_),
+                static_cast<unsigned long long>(degrade_count_),
+                static_cast<unsigned long long>(backup_count_),
+                static_cast<unsigned long long>(backup_short_count_),
+                replanFailureToString(status_reason_), plan_ms_last_, avg, plan_ms_max_);
+  }
+
+  void SCANReplanFSM::updateHealthSummary()
+  {
+    if (!node_) return;
+    const rclcpp::Time now = node_->now();
+    if (diagnostics_pub_ &&
+        (last_diag_pub_time_.nanoseconds() == 0 || (now - last_diag_pub_time_).seconds() >= 1.0))
+    {
+      std_msgs::msg::String msg;
+      msg.data = buildDiagnosticsJson();
+      diagnostics_pub_->publish(msg);
+      last_diag_pub_time_ = now;
+    }
+    if (last_health_log_time_.nanoseconds() == 0 || (now - last_health_log_time_).seconds() >= 10.0)
+    {
+      logRunSummary("health");
+      last_health_log_time_ = now;
+    }
+  }
+
 
   // 记录一次失败原因：设为当前原因，并把新出现的原因累积到本次 error 的原因列表里
   void SCANReplanFSM::setStatusReason(ReplanFailure r)
@@ -2170,6 +2281,7 @@ namespace scan_planner
     updateLocalTrajTimeFreeze();
     // 同步运行状态（running/goal_reached/stopped）；放在最前，避免被后续的提前 return 跳过
     updatePlannerStatus();
+    updateHealthSummary();
     // 【问题5修正】参考 TF 监控必须每拍都跑，包括门控（paused / disabled）期间。
     //   原来它排在两个门控 return 之后，于是门控期间 reference_tf_missing_since_
     //   不会被更新：等恢复时若 TF 已缺失很久，会立刻拿一个陈旧的时间戳判超时急停。
@@ -2404,6 +2516,7 @@ namespace scan_planner
         if (moved < 0.05)
         {
           ++escape_strategy_;
+          ++backup_short_count_;
           RCLCPP_WARN(node_->get_logger(),
                       "[fsm] event=backup_short rid=%llu moved=%.2fm next_strategy=%d/3",
                       static_cast<unsigned long long>(replan_rid_), moved, escape_strategy_);
@@ -3113,6 +3226,11 @@ namespace scan_planner
   // flag_randomPolyTraj：是否在初始猜测里插一个随机点（用来跳出卡死）。
   bool SCANReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
+    const auto plan_t0 = std::chrono::steady_clock::now();
+    auto plan_ms = [&]() {
+      return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - plan_t0).count();
+    };
+    ReplanFailure finish_reason = ReplanFailure::NONE;
     // 每次重规划一个唯一 rid：A*/优化/可行性/失败汇总都用它串起来
     ++replan_rid_;
     if (planner_manager_) planner_manager_->setDiagContext(replan_rid_, diag_verbose_);
@@ -3148,6 +3266,7 @@ namespace scan_planner
     {
       setStatusReason(last_target_failure_);
       log_replan_failure(last_target_failure_);
+      recordReplanResult(false, last_target_failure_, plan_ms());
       return false;
     }
 
@@ -3163,6 +3282,7 @@ namespace scan_planner
     if (!plan_success)
     {
       const ReplanFailure reason = planner_manager_->lastFailureReason();
+      finish_reason = reason;
       setStatusReason((reason == ReplanFailure::NONE) ? ReplanFailure::UNKNOWN : reason);
       log_replan_failure(reason);
     }
@@ -3284,6 +3404,7 @@ namespace scan_planner
       visualization_->displayOptimalTraj(info->position_traj_, 0);
     }
 
+    recordReplanResult(plan_success, finish_reason, plan_ms());
     return plan_success;
   }
 
@@ -3582,5 +3703,12 @@ namespace scan_planner
     }
     return true;
   }
+
+  SCANReplanFSM::~SCANReplanFSM()
+  {
+    if (node_)
+      logRunSummary("shutdown_summary");
+  }
+
 
 } // namespace scan_planner
