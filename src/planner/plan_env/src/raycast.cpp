@@ -12,7 +12,6 @@
 // ============================================================================
 #include <Eigen/Eigen>
 #include <cmath>
-#include <iostream>
 #include <plan_env/raycast.h>
 
 // 取符号：负数返回 -1，0 返回 0，正数返回 1。
@@ -122,12 +121,6 @@ void Raycast(const Eigen::Vector3d& start, const Eigen::Vector3d& end, const Eig
 
       // 超过射线总长度 → 提前结束
       if (dist > maxDist) return;
-
-      /*            if (output_points_cnt > 1500) {
-                      std::cerr << "Error, too many racyast voxels." <<
-         std::endl;
-                      throw std::out_of_range("Too many raycast voxels");
-                  }*/
     }
 
     // 已经到达终点格子 → 结束
@@ -232,11 +225,9 @@ void Raycast(const Eigen::Vector3d& start, const Eigen::Vector3d& end, const Eig
 
       if (dist > maxDist) return;
 
-      // 防御性检查：格子数太多说明出异常了，直接抛错
-      if (output->size() > 1500) {
-        std::cerr << "Error, too many racyast voxels." << std::endl;
-        throw std::out_of_range("Too many raycast voxels");
-      }
+      // 防御性上限：异常输入下直接停止追加，避免无限增长。
+      // 这里不抛异常 —— 该函数可能被 ROS 回调间接调用，异常穿透会终止节点。
+      if (output->size() >= 1500) return;
     }
 
     // 到达终点格子 → 结束

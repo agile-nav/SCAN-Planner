@@ -54,8 +54,10 @@ int main(int argc, char **argv)
   }
   catch (const std::exception &error)
   {
-    // 只要初始化阶段出错，就打印致命日志并退出（返回非 0 表示失败）。
-    RCLCPP_FATAL(node->get_logger(), "Failed to initialize SCAN-Planner: %s", error.what());
+    // 初始化和运行期回调都会走到这里：初始化失败是配置问题；
+    // 运行期回调异常则说明规划循环被中断，需要区分两者的文案。
+    RCLCPP_FATAL(node->get_logger(),
+                 "SCAN-Planner stopped by unhandled exception: %s", error.what());
     rclcpp::shutdown();
     return 1;
   }

@@ -159,12 +159,10 @@ void GridMap::initMap(rclcpp::Node *node)
   // 滑动阈值换算成格子数（至少 1 格）
   mp_.map_sliding_thresh_vox_ = std::max(1, static_cast<int>(std::ceil(mp_.map_sliding_thresh_ * mp_.resolution_inv_)));
 
-  // 打印几个关键概率值，方便确认参数读对了
-  cout << "hit: " << mp_.prob_hit_log_ << endl;
-  cout << "miss: " << mp_.prob_miss_log_ << endl;
-  cout << "min log: " << mp_.clamp_min_log_ << endl;
-  cout << "max: " << mp_.clamp_max_log_ << endl;
-  cout << "thresh log: " << mp_.min_occupancy_log_ << endl;
+  // 打印概率模型参数（打印概率本身，便于与 YAML 对照）
+  RCLCPP_INFO(node_->get_logger(),
+              "[map] event=init p_hit=%.2f p_miss=%.2f p_min=%.2f p_max=%.2f p_occ=%.2f",
+              mp_.p_hit_, mp_.p_miss_, mp_.p_min_, mp_.p_max_, mp_.p_occ_);
 
   // 各个方向的格子总数 = 地图尺寸 ÷ 分辨率
   for (int i = 0; i < 3; ++i)
