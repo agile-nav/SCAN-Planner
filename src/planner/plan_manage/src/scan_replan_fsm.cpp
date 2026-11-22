@@ -1356,8 +1356,8 @@ namespace scan_planner
     if (max_escape_total_ > 0 && escape_total_ >= max_escape_total_)
     {
       RCLCPP_WARN(node_->get_logger(),
-                  "[FSM] backup escape budget exhausted (%d); giving up this segment",
-                  escape_total_);
+                  "[fsm] event=backup_budget_exhausted rid=%llu total=%d",
+                  static_cast<unsigned long long>(replan_rid_), escape_total_);
       return false;
     }
 
@@ -1372,8 +1372,8 @@ namespace scan_planner
       if (used + 1e-3 < want)
       {
         RCLCPP_WARN(node_->get_logger(),
-                    "[FSM] backup history only %.2fm (wanted %.2fm); using available history",
-                    used, want);
+                    "[fsm] event=backup_history_short rid=%llu used=%.2fm want=%.2fm",
+                    static_cast<unsigned long long>(replan_rid_), used, want);
       }
     }
     else
@@ -1384,7 +1384,8 @@ namespace scan_planner
       escape_target_pt_(2) = odom_pos_(2);
       used = want;
       RCLCPP_WARN(node_->get_logger(),
-                  "[FSM] no usable history; fallback to heading backup %.2fm", used);
+                  "[fsm] event=backup_heading_fallback rid=%llu dist=%.2fm",
+                  static_cast<unsigned long long>(replan_rid_), used);
     }
 
     if (!planner_manager_ ||
@@ -1399,8 +1400,8 @@ namespace scan_planner
     ++escape_total_;
 
     RCLCPP_WARN(node_->get_logger(),
-                "[FSM] stuck (%s): low-speed backup %.2fm in %.1fs to (%.2f,%.2f,%.2f)",
-                reason, used, escape_duration_,
+                "[fsm] event=backup_start rid=%llu reason=%s dist=%.2fm duration=%.1fs to=(%.2f,%.2f,%.2f)",
+                static_cast<unsigned long long>(replan_rid_), reason, used, escape_duration_,
                 escape_target_pt_(0), escape_target_pt_(1), escape_target_pt_(2));
     changeFSMExecState(EXEC_TRAJ, "STUCK_ESCAPE");
     return true;
@@ -2404,14 +2405,15 @@ namespace scan_planner
         {
           ++escape_strategy_;
           RCLCPP_WARN(node_->get_logger(),
-                      "[FSM] backup produced only %.2fm movement; next strategy %d/3",
-                      moved, escape_strategy_);
+                      "[fsm] event=backup_short rid=%llu moved=%.2fm next_strategy=%d/3",
+                      static_cast<unsigned long long>(replan_rid_), moved, escape_strategy_);
         }
         else
         {
           escape_strategy_ = 0;
           RCLCPP_INFO(node_->get_logger(),
-                      "[FSM] backup moved %.2fm; resume normal planning", moved);
+                      "[fsm] event=backup_done rid=%llu moved=%.2fm",
+                      static_cast<unsigned long long>(replan_rid_), moved);
         }
         have_new_target_ = true;
         changeFSMExecState(GEN_NEW_TRAJ, "ESCAPE_DONE");
@@ -2528,9 +2530,11 @@ namespace scan_planner
         {
           ++stuck_retry_count_;
           RCLCPP_WARN(node_->get_logger(),
-                      "[FSM] stuck (%s): retry %d/%d traj_id=%d wall=%.2fs t_cur=%.2f dur=%.2f",
-                      done_reason, stuck_retry_count_, max_stuck_retry_,
-                      info->traj_id_, wall_since_commit, t_cur, info->duration_);
+                      "[fsm] event=stuck_retry rid=%llu reason=%s retry=%d/%d traj_id=%d "
+                      "wall=%.2fs t_cur=%.2f dur=%.2f",
+                      static_cast<unsigned long long>(replan_rid_), done_reason,
+                      stuck_retry_count_, max_stuck_retry_, info->traj_id_,
+                      wall_since_commit, t_cur, info->duration_);
           // GEN_NEW_TRAJ 内部会重新从 odom 取起点状态
           changeFSMExecState(GEN_NEW_TRAJ, "STUCK_RETRY");
           return;
@@ -2742,13 +2746,15 @@ namespace scan_planner
       const int failed = replan_fail_count_;
       replan_fail_count_ = 0;
       RCLCPP_WARN(node_->get_logger(),
-                  "Replan failed %d times; try backup escape before giving up", failed);
+                  "[fsm] event=replan_fail_limit rid=%llu fails=%d",
+                  static_cast<unsigned long long>(replan_rid_), failed);
 
       if (have_target_ && startBackupEscape("planning_fail"))
         return;
 
       RCLCPP_WARN(node_->get_logger(),
-                  "Replan failed repeatedly; emergency stop and wait for a new target");
+                  "[fsm] event=replan_fail_giveup rid=%llu",
+                  static_cast<unsigned long long>(replan_rid_));
       need_hover_stop_ = true;
       flag_escape_emergency_ = true;
       setStatusReason(ReplanFailure::MAX_REPLAN_FAIL);

@@ -142,7 +142,8 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         static int same_cell_cnt = 0;
         if (++same_cell_cnt % 20 == 1)
             RCLCPP_WARN(logger_,
-                        "[Astar] start and end map to the same cell (%.2f,%.2f,%.2f); skip degenerate segment",
+                        "[astar] event=degenerate rid=%llu seg=%d cell=(%.2f,%.2f,%.2f)",
+                        static_cast<unsigned long long>(diag_rid_), diag_seg_,
                         start_pt(0), start_pt(1), start_pt(2));
         return false;
     }
@@ -211,8 +212,9 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         if (!found)
         {
             RCLCPP_WARN(logger_,
-                        "[Astar] No free start point within %.2f m of (%.2f, %.2f, %.2f)",
-                        kMaxOffset, start_pt(0), start_pt(1), start_pt(2));
+                        "[astar] event=start_escape_failed rid=%llu seg=%d radius=%.2fm pos=(%.2f,%.2f,%.2f)",
+                        static_cast<unsigned long long>(diag_rid_), diag_seg_, kMaxOffset,
+                        start_pt(0), start_pt(1), start_pt(2));
             return false;
         }
 
@@ -220,7 +222,8 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         static int escape_cnt = 0;
         if (++escape_cnt % 50 == 1)
             RCLCPP_INFO(logger_,
-                        "[Astar] start point pushed out of obstacle by %.2f m",
+                        "[astar] event=start_escape rid=%llu seg=%d dist=%.2fm",
+                        static_cast<unsigned long long>(diag_rid_), diag_seg_,
                         (escaped_pt - start_pt).norm());
 
         last_start_adjust_ = (escaped_pt - start_pt).norm();
@@ -273,15 +276,17 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         if (!found)
         {
             RCLCPP_WARN(logger_,
-                        "[Astar] No free end point within %.2f m of (%.2f, %.2f, %.2f)",
-                        k_end_max_offset, end_pt(0), end_pt(1), end_pt(2));
+                        "[astar] event=end_escape_failed rid=%llu seg=%d radius=%.2fm pos=(%.2f,%.2f,%.2f)",
+                        static_cast<unsigned long long>(diag_rid_), diag_seg_, k_end_max_offset,
+                        end_pt(0), end_pt(1), end_pt(2));
             return false;
         }
 
         static int end_escape_cnt = 0;
         if (++end_escape_cnt % 50 == 1)
             RCLCPP_INFO(logger_,
-                        "[Astar] end point pushed out of obstacle by %.2f m",
+                        "[astar] event=end_escape rid=%llu seg=%d dist=%.2fm",
+                        static_cast<unsigned long long>(diag_rid_), diag_seg_,
                         (escaped_end_pt - end_pt).norm());
         end_pt = escaped_end_pt;
         end_idx = escaped_end_idx;
@@ -326,10 +331,12 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     if (!ConvertToIndexAndAdjustStartEndPoints(start_pt, end_pt, start_idx, end_idx))
     {
         RCLCPP_WARN(logger_,
-                     "[Astar] INIT_ERR: start=(%.2f,%.2f,%.2f) adj_s=%.2fm end=(%.2f,%.2f,%.2f) adj_e=%.2fm pool=±%.2fm",
-                     start_pt(0), start_pt(1), start_pt(2), last_start_adjust_,
-                     end_pt(0), end_pt(1), end_pt(2), last_end_adjust_,
-                     POOL_SIZE_(0) * step_size_ * 0.5);
+                    "[astar] event=init_err rid=%llu seg=%d start=(%.2f,%.2f,%.2f) adj_s=%.2fm "
+                    "end=(%.2f,%.2f,%.2f) adj_e=%.2fm pool=±%.2fm",
+                    static_cast<unsigned long long>(diag_rid_), diag_seg_,
+                    start_pt(0), start_pt(1), start_pt(2), last_start_adjust_,
+                    end_pt(0), end_pt(1), end_pt(2), last_end_adjust_,
+                    POOL_SIZE_(0) * step_size_ * 0.5);
         // 起终点有问题 → 返回“初始化错误”
         return ASTAR_RET::INIT_ERR;
     }
@@ -395,15 +402,16 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     int blocked_cnt = 0;
     auto reportAstarFailure = [&](const char *why) {
       RCLCPP_WARN(logger_,
-                  "[Astar] %s: expanded=%d blocked=%d(%.0f%%) time=%.3fs pool=±%.2fm "
-                  "start=(%.2f,%.2f,%.2f) adj_s=%.2fm end=(%.2f,%.2f,%.2f) adj_e=%.2fm rid=%llu seg=%d",
-                  why, num_iter, blocked_cnt,
+                  "[astar] event=search_failed reason=%s rid=%llu seg=%d expanded=%d blocked=%d(%.0f%%) "
+                  "time=%.3fs pool=±%.2fm start=(%.2f,%.2f,%.2f) adj_s=%.2fm "
+                  "end=(%.2f,%.2f,%.2f) adj_e=%.2fm",
+                  why, static_cast<unsigned long long>(diag_rid_), diag_seg_,
+                  num_iter, blocked_cnt,
                   num_iter > 0 ? 100.0 * blocked_cnt / num_iter : 0.0,
                   std::chrono::duration<double>(std::chrono::steady_clock::now() - time_1).count(),
                   POOL_SIZE_(0) * step_size_ * 0.5,
                   start_pt(0), start_pt(1), start_pt(2), last_start_adjust_,
-                  end_pt(0), end_pt(1), end_pt(2), last_end_adjust_,
-                  static_cast<unsigned long long>(diag_rid_), diag_seg_);
+                  end_pt(0), end_pt(1), end_pt(2), last_end_adjust_);
     };
     // 主循环：只要还有待扩展的格子就继续
     while (!openSet_.empty())
@@ -513,8 +521,6 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
         // 超过 0.2 秒还没搜完 → 放弃本次搜索
         if (std::chrono::duration<double>(time_2 - time_1).count() > 0.2)
         {
-            RCLCPP_WARN(logger_,
-                        "Failed in A-star path search: 0.2 second time limit exceeded");
             reportAstarFailure("SEARCH_ERR(timeout 0.2s)");
             return ASTAR_RET::SEARCH_ERR;
         }
@@ -527,7 +533,8 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     // 如果这次搜索特别慢（超过 0.1 秒），打一条警告方便排查
     if (elapsed > 0.1)
         RCLCPP_WARN(logger_,
-                    "A-star path search took %.3fs, iter=%d", elapsed, num_iter);
+                    "[astar] event=slow_search rid=%llu seg=%d elapsed=%.3fs iter=%d",
+                    static_cast<unsigned long long>(diag_rid_), diag_seg_, elapsed, num_iter);
 
     // 【诊断 P12】"为什么搜不到路"——把搜索平面**真实看到**的东西打出来（每 5 秒最多一张）。
     //   与搜索完全一致：判定朝向 = 两端连线方向；每个 (x,y) 格的 z 按两端线性插值。
