@@ -48,11 +48,16 @@ bash tools/clock_sync_test/record_run.sh A_normal
 --controller-mode closed_loop|open_loop
 --extra-topics "/a /b"    # 追加录制话题（会从机型档案自动读 body_pose/sensor_pose/cloud）
 --log-level info|debug    # 规划栈日志级别（默认 debug）
---max-log-mb 200          # 结束后 run.log 超过该大小自动 gzip
+--max-log-mb 200          # 运行中超过该大小停止录制；结束后仍会 gzip
+--no-topic-check          # 跳过启动后的必要话题检查
 --dry-run                 # 只打印配置，不启动
 --quiet                   # 不打印 banner / 不 tail
 --list-events             # 查看当前 run 的事件
+--list-events --run-dir DIR
 ```
+
+录制结束会额外生成 `analysis/diagnostics.csv`（来自 `/local_planner/diagnostics`），
+`events.csv` 会合并 `events.tsv` 中的人工标记（kind=`user_event`）。
 
 分析时可加：
 
@@ -94,6 +99,8 @@ python3 tools/clock_sync_test/analyze_run.py --json --no-plot
     ├── flags.csv             # frozen / enabled
     ├── trajectories.csv      # 每条 B 样条（时长/点数）
     ├── status.csv            # /local_planner/status 状态序列
+    ├── diagnostics.csv       # /local_planner/diagnostics 计数器/耗时
+    ├── events.jsonl          # --json 时的事件 JSONL
     ├── summary.txt           # 指标 + 判据
     └── plots/
         ├── traj_clock.png

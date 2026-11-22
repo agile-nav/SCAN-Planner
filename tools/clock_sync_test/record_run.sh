@@ -20,6 +20,7 @@
 #   bash record_run.sh <label> --quiet            # 不打印 banner / 不 tail
 #   bash record_run.sh --event "block 1"          # 给当前 run 打时间戳标记
 #   bash record_run.sh --list-events              # 查看当前 run 的事件
+#   bash record_run.sh --list-events --run-dir DIR
 #
 # 产物：${CLOCK_SYNC_ROOT:-$HOME/clock_sync_runs}/<label>_<时间>/
 #   meta.txt  run.log  bag/  bag_record.log  events.tsv  roslog/
@@ -40,6 +41,7 @@ NAVI_MODE="${NAVI_MODE:-3}"
 CONTROLLER_MODE="${CONTROLLER_MODE:-closed_loop}"
 MAX_LOG_MB="${MAX_LOG_MB:-200}"
 QUIET="${QUIET:-0}"
+TOPIC_CHECK="${TOPIC_CHECK:-1}"
 ROBOT_PROFILE="$REPO/src/planner/plan_manage/config/robots/${ROBOT}.yaml"
 
 usage() {
@@ -50,9 +52,13 @@ die() { echo "[error] $*" >&2; exit 1; }
 
 # ---- --list-events 快路径 ----
 if [[ "${1:-}" == "--list-events" ]]; then
+  shift
   cur="$ROOT/current"
-  [[ -L "$cur" && -d "$cur" ]] || die "没有正在进行的 run（$cur）"
-  [[ -f "$cur/events.tsv" ]] && cat "$cur/events.tsv" || echo "（当前 run 还没有事件）"
+  if [[ "${1:-}" == "--run-dir" ]]; then
+    cur="${2:?缺少目录}"
+  fi
+  [[ -d "$cur" ]] || die "run 目录不存在：$cur"
+  [[ -f "$cur/events.tsv" ]] && cat "$cur/events.tsv" || echo "（该 run 还没有事件）"
   exit 0
 fi
 
@@ -85,6 +91,7 @@ while [[ $# -gt 0 ]]; do
       read -r -a _extra <<< "${2:?缺少话题列表}"
       EXTRA_TOPICS+=("${_extra[@]}"); shift 2;;
     --max-log-mb) MAX_LOG_MB="${2:?缺少 MB}"; shift 2;;
+    --no-topic-check) TOPIC_CHECK=0; shift;;
     --dry-run)   DRY_RUN=1; shift;;
     --quiet)     QUIET=1; shift;;
     -h|--help)   usage; exit 0;;
@@ -205,11 +212,44 @@ set -u
   echo "navi_mode: $NAVI_MODE"
   echo "controller_mode: $CONTROLLER_MODE"
   echo "max_log_mb: $MAX_LOG_MB"
+  echo "topic_check: $TOPIC_CHECK"
 } > "$RUN_DIR/meta.txt"
 for f in common.yaml "robots/${ROBOT}.yaml"; do
   [[ -f "$REPO/src/planner/plan_manage/config/$f" ]] && \
     cp "$REPO/src/planner/plan_manage/config/$f" "$RUN_DIR/" 2>/dev/null || true
 done
+
+# ---- 按机型档案/追加话题生成 bag QoS 覆盖 ----
+BAG_QOS="$SCRIPT_DIR/bag_qos.yaml"
+if [[ ${#PROFILE_TOPICS[@]} -gt 0 || ${#EXTRA_TOPICS[@]} -gt 0 ]]; then
+  if python3 - "$SCRIPT_DIR/bag_qos.yaml" "$RUN_DIR/bag_qos.generated.yaml" \
+      "${PROFILE_TOPICS[@]}" "${EXTRA_TOPICS[@]}" <<'PY'
+import sys
+try:
+    import yaml
+except Exception:
+    sys.exit(1)
+base_path, out_path, *topics = sys.argv[1:]
+with open(base_path, encoding="utf-8") as fh:
+    data = yaml.safe_load(fh) or {}
+for topic in topics:
+    if topic:
+        data.setdefault(topic, {
+            "reliability": "best_effort",
+            "durability": "volatile",
+            "history": "keep_last",
+            "depth": 50,
+        })
+with open(out_path, "w", encoding="utf-8") as fh:
+    yaml.safe_dump(data, fh, sort_keys=False)
+PY
+  then
+    BAG_QOS="$RUN_DIR/bag_qos.generated.yaml"
+  else
+    echo "[warn] 无法生成动态 bag QoS，使用默认 bag_qos.yaml" >&2
+  fi
+fi
+echo "bag_qos: $BAG_QOS" >> "$RUN_DIR/meta.txt"
 
 if [[ "$QUIET" -eq 0 ]]; then
   echo "================================================================"
@@ -228,11 +268,11 @@ if [[ "$QUIET" -eq 0 ]]; then
   echo "================================================================"
 fi
 
-BAG_PID=""; LAUNCH_PID=""; TAIL_PID=""; WATCH_PID=""; PARAM_PID=""
+BAG_PID=""; LAUNCH_PID=""; TAIL_PID=""; PARAM_PID=""; LOG_WATCH_PID=""
 
 cleanup() {
   trap - INT TERM EXIT
-  [[ -n "$WATCH_PID" ]] && kill "$WATCH_PID" 2>/dev/null || true
+  [[ -n "$LOG_WATCH_PID" ]] && kill "$LOG_WATCH_PID" 2>/dev/null || true
   [[ -n "$PARAM_PID" ]] && kill "$PARAM_PID" 2>/dev/null || true
   [[ -n "$TAIL_PID"  ]] && kill "$TAIL_PID"  2>/dev/null || true
 
@@ -284,7 +324,7 @@ trap cleanup INT TERM EXIT
 
 # ---- 开始录包 ----
 ros2 bag record -s "$STORAGE" -o "$RUN_DIR/bag" "${TOPICS[@]}" \
-  --qos-profile-overrides-path "$SCRIPT_DIR/bag_qos.yaml" \
+  --qos-profile-overrides-path "$BAG_QOS" \
   > "$RUN_DIR/bag_record.log" 2>&1 &
 BAG_PID=$!
 sleep 2
@@ -308,6 +348,21 @@ if [[ $NO_LAUNCH -eq 0 ]]; then
     tail -n +1 -f "$RUN_DIR/run.log" &
     TAIL_PID=$!
   fi
+  # 运行期日志上限：超过阈值时停止录制，避免写满磁盘
+  if [[ "$MAX_LOG_MB" -gt 0 ]]; then
+    (
+      while sleep 30; do
+        [[ -f "$RUN_DIR/run.log" ]] || continue
+        size_mb=$(( $(stat -c%s "$RUN_DIR/run.log" 2>/dev/null || echo 0) / 1024 / 1024 ))
+        if [[ "$size_mb" -ge "$MAX_LOG_MB" ]]; then
+          echo "[error] run.log 已达到 ${size_mb}MB（上限 ${MAX_LOG_MB}MB），停止录制" >&2
+          kill -INT $$ 2>/dev/null || true
+          break
+        fi
+      done
+    ) &
+    LOG_WATCH_PID=$!
+  fi
   # 5s 后抓一次“生效参数”，便于核对 traj_clock_max_lead / time_lead 等
   (
     sleep 5
@@ -327,9 +382,28 @@ else
   echo "           例如： ros2 launch scan_planner run.launch.py robot:=$ROBOT navi_mode:=$NAVI_MODE log_level:=$LOG_LEVEL ... 2>&1 | tee $RUN_DIR/run.log"
 fi
 
+if [[ $NO_LAUNCH -eq 0 && $TOPIC_CHECK -eq 1 ]]; then
+  required=("$ODOM_TOPIC" /planning/bspline /local_planner/status)
+  missing=()
+  for _ in $(seq 1 20); do
+    topics_now="$(ros2 topic list 2>/dev/null || true)"
+    missing=()
+    for t in "${required[@]}"; do
+      grep -qxF "$t" <<< "$topics_now" || missing+=("$t")
+    done
+    [[ ${#missing[@]} -eq 0 ]] && break
+    sleep 0.5
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    die "启动后缺少必要话题: ${missing[*]}（可用 --no-topic-check 跳过）"
+  fi
+  for t in "${PROFILE_TOPICS[@]}" "${EXTRA_TOPICS[@]}"; do
+    [[ -n "$t" ]] && ! grep -qxF "$t" <<< "$topics_now" && \
+      echo "[warn] 未发现话题: $t" >&2
+  done
+fi
+
 if [[ -n "$DURATION" ]]; then
-  ( sleep "$DURATION" ) &
-  WATCH_PID=$!
   sleep "$DURATION"
   echo "[auto-stop] ${DURATION}s 到，结束录制"
 else

@@ -65,13 +65,35 @@ def parse_file(path, out):
             })
 
 
+def default_paths():
+    root = os.environ.get("CLOCK_SYNC_ROOT", os.path.expanduser("~/clock_sync_runs"))
+    current = os.path.join(root, "current", "run.log")
+    if os.path.isfile(current):
+        return [current]
+    candidates = glob.glob(os.path.expanduser("~/.ros/log/latest/scan_planner_node_*.log"))
+    candidates += glob.glob(os.path.expanduser("~/.ros/log/*/scan_planner_node_*.log"))
+    if candidates:
+        return [max(candidates, key=os.path.getmtime)]
+    return []
+
+
 def load(paths):
+    if not paths:
+        paths = default_paths()
     records = []
     for pattern in paths:
         matched = glob.glob(pattern) or [pattern]
         for path in sorted(matched):
             parse_file(path, records)
     return records
+
+
+def pct(vals, q):
+    if not vals:
+        return float("nan")
+    s = sorted(vals)
+    i = min(len(s) - 1, max(0, int(round((len(s) - 1) * q))))
+    return s[i]
 
 
 def fmt_t(t):
@@ -99,6 +121,26 @@ def cmd_summary(records, args):
         print(f"replan_failed: {len(fails)}")
         for reason, count in reasons.most_common():
             print(f"  {reason:24s} {count}")
+        by_rid = Counter(r["fields"].get("rid", "?") for r in fails)
+        print("failures by rid:")
+        for rid, count in by_rid.most_common(10):
+            print(f"  rid={rid:8s} {count}")
+        times = sorted(r["t"] for r in fails if r["t"] is not None)
+        gaps = [b - a for a, b in zip(times, times[1:]) if b >= a]
+        if gaps:
+            print(f"retry gap: n={len(gaps)} p50={pct(gaps,.5):.2f}s p95={pct(gaps,.95):.2f}s")
+    plan_ms = []
+    for r in records:
+        for key in ("plan_ms_last", "plan_ms_avg"):
+            if key in r["fields"]:
+                try:
+                    plan_ms.append(float(r["fields"][key]))
+                except ValueError:
+                    pass
+                break
+    if plan_ms:
+        print(f"plan_ms: n={len(plan_ms)} p50={pct(plan_ms,.5):.1f} "
+              f"p95={pct(plan_ms,.95):.1f} max={max(plan_ms):.1f}")
     ids = {r["fields"].get("rid") for r in records if r["fields"].get("rid")}
     print(f"distinct rid: {len(ids)}")
     for key in ("goal_degraded", "backup_start", "backup_done", "mission_done", "mission_abandoned"):
@@ -145,7 +187,7 @@ def cmd_slow(records, args):
     for r in records:
         fields = r["fields"]
         value = None
-        for key in ("elapsed", "total_ms", "time_ms", "total"):
+        for key in ("elapsed", "total_ms", "time_ms", "plan_ms_last", "plan_ms_avg", "total"):
             if key in fields:
                 try:
                     value = float(fields[key].rstrip("s"))
@@ -203,41 +245,45 @@ def main():
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("summary")
-    p.add_argument("paths", nargs="+")
+    p.add_argument("paths", nargs="*")
     p.set_defaults(func=cmd_summary)
 
     p = sub.add_parser("rid")
     p.add_argument("rid", type=int)
-    p.add_argument("paths", nargs="+")
+    p.add_argument("paths", nargs="*")
     p.set_defaults(func=cmd_rid)
 
     p = sub.add_parser("last-failure")
-    p.add_argument("paths", nargs="+")
+    p.add_argument("paths", nargs="*")
     p.set_defaults(func=cmd_last_failure)
 
     p = sub.add_parser("errors")
-    p.add_argument("paths", nargs="+")
+    p.add_argument("paths", nargs="*")
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=cmd_errors)
 
     p = sub.add_parser("slow")
-    p.add_argument("paths", nargs="+")
+    p.add_argument("paths", nargs="*")
     p.add_argument("--limit", type=int, default=20)
     p.set_defaults(func=cmd_slow)
 
     p = sub.add_parser("timeline")
-    p.add_argument("paths", nargs="+")
+    p.add_argument("paths", nargs="*")
     p.set_defaults(func=cmd_timeline)
 
     p = sub.add_parser("export")
-    p.add_argument("paths", nargs="+")
+    p.add_argument("paths", nargs="*")
     p.add_argument("--out", default="run.jsonl")
     p.set_defaults(func=cmd_export)
 
     args = parser.parse_args(normalize_argv(sys.argv[1:]))
     records = load(args.paths)
+    if not records:
+        print("没有找到日志文件（可显式传入路径，或先运行 record_run.sh）", file=sys.stderr)
+        return 2
     args.func(records, args)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

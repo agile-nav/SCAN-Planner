@@ -46,9 +46,16 @@ test -s "$TMP/events.jsonl"
 
 mkdir -p "$TMP/run/analysis"
 cp "$TMP/run.log" "$TMP/run/run.log"
+printf '1.500000\tblock1\n' > "$TMP/run/events.tsv"
 python3 tools/clock_sync_test/analyze_run.py "$TMP/run" --no-bag --no-plot --json >/dev/null
 test -s "$TMP/run/analysis/events.jsonl"
 grep -q "replan_failed 次数: 1" "$TMP/run/analysis/summary.txt"
+grep -q "user_event" "$TMP/run/analysis/events.csv"
+
+mkdir -p "$TMP/root/current"
+cp "$TMP/run.log" "$TMP/root/current/run.log"
+CLOCK_SYNC_ROOT="$TMP/root" python3 tools/log_query.py summary > "$TMP/default.txt"
+grep -q "replan_failed: 1" "$TMP/default.txt"
 
 if python3 -c 'import rclpy, visualization_msgs' >/dev/null 2>&1; then
   python3 - "$TMP/run.log" <<'PY'
@@ -73,5 +80,6 @@ bash tools/clock_sync_test/record_run.sh selftest --dry-run --robot a2 \
   --extra-topics "/demo/topic_a /demo/topic_b" > "$TMP/dry.txt"
 grep -q "robot: a2" "$TMP/dry.txt"
 grep -q "/demo/topic_a" "$TMP/dry.txt"
+grep -q "/lio/robo/odom" "$TMP/dry.txt"
 
 echo "[selftest] tools OK"

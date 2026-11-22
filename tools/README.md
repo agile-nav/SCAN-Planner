@@ -3,6 +3,7 @@
 ## 日志查询与审计
 
 ```bash
+python3 tools/log_query.py summary            # 默认 $CLOCK_SYNC_ROOT/current/run.log
 python3 tools/log_query.py summary run.log
 python3 tools/log_query.py rid 42 run.log
 python3 tools/log_query.py last-failure run.log

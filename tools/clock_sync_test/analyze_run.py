@@ -57,6 +57,29 @@ def pct(vals, q):
     return s[i]
 
 
+def read_user_events(run_dir):
+    """读取 record_run --event 写入的 events.tsv。"""
+    events = []
+    path = os.path.join(run_dir, "events.tsv")
+    if not os.path.isfile(path):
+        return events
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                parts = line.rstrip("\n").split("\t", 1)
+                if len(parts) != 2:
+                    continue
+                try:
+                    t = float(parts[0])
+                except ValueError:
+                    continue
+                events.append({"t": f"{t:.6f}", "approx": 0,
+                               "kind": "user_event", "detail": parts[1]})
+    except OSError:
+        pass
+    return events
+
+
 def read_params(path):
     out = {}
     if not os.path.isfile(path):
@@ -181,7 +204,8 @@ def bag_storage_id(bag_dir):
 def read_bag(bag_dir, odom_topics):
     """返回 dict: cmd/odom/traj/frozen/enabled/status，每个是 [(t, value...)]。
     读不到就返回空 dict（不抛异常）。"""
-    out = {"cmd": [], "odom": [], "traj": [], "frozen": [], "enabled": [], "status": []}
+    out = {"cmd": [], "odom": [], "traj": [], "frozen": [], "enabled": [], "status": [],
+           "diagnostics": []}
     if not os.path.isdir(bag_dir):
         return out
     try:
@@ -231,6 +255,11 @@ def read_bag(bag_dir, odom_topics):
                 except Exception:
                     state = str(msg.data)
                 out["status"].append((t, state))
+            elif topic == "/local_planner/diagnostics":
+                try:
+                    out["diagnostics"].append((t, json.loads(msg.data)))
+                except Exception:
+                    pass
     except Exception as e:  # noqa
         print(f"[bag] 读取失败：{e}")
     for k in out:
@@ -345,6 +374,8 @@ def main():
     bag_dir = os.path.join(run_dir, "bag")
 
     traj, ctl, events, span = parse_log(log_path)
+    events += read_user_events(run_dir)
+    events.sort(key=lambda e: float(e["t"]) if e["t"] else -1e18)
     write_csv(os.path.join(ana, "traj_clock.csv"), traj,
               ["t", "t_wall", "t_proj", "t_cur", "lead", "max_lead", "dur", "traj_id"])
     write_csv(os.path.join(ana, "ctl_clock.csv"), ctl,
@@ -353,7 +384,8 @@ def main():
     if args.json:
         write_jsonl(os.path.join(ana, "events.jsonl"), events)
 
-    bag = {"cmd": [], "odom": [], "traj": [], "frozen": [], "enabled": [], "status": []}
+    bag = {"cmd": [], "odom": [], "traj": [], "frozen": [], "enabled": [], "status": [],
+           "diagnostics": []}
     if not args.no_bag:
         bag = read_bag(bag_dir, [args.odom_topic, "/lio/robo/odom", "/body_pose", "/loc/robo/odom"])
         write_csv(os.path.join(ana, "cmd_vs_odom.csv"),
@@ -370,6 +402,18 @@ def main():
         write_csv(os.path.join(ana, "status.csv"),
                   [{"t": t, "state": s} for t, s in bag["status"]],
                   ["t", "state"])
+        diag_rows = []
+        for t, d in bag["diagnostics"]:
+            row = {"t": t}
+            for key in ("state", "rid", "traj_id", "replans", "replan_ok", "replan_fail",
+                        "degrade", "backup", "backup_short", "last_reason",
+                        "plan_ms_last", "plan_ms_avg", "plan_ms_max"):
+                row[key] = d.get(key, "")
+            diag_rows.append(row)
+        write_csv(os.path.join(ana, "diagnostics.csv"), diag_rows,
+                  ["t", "state", "rid", "traj_id", "replans", "replan_ok",
+                   "replan_fail", "degrade", "backup", "backup_short",
+                   "last_reason", "plan_ms_last", "plan_ms_avg", "plan_ms_max"])
 
     # ---------- 统计 ----------
     lines = []
@@ -446,6 +490,29 @@ def main():
     p(f"目标降级次数: {len(deg)}")
     done = [e for e in events if e["kind"] == "fsm_mission_done"]
     p(f"任务完成次数: {len(done)}")
+    user_events = [e for e in events if e["kind"] == "user_event"]
+    p(f"人工事件次数: {len(user_events)}")
+
+    if bag["diagnostics"]:
+        d = bag["diagnostics"][-1][1]
+        p(f"diagnostics final: state={d.get('state','')} replans={d.get('replans','')} "
+          f"ok={d.get('replan_ok','')} fail={d.get('replan_fail','')} "
+          f"degrade={d.get('degrade','')} backup={d.get('backup','')} "
+          f"last_reason={d.get('last_reason','')}")
+        failures = d.get("failures", {}) or {}
+        if failures:
+            p("diagnostics failure counts:")
+            for reason, count in sorted(failures.items(), key=lambda x: -x[1]):
+                p(f"  {reason:24s} {count}")
+        vals = []
+        for _, item in bag["diagnostics"]:
+            try:
+                vals.append(float(item.get("plan_ms_last", 0.0)))
+            except (TypeError, ValueError):
+                pass
+        if vals:
+            p(f"plan_ms_last: n={len(vals)} p50={pct(vals,.5):.1f} "
+              f"p95={pct(vals,.95):.1f} max={max(vals):.1f}")
 
     # 3.000 s 轨迹
     trajs3 = [x for x in bag["traj"] if abs(x[2] - 3.0) < 0.01]

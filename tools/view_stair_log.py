@@ -93,6 +93,7 @@ def main():
     ap.add_argument('--point-size', type=float, default=0.12, help='A*/碰撞点大小')
     ap.add_argument('--line-width', type=float, default=0.08, help='轨迹线宽')
     ap.add_argument('--once', action='store_true', help='发布一次后退出')
+    ap.add_argument('--fail-only', action='store_true', help='只显示 A* 失败/碰撞点')
     args = ap.parse_args()
 
     paths = args.logs or [p for p in [latest_log()] if p]
@@ -144,15 +145,15 @@ def main():
 
     def build():
         arr = MarkerArray()
-        if robot:
+        if robot and not args.fail_only:
             arr.markers.append(line_marker('robot', 0, robot, (0.0, 1.0, 0.0, 1.0), args.line_width))
-        if targets:
+        if targets and not args.fail_only:
             arr.markers.append(line_marker('target', 1, targets, (0.2, 0.4, 1.0, 1.0), args.line_width * 0.6))
         if astar:
             arr.markers.append(points_marker('astar_fail', 2, astar, (1.0, 0.0, 0.0, 1.0), args.point_size))
         if coll:
             arr.markers.append(points_marker('collision', 3, coll, (1.0, 0.5, 0.0, 1.0), args.point_size * 1.6))
-        if goal:
+        if goal and not args.fail_only:
             m = base_marker('goal', 4, Marker.SPHERE)
             m.pose.position = pt(goal[0], goal[1], 0.0)
             m.scale.x = m.scale.y = m.scale.z = 0.35
