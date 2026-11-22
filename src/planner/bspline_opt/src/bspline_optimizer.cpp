@@ -132,25 +132,26 @@ namespace scan_planner
       if (best_dir.squaredNorm() < 1e-12)
       {
         RCLCPP_WARN(logger_,
-                    "[P15] seg(%d,%d) cp=%d no free direction within %.2fm pos=(%.2f,%.2f,%.2f)",
-                    seg.first, seg.second, j, 0.8, cps_.points(0, j), cps_.points(1, j), cps_.points(2, j));
+                    "[opt] event=rebound_fallback_failed rid=%llu seg=(%d,%d) cp=%d radius=%.2fm pos=(%.2f,%.2f,%.2f)",
+                    static_cast<unsigned long long>(diag_rid_), seg.first, seg.second, j, 0.8,
+                    cps_.points(0, j), cps_.points(1, j), cps_.points(2, j));
         continue;
       }
       cps_.flag_temp[j] = true;
       cps_.base_point[j].push_back(best_base);
       cps_.direction[j].push_back(best_dir);
       RCLCPP_WARN(logger_,
-                  "[P15] seg(%d,%d) cp=%d base=(%.2f,%.2f,%.2f) dir=(%.2f,%.2f,%.2f) free_dist=%.2fm",
-                  seg.first, seg.second, j,
+                  "[opt] event=rebound_fallback_direction rid=%llu seg=(%d,%d) cp=%d "
+                  "base=(%.2f,%.2f,%.2f) dir=(%.2f,%.2f,%.2f) free_dist=%.2fm",
+                  static_cast<unsigned long long>(diag_rid_), seg.first, seg.second, j,
                   best_base(0), best_base(1), best_base(2),
-                  best_dir(0), best_dir(1), best_dir(2),
-                  step * best_k);
+                  best_dir(0), best_dir(1), best_dir(2), step * best_k);
       ++filled;
     }
     if (filled > 0)
       RCLCPP_WARN(logger_,
-                  "[P15] no A-star path for seg(%d,%d); synthesized %d obstacle-normal rebound directions",
-                  seg.first, seg.second, filled);
+                  "[opt] event=rebound_fallback rid=%llu seg=(%d,%d) directions=%d",
+                  static_cast<unsigned long long>(diag_rid_), seg.first, seg.second, filled);
   }
 
   // 【P20】前几个控制点由 B 样条边界固定，普通 L-BFGS 不会改动它们。
@@ -196,8 +197,8 @@ namespace scan_planner
       if (!found)
       {
         RCLCPP_WARN(logger_,
-                    "[P20] cp=%d still occupied; no free point within %.2fm pos=(%.2f,%.2f,%.2f)",
-                    j, 0.8, old_pt(0), old_pt(1), old_pt(2));
+                    "[opt] event=first_cp_escape_failed rid=%llu cp=%d radius=%.2fm pos=(%.2f,%.2f,%.2f)",
+                    static_cast<unsigned long long>(diag_rid_), j, 0.8, old_pt(0), old_pt(1), old_pt(2));
         continue;
       }
 
@@ -207,10 +208,9 @@ namespace scan_planner
       cps_.direction[j].clear();
       moved = true;
       RCLCPP_WARN(logger_,
-                  "[P20] pulled cp=%d out of inflation by %.2fm from (%.2f,%.2f,%.2f) to (%.2f,%.2f,%.2f)",
-                  j, (best_pt - old_pt).norm(),
-                  old_pt(0), old_pt(1), old_pt(2),
-                  best_pt(0), best_pt(1), best_pt(2));
+                  "[opt] event=first_cp_escape rid=%llu cp=%d dist=%.2fm from=(%.2f,%.2f,%.2f) to=(%.2f,%.2f,%.2f)",
+                  static_cast<unsigned long long>(diag_rid_), j, (best_pt - old_pt).norm(),
+                  old_pt(0), old_pt(1), old_pt(2), best_pt(0), best_pt(1), best_pt(2));
     }
     return moved;
   }
@@ -1103,7 +1103,8 @@ namespace scan_planner
         // 一路找到头都没找到 → 说明机器人本身已经在障碍里
         if (j < 0) // fail to get the obs free point
         {
-          RCLCPP_ERROR(logger_, "The robot is inside an obstacle");
+          RCLCPP_ERROR(logger_, "[opt] event=robot_in_obstacle rid=%llu",
+                       static_cast<unsigned long long>(diag_rid_));
           in_id = 0;
         }
 
@@ -1122,7 +1123,8 @@ namespace scan_planner
         if (j >= cps_.size) // fail to get the obs free point
         {
           RCLCPP_WARN(logger_,
-                      "Trajectory terminal point is in an obstacle; skip this plan");
+                      "[opt] event=terminal_in_obstacle rid=%llu",
+                      static_cast<unsigned long long>(diag_rid_));
 
           force_stop_type_ = STOP_FOR_ERROR;
           return false;
@@ -1183,14 +1185,14 @@ namespace scan_planner
             queue.push_back(std::make_pair(mid, seg.second));
             if (++split_cnt % 10 == 1)
               RCLCPP_WARN(logger_,
-                          "[P15] A-star failed on seg(%d,%d); split at %d and retry (%d splits so far)",
-                          seg.first, seg.second, mid, split_cnt);
+                          "[opt] event=astar_split rid=%llu seg=(%d,%d) mid=%d splits=%d",
+                          static_cast<unsigned long long>(diag_rid_), seg.first, seg.second, mid, split_cnt);
             continue;
           }
           if (!got_path)
             RCLCPP_WARN(logger_,
-                        "[P15] A-star failed on the shortest seg(%d,%d); keep optimizing without a rebound direction",
-                        seg.first, seg.second);
+                        "[opt] event=astar_no_path rid=%llu seg=(%d,%d)",
+                        static_cast<unsigned long long>(diag_rid_), seg.first, seg.second);
           resolved.push_back(seg);
           a_star_paths.push_back(got_path ? path : vector<Eigen::Vector3d>());
         }
@@ -1322,7 +1324,9 @@ namespace scan_planner
             }
         }
         else
-          RCLCPP_WARN(logger_, "Failed to generate rebound direction");
+          RCLCPP_WARN(logger_,
+                      "[opt] event=rebound_direction_failed rid=%llu",
+                      static_cast<unsigned long long>(diag_rid_));
       }
 
       // 告诉 L-BFGS：方向已更新，请中止这一轮、从头重新优化
@@ -1473,9 +1477,8 @@ namespace scan_planner
                 ++first_cp_escape_tries;
                 first_cp_retry = true;
                 RCLCPP_WARN(logger_,
-                            "[P20] first control points occupied; pulled out and retry optimization (%d/3) rid=%llu",
-                            first_cp_escape_tries,
-                            static_cast<unsigned long long>(diag_rid_));
+                            "[opt] event=first_cp_escape_retry rid=%llu tries=%d/3",
+                            static_cast<unsigned long long>(diag_rid_), first_cp_escape_tries);
                 break;
               }
 
