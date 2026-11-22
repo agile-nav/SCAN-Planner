@@ -1652,6 +1652,10 @@ namespace scan_planner
     json += ",\"latched\":" + std::string(status_error_latched_ ? "true" : "false");
     json += ",\"problem\":" + std::string(((replan_fail_count_ != 0) || (exec_state_ == EMERGENCY_STOP)) ? "true" : "false");
     json += ",\"have_goal\":" + std::string(status_have_goal_ ? "true" : "false");
+    json += ",\"rid\":" + std::to_string(replan_rid_);
+    json += ",\"traj_id\":" + std::to_string(planner_manager_ ? planner_manager_->local_data_.traj_id_ : -1);
+    json += ",\"replan_fail\":" + std::to_string(replan_fail_count_);
+    json += ",\"retry\":" + std::to_string(plan_retry_fails_);
     json += ",\"inner\":\"" + inner + "\"";
     json += "}";
     return json;
@@ -3085,6 +3089,19 @@ namespace scan_planner
   // flag_randomPolyTraj：是否在初始猜测里插一个随机点（用来跳出卡死）。
   bool SCANReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
+    // 每次重规划一个唯一 rid：A*/优化/可行性/失败汇总都用它串起来
+    ++replan_rid_;
+    if (planner_manager_) planner_manager_->setDiagContext(replan_rid_, diag_verbose_);
+
+    auto log_replan_failure = [this](ReplanFailure reason) {
+      const ReplanFailure r = (reason == ReplanFailure::NONE) ? ReplanFailure::UNKNOWN : reason;
+      if (replanFailureIsBenign(r)) return;
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                           "[fsm] event=replan_failed rid=%llu traj_id=%d reason=%s replan_fail=%d/%d",
+                           static_cast<unsigned long long>(replan_rid_),
+                           planner_manager_ ? planner_manager_->local_data_.traj_id_ : -1,
+                           replanFailureToString(r), replan_fail_count_, max_replan_fail_count_);
+    };
     // 目标不可达时换成附近能站的点（必须在 getLocalTarget 之前：
     //   目标被围死时前视点往往也被围，getLocalTarget 会先失败返回）
     if (!mission_goal_degraded_ && goal_degrade_radius_ > 0.0 &&
@@ -3106,6 +3123,7 @@ namespace scan_planner
     if (!getLocalTarget())
     {
       setStatusReason(last_target_failure_);
+      log_replan_failure(last_target_failure_);
       return false;
     }
 
@@ -3115,10 +3133,6 @@ namespace scan_planner
     //   否则会出现"自己把起点推到目标旁边 → 被判 CLOSE_TO_GOAL"的自伤。
     pushStartPtOutOfInflation();
 
-    // 本次重规划的关联号：A* / 优化 / 可行性日志都用它串起来
-    ++replan_rid_;
-    if (planner_manager_) planner_manager_->setDiagContext(replan_rid_, diag_verbose_);
-
     // 第二步：让规划总管真正规划一条局部轨迹
     bool plan_success =
         planner_manager_->reboundReplan(start_pt_, start_vel_, start_acc_, local_target_pt_, local_target_vel_, (have_new_target_ || flag_use_poly_init), flag_randomPolyTraj);
@@ -3126,6 +3140,7 @@ namespace scan_planner
     {
       const ReplanFailure reason = planner_manager_->lastFailureReason();
       setStatusReason((reason == ReplanFailure::NONE) ? ReplanFailure::UNKNOWN : reason);
+      log_replan_failure(reason);
     }
     // “新目标”标志用完即清（它只影响第一次规划）
     have_new_target_ = false;

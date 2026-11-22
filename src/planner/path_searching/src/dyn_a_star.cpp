@@ -591,47 +591,50 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
             else if (exploredAt(end_idx(0) + dx, end_idx(1) + dy, end_idx(2)))
               ++exp_ring5_e_adj;
           }
-        const Eigen::Vector3d mid = (s_adj + e_adj) / 2.0;
-        RCLCPP_WARN(logger_,
-                    "[Astar] 平面占用图① 原始: start=(%.2f,%.2f,%.2f) occ=%d | end=(%.2f,%.2f,%.2f) occ=%d | Δz=%.2fm | 原始E周围8格被占=%d/8",
-                    start_pt(0), start_pt(1), start_pt(2), occ_s,
-                    end_pt(0), end_pt(1), end_pt(2), occ_e,
-                    end_pt(2) - start_pt(2), ring_occ);
-        RCLCPP_WARN(logger_,
-                    "[Astar] 平面占用图② 搜索实际用: Sa=(%.2f,%.2f,%.2f) occ=%d | Ea=(%.2f,%.2f,%.2f) occ=%d | 推移 Δs=%.2fm(%.2f,%.2f) Δe=%.2fm(%.2f,%.2f)",
-                    s_adj(0), s_adj(1), s_adj(2), occ_sa,
-                    e_adj(0), e_adj(1), e_adj(2), occ_ea,
-                    last_start_adjust_, s_adj(0) - start_pt(0), s_adj(1) - start_pt(1),
-                    last_end_adjust_, e_adj(0) - end_pt(0), e_adj(1) - end_pt(1));
-        RCLCPP_WARN(logger_,
-                    "[Astar] 平面占用图③ Ea 周围: 3x3被占=%d/8  3x3被搜索到=%d/8  5x5外圈被搜索到=%d/24 | expanded=%d blocked=%d pool=±%.2fm | 1格=0.20m .空 #占据 o出图 S/E=原始 s/e=搜索实际",
-                    occ_ring_e_adj, exp_ring3_e_adj, exp_ring5_e_adj, num_iter, blocked_cnt,
-                    POOL_SIZE_(0) * step_size_ * 0.5);
-        std::string map;
-        for (int iy = NR; iy >= -NR; --iy)
-        {
-          map += (iy % 3 == 0)
-                     ? ("   " + std::string(iy < 0 ? "-" : "+") + std::to_string(std::abs(iy) * 20) + "cm ")
-                     : std::string("       ");
-          for (int ix = -NR; ix <= NR; ++ix)
+        const bool map_verbose = diag_verbose_;
+        if (map_verbose) {
+          const Eigen::Vector3d mid = (s_adj + e_adj) / 2.0;
+          RCLCPP_WARN(logger_,
+                      "[Astar] 平面占用图① 原始: start=(%.2f,%.2f,%.2f) occ=%d | end=(%.2f,%.2f,%.2f) occ=%d | Δz=%.2fm | 原始E周围8格被占=%d/8",
+                      start_pt(0), start_pt(1), start_pt(2), occ_s,
+                      end_pt(0), end_pt(1), end_pt(2), occ_e,
+                      end_pt(2) - start_pt(2), ring_occ);
+          RCLCPP_WARN(logger_,
+                      "[Astar] 平面占用图② 搜索实际用: Sa=(%.2f,%.2f,%.2f) occ=%d | Ea=(%.2f,%.2f,%.2f) occ=%d | 推移 Δs=%.2fm(%.2f,%.2f) Δe=%.2fm(%.2f,%.2f)",
+                      s_adj(0), s_adj(1), s_adj(2), occ_sa,
+                      e_adj(0), e_adj(1), e_adj(2), occ_ea,
+                      last_start_adjust_, s_adj(0) - start_pt(0), s_adj(1) - start_pt(1),
+                      last_end_adjust_, e_adj(0) - end_pt(0), e_adj(1) - end_pt(1));
+          RCLCPP_WARN(logger_,
+                      "[Astar] 平面占用图③ Ea 周围: 3x3被占=%d/8  3x3被搜索到=%d/8  5x5外圈被搜索到=%d/24 | expanded=%d blocked=%d pool=±%.2fm | 1格=0.20m .空 #占据 o出图 S/E=原始 s/e=搜索实际",
+                      occ_ring_e_adj, exp_ring3_e_adj, exp_ring5_e_adj, num_iter, blocked_cnt,
+                      POOL_SIZE_(0) * step_size_ * 0.5);
+          std::string map;
+          for (int iy = NR; iy >= -NR; --iy)
           {
-            Eigen::Vector3d q(mid(0) + ix * CELL, mid(1) + iy * CELL, 0.0);
-            q(2) = plane_z(q.head<2>());
-            const int o = checkOccupancy(q, diag_yaw);
-            char c = (o < 0) ? 'o' : ((o > 0) ? '#' : '.');
-            if ((q.head<2>() - s_xy).norm() < CELL * 0.5)
-              c = 'S';
-            if ((q.head<2>() - e_xy).norm() < CELL * 0.5)
-              c = 'E';
-            if ((q.head<2>() - s_adj.head<2>()).norm() < CELL * 0.5)
-              c = 's';
-            if ((q.head<2>() - e_adj.head<2>()).norm() < CELL * 0.5)
-              c = 'e';
-            map += c;
+            map += (iy % 3 == 0)
+                       ? ("   " + std::string(iy < 0 ? "-" : "+") + std::to_string(std::abs(iy) * 20) + "cm ")
+                       : std::string("       ");
+            for (int ix = -NR; ix <= NR; ++ix)
+            {
+              Eigen::Vector3d q(mid(0) + ix * CELL, mid(1) + iy * CELL, 0.0);
+              q(2) = plane_z(q.head<2>());
+              const int o = checkOccupancy(q, diag_yaw);
+              char c = (o < 0) ? 'o' : ((o > 0) ? '#' : '.');
+              if ((q.head<2>() - s_xy).norm() < CELL * 0.5)
+                c = 'S';
+              if ((q.head<2>() - e_xy).norm() < CELL * 0.5)
+                c = 'E';
+              if ((q.head<2>() - s_adj.head<2>()).norm() < CELL * 0.5)
+                c = 's';
+              if ((q.head<2>() - e_adj.head<2>()).norm() < CELL * 0.5)
+                c = 'e';
+              map += c;
+            }
+            map += "\n";
           }
-          map += "\n";
+          RCLCPP_WARN(logger_, "%s", map.c_str());
         }
-        RCLCPP_WARN(logger_, "%s", map.c_str());
       }
     }
 

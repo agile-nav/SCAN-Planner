@@ -1371,6 +1371,7 @@ namespace scan_planner
 // ==========================================================================
   bool BsplineOptimizer::rebound_optimize()
   {
+    last_failure_ = ReplanFailure::NONE;
     // 迭代计数清零
     iter_num_ = 0;
     // 只优化中间的控制点：首尾各留下 order_ 个不动（保证边界约束不被破坏）
@@ -1550,6 +1551,7 @@ namespace scan_planner
 // 并且若结果仍不安全就把贴合权重加倍再试。
   bool BsplineOptimizer::refine_optimize()
   {
+    last_failure_ = ReplanFailure::NONE;
     // Refine 流程：同样只优化中间的控制点
     iter_num_ = 0;
     int start_id = order_;
