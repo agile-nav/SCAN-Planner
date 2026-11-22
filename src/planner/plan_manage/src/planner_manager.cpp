@@ -984,6 +984,7 @@ namespace scan_planner
       Eigen::Vector3d astar_goal = candidate;
       astar_start(2) = goal(2);
       astar_goal(2) = goal(2);
+      bspline_optimizer_rebound_->a_star_->setDiagContext(diag_rid_, 0, diag_verbose_);
       const ASTAR_RET ret =
           bspline_optimizer_rebound_->a_star_->AstarSearch(step, astar_start, astar_goal);
       if (ret != ASTAR_RET::SUCCESS)
@@ -994,11 +995,11 @@ namespace scan_planner
         //     半宽 = pool*res/2 = ±4.0 m，因此 start 与 goal 相距超过约 6 m 时
         //     （4.0 - 降级半径）就会出池。滑动地图 10x10 m，目标刚进图时
         //     距离可能到 7 m，所以这个区间是真实存在的。
-        RCLCPP_WARN(node_->get_logger(),
-                    "[degrade] nearest standable point (%.2f, %.2f) is not connected to "
-                    "robot at (%.2f, %.2f) (A-star ret=%d, dist=%.2f m); skip degradation",
-                    candidate(0), candidate(1), start(0), start(1), static_cast<int>(ret),
-                    (candidate - start).head<2>().norm());
+        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                             "[degrade] event=not_connected rid=%llu candidate=(%.2f,%.2f) robot=(%.2f,%.2f) astar_ret=%d dist=%.2fm",
+                             static_cast<unsigned long long>(diag_rid_),
+                             candidate(0), candidate(1), start(0), start(1), static_cast<int>(ret),
+                             (candidate - start).head<2>().norm());
         return false;
       }
     }

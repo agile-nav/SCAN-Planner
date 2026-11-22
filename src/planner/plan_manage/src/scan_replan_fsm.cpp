@@ -665,6 +665,8 @@ namespace scan_planner
     //   "上一次失败"不代表"这一次也失败"。加静默期会让降级在可达性恢复后
     //   仍然被锁住，破坏"边走边判"这个设计前提。
     Eigen::Vector3d degraded;
+    // 让降级验证里的 A* 日志携带本次规划 rid（否则会沿用旧值）
+    planner_manager_->setDiagContext(replan_rid_, diag_verbose_);
     if (!planner_manager_->findNearestReachableGoal(odom_pos_, goal_pt,
                                                     goal_degrade_radius_, degraded))
       return false;
@@ -676,9 +678,9 @@ namespace scan_planner
       return true;
     }
 
-    RCLCPP_WARN(node_->get_logger(),
-                "Target [%.2f, %.2f, %.2f] is unreachable; degraded to nearest reachable "
-                "[%.2f, %.2f, %.2f] (%.2f m away)",
+    RCLCPP_INFO(node_->get_logger(),
+                "[fsm] event=goal_degraded rid=%llu from=(%.2f,%.2f,%.2f) to=(%.2f,%.2f,%.2f) shift=%.2fm",
+                static_cast<unsigned long long>(replan_rid_),
                 goal_pt(0), goal_pt(1), goal_pt(2),
                 degraded(0), degraded(1), degraded(2), shift);
 
@@ -714,10 +716,9 @@ namespace scan_planner
       Eigen::Isometry3d ref_to_world;
       if (!lookupReferenceTransform(ref_to_world))
       {
-        RCLCPP_WARN(node_->get_logger(),
-                    "Degrade to [%.2f, %.2f] needs a reference-frame writeback but TF is "
-                    "unavailable; roll back this round",
-                    degraded(0), degraded(1));
+        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                             "[fsm] event=goal_degrade_rollback rid=%llu reason=tf_unavailable to=(%.2f,%.2f)",
+                             static_cast<unsigned long long>(replan_rid_), degraded(0), degraded(1));
         end_pt_ = goal_pt;
         mission_goal_degraded_ = false;
         have_truncated_reachable_pt_ = false;
@@ -734,9 +735,9 @@ namespace scan_planner
     {
       // 重建失败（典型：起点还在膨胀层里）。此时不能宣称降级成功，
       //   否则 getLocalTarget 会用旧轨迹取样并报 no_free_target。
-      RCLCPP_WARN(node_->get_logger(),
-                  "Degrade to [%.2f, %.2f] failed to rebuild global traj; keep original target",
-                  degraded(0), degraded(1));
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                           "[fsm] event=goal_degrade_rollback rid=%llu reason=global_traj_failed to=(%.2f,%.2f)",
+                           static_cast<unsigned long long>(replan_rid_), degraded(0), degraded(1));
       end_pt_ = goal_pt;
       mission_goal_degraded_ = false;
       have_truncated_reachable_pt_ = false;
@@ -776,9 +777,9 @@ namespace scan_planner
       return true;
 
     // 四周搜不到 → 沿轨迹往回退，找最后一个能站的点
-    RCLCPP_WARN(node_->get_logger(),
-                "No reachable point within %.1f m of target; falling back to trajectory truncation",
-                goal_degrade_radius_);
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                         "[fsm] event=goal_degrade_fallback rid=%llu reason=no_reachable_point radius=%.1fm",
+                         static_cast<unsigned long long>(replan_rid_), goal_degrade_radius_);
     const int final_occ = map->getInflateOccupancy(final_pt, estimateYawFromSegment(final_prev, final_pt));
     if (final_occ <= 0)
       return true;
@@ -802,17 +803,18 @@ namespace scan_planner
         have_truncated_reachable_pt_ = true;
         global_data.global_duration_ = t;
         global_data.last_progress_time_ = std::min(global_data.last_progress_time_, t);
-        RCLCPP_WARN(node_->get_logger(),
-                    "Target [%.2f, %.2f, %.2f] is occupied; global traj truncated to "
-                    "[%.2f, %.2f, %.2f] (mission goal kept)",
+        RCLCPP_INFO(node_->get_logger(),
+                    "[fsm] event=goal_truncated rid=%llu from=(%.2f,%.2f,%.2f) to=(%.2f,%.2f,%.2f)",
+                    static_cast<unsigned long long>(replan_rid_),
                     end_pt_(0), end_pt_(1), end_pt_(2), pt(0), pt(1), pt(2));
         return true;
       }
     }
 
     // 整条轨迹都找不到可用点 → 报错返回失败
-    RCLCPP_ERROR(node_->get_logger(),
-                 "Target is occupied and no collision-free point was found on the global trajectory");
+    RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                          "[fsm] event=goal_unreachable rid=%llu reason=no_free_point",
+                          static_cast<unsigned long long>(replan_rid_));
     return false;
   }
 
@@ -1978,22 +1980,21 @@ namespace scan_planner
   void SCANReplanFSM::changeFSMExecState(FSM_EXEC_STATE new_state, string pos_call)
   {
 
-    // 切到的是同一个状态 → 连续调用次数 +1
+    // 同一状态的重复调用只累计次数，不打印：
+    //   失败重试会反复进入同一状态，打印 "from X to X" 只会刷屏。
     if (new_state == exec_state_)
+    {
       continuously_called_times_++;
-    // 切到了新状态 → 计数重置为 1
-    else
-      continuously_called_times_ = 1;
+      return;
+    }
+    continuously_called_times_ = 1;
 
     // 状态名表（下标对应枚举值，仅用于打印）
     static string state_str[7] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP"};
-    // 记住切换前的状态
     int pre_s = int(exec_state_);
-    // 更新当前状态
     exec_state_ = new_state;
-    // 打印“从 X 到 Y”
-    RCLCPP_INFO(node_->get_logger(), "[FSM] %s: from %s to %s",
-                pos_call.c_str(), state_str[pre_s].c_str(), state_str[int(new_state)].c_str());
+    RCLCPP_INFO(node_->get_logger(), "[fsm] event=state from=%s to=%s trigger=%s",
+                state_str[pre_s].c_str(), state_str[int(new_state)].c_str(), pos_call.c_str());
   }
 
   // 返回 <当前状态已经连续被调用了多少次, 当前状态>，用来做重试策略。
@@ -2101,7 +2102,14 @@ namespace scan_planner
     }
 
     changeFSMExecState(WAIT_TARGET, reason);
-    RCLCPP_WARN(node_->get_logger(), "[FSM] mission abandoned (%s); waiting for a new goal", reason);
+    const bool normal_done = std::string(reason) == "GOAL_REACHED" ||
+                             std::string(reason) == "WAYPOINTS_DONE";
+    if (normal_done)
+      RCLCPP_INFO(node_->get_logger(), "[fsm] event=mission_done reason=%s rid=%llu",
+                  reason, static_cast<unsigned long long>(replan_rid_));
+    else
+      RCLCPP_WARN(node_->get_logger(), "[fsm] event=mission_abandoned reason=%s rid=%llu",
+                  reason, static_cast<unsigned long long>(replan_rid_));
   }
 
   // 全局轨迹是否可用于规划：navi_mode=3 的 resume 必须等参考轨迹真正建好，
@@ -2434,8 +2442,8 @@ namespace scan_planner
           (isWaypointSequenceMode() && time_done);
       if (segment_done)
       {
-        RCLCPP_WARN(node_->get_logger(),
-                    "[diag] rid=%llu stage=fsm event=segment_done traj_id=%d "
+        RCLCPP_DEBUG(node_->get_logger(),
+                    "[fsm] event=segment_end rid=%llu traj_id=%d "
                     "status_stop=%d no_progress=%d hard_cap=%d exec_no_progress=%d "
                     "wall=%.2fs t_cur=%.2f dur=%.2f best_dist=%.2f goal_dist=%.2f",
                     static_cast<unsigned long long>(replan_rid_), info->traj_id_,
@@ -2652,24 +2660,26 @@ namespace scan_planner
       // 这里判定为退化失败，必须重新记一次失败，否则回 GEN_NEW_TRAJ 会以 10 ms
       // 一拍热循环重试同一个注定失败的局部目标（无退避）。
       notePlanResult(false);
-      RCLCPP_WARN(node_->get_logger(),
-                  "[FSM] CLOSE_TO_GOAL but still %.2f m from mission goal; treat as replan failure",
-                  (mission_goal_pt_ - odom_pos_).norm());
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                           "[fsm] event=close_to_goal_degenerate rid=%llu dist=%.2fm",
+                           static_cast<unsigned long long>(replan_rid_),
+                           (mission_goal_pt_ - odom_pos_).norm());
       changeFSMExecState(GEN_NEW_TRAJ, "CLOSE_TO_GOAL_DEGENERATE");
       return;
     }
     if (close_to_goal_case && mission_goal_degraded_)
     {
-      RCLCPP_WARN(node_->get_logger(),
-                  "[FSM] target was unreachable; finishing at the nearest reachable point "
-                  "(%.2f m from the requested goal)",
+      RCLCPP_INFO(node_->get_logger(),
+                  "[fsm] event=mission_done reason=goal_degraded rid=%llu dist=%.2fm",
+                  static_cast<unsigned long long>(replan_rid_),
                   (mission_goal_pt_ - odom_pos_).norm());
     }
     else if (close_to_goal_case && mission_goal_truncated_)
     {
-      RCLCPP_WARN(node_->get_logger(),
-                  "[FSM] mission goal is unreachable (occupied); finishing at the reachable point "
-                  "%.2f m short of it", (mission_goal_pt_ - odom_pos_).norm());
+      RCLCPP_INFO(node_->get_logger(),
+                  "[fsm] event=mission_done reason=goal_truncated rid=%llu dist=%.2fm",
+                  static_cast<unsigned long long>(replan_rid_),
+                  (mission_goal_pt_ - odom_pos_).norm());
     }
 
     abandonMission(reason);
