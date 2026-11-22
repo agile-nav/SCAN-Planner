@@ -14,7 +14,12 @@
 #   bash record_run.sh <label> --no-launch        # 只录包（规划栈你自己起）
 #   bash record_run.sh <label> --with-map         # 额外录 /grid_map/*
 #   bash record_run.sh <label> --log-level debug  # 规划栈日志级别（默认 debug）
+#   bash record_run.sh <label> --robot go2 --navi-mode 3 --controller-mode closed_loop
+#   bash record_run.sh <label> --extra-topics "/lio/cloud_world /lio/imu/odom"
+#   bash record_run.sh <label> --dry-run          # 只打印配置，不启动
+#   bash record_run.sh <label> --quiet            # 不打印 banner / 不 tail
 #   bash record_run.sh --event "block 1"          # 给当前 run 打时间戳标记
+#   bash record_run.sh --list-events              # 查看当前 run 的事件
 #
 # 产物：${CLOCK_SYNC_ROOT:-$HOME/clock_sync_runs}/<label>_<时间>/
 #   meta.txt  run.log  bag/  bag_record.log  events.tsv  roslog/
@@ -27,13 +32,29 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ROOT="${CLOCK_SYNC_ROOT:-$HOME/clock_sync_runs}"
-ODOM_TOPIC="${ODOM_TOPIC:-/lio/robo/odom}"
+ODOM_TOPIC="${ODOM_TOPIC:-}"
 STORAGE="${BAG_STORAGE:-sqlite3}"
 LOG_LEVEL="${LOG_LEVEL:-debug}"
+ROBOT="${ROBOT:-a2}"
+NAVI_MODE="${NAVI_MODE:-3}"
+CONTROLLER_MODE="${CONTROLLER_MODE:-closed_loop}"
+MAX_LOG_MB="${MAX_LOG_MB:-200}"
+QUIET="${QUIET:-0}"
+ROBOT_PROFILE="$REPO/src/planner/plan_manage/config/robots/${ROBOT}.yaml"
 
 usage() {
-  sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'
 }
+
+die() { echo "[error] $*" >&2; exit 1; }
+
+# ---- --list-events 快路径 ----
+if [[ "${1:-}" == "--list-events" ]]; then
+  cur="$ROOT/current"
+  [[ -L "$cur" && -d "$cur" ]] || die "没有正在进行的 run（$cur）"
+  [[ -f "$cur/events.tsv" ]] && cat "$cur/events.tsv" || echo "（当前 run 还没有事件）"
+  exit 0
+fi
 
 # ---- --event 快路径：只给“正在进行的 run”追加一条带时间戳的标记 ----
 if [[ "${1:-}" == "--event" ]]; then
@@ -46,7 +67,8 @@ if [[ "${1:-}" == "--event" ]]; then
   exit 0
 fi
 
-LABEL=""; DURATION=""; NO_LAUNCH=0; WITH_MAP=0; DO_ANALYZE=1
+LABEL=""; DURATION=""; NO_LAUNCH=0; WITH_MAP=0; DO_ANALYZE=1; DRY_RUN=0
+EXTRA_TOPICS=()
 LAUNCH_EXTRA=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,6 +78,15 @@ while [[ $# -gt 0 ]]; do
     --no-analyze) DO_ANALYZE=0; shift;;
     --storage)   STORAGE="${2:?缺少 storage}"; shift 2;;
     --log-level) LOG_LEVEL="${2:?缺少日志级别}"; shift 2;;
+    --robot)     ROBOT="${2:?缺少机型}"; shift 2;;
+    --navi-mode) NAVI_MODE="${2:?缺少 navi_mode}"; shift 2;;
+    --controller-mode) CONTROLLER_MODE="${2:?缺少控制器模式}"; shift 2;;
+    --extra-topics)
+      read -r -a _extra <<< "${2:?缺少话题列表}"
+      EXTRA_TOPICS+=("${_extra[@]}"); shift 2;;
+    --max-log-mb) MAX_LOG_MB="${2:?缺少 MB}"; shift 2;;
+    --dry-run)   DRY_RUN=1; shift;;
+    --quiet)     QUIET=1; shift;;
     -h|--help)   usage; exit 0;;
     --)          shift; LAUNCH_EXTRA+=("$@"); break;;
     -*)          echo "未知参数: $1" >&2; usage; exit 2;;
@@ -63,8 +94,78 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$LABEL" ]] || { echo "缺少 <label>" >&2; usage; exit 2; }
+ROBOT_PROFILE="$REPO/src/planner/plan_manage/config/robots/${ROBOT}.yaml"
+[[ "$NAVI_MODE" =~ ^[123]$ ]] || die "navi-mode 必须是 1/2/3"
+[[ "$CONTROLLER_MODE" == "open_loop" || "$CONTROLLER_MODE" == "closed_loop" ]] || \
+  die "controller-mode 必须是 open_loop/closed_loop"
+[[ -f "$ROBOT_PROFILE" ]] || die "找不到机型档案: $ROBOT_PROFILE"
 
-RUN_DIR="$ROOT/${LABEL}_$(date +%Y%m%d_%H%M%S)"
+# ---- 机型档案里的真机话题（body_pose/sensor_pose/cloud） ----
+PROFILE_TOPICS=()
+if command -v python3 >/dev/null 2>&1; then
+  mapfile -t PROFILE_TOPICS < <(python3 - "$ROBOT_PROFILE" <<'PY'
+import sys
+try:
+    import yaml
+    data = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
+    topics = data.get("robot_topics", {}) or {}
+    for key in ("body_pose", "sensor_pose", "cloud"):
+        value = topics.get(key)
+        if value:
+            print(value)
+except Exception:
+    pass
+PY
+  )
+fi
+if [[ -z "$ODOM_TOPIC" ]]; then
+  ODOM_TOPIC="${PROFILE_TOPICS[0]:-/lio/robo/odom}"
+fi
+
+# ---- 话题列表：内置 + 机型档案 + 用户追加（去重） ----
+declare -A _seen=()
+TOPICS=()
+add_topic() {
+  local t="$1"
+  [[ -n "$t" && -z "${_seen[$t]:-}" ]] || return 0
+  _seen[$t]=1
+  TOPICS+=("$t")
+}
+for t in /tf /tf_static "$ODOM_TOPIC" /loc/robo/odom /loc/status \
+         /global_path /planning/bspline /local_path /cmd_vel \
+         /motion_enabled /planning/go2_execution_frozen \
+         /local_planner/status /local_planner/diagnostics /self_inflation; do
+  add_topic "$t"
+done
+for t in "${PROFILE_TOPICS[@]}" "${EXTRA_TOPICS[@]}"; do add_topic "$t"; done
+if [[ $WITH_MAP -eq 1 ]]; then
+  add_topic /grid_map/occupancy
+  add_topic /grid_map/occupancy_inflate
+fi
+
+# ---- 预检 ----
+[[ -f /opt/ros/humble/setup.bash ]] || die "找不到 /opt/ros/humble/setup.bash"
+[[ -f "$REPO/install/setup.bash" ]] || \
+  echo "[warn] 没找到 $REPO/install/setup.bash，请确认已编译" >&2
+if command -v df >/dev/null 2>&1; then
+  avail_mb=$(df -Pm "$ROOT" 2>/dev/null | awk 'NR==2 {print $4}')
+  if [[ -n "$avail_mb" && "$avail_mb" -lt 2048 ]]; then
+    echo "[warn] $ROOT 剩余空间 ${avail_mb}MB，可能不足以录制" >&2
+  fi
+fi
+
+if [[ $DRY_RUN -eq 1 ]]; then
+  echo "robot: $ROBOT"
+  echo "navi_mode: $NAVI_MODE"
+  echo "controller_mode: $CONTROLLER_MODE"
+  echo "log_level: $LOG_LEVEL"
+  echo "odom_topic: $ODOM_TOPIC"
+  echo "topics: ${TOPICS[*]}"
+  echo "launch: ros2 launch scan_planner run.launch.py is_real_world:=true robot:=$ROBOT navi_mode:=$NAVI_MODE controller_mode:=$CONTROLLER_MODE log_level:=$LOG_LEVEL ${LAUNCH_EXTRA[*]:-}"
+  exit 0
+fi
+
+RUN_DIR="$ROOT/${LABEL}_$(date +%Y%m%d_%H%M%S_%3N)"
 mkdir -p "$RUN_DIR/analysis" "$RUN_DIR/roslog"
 ln -sfn "$RUN_DIR" "$ROOT/current"
 
@@ -100,31 +201,32 @@ set -u
   echo "duration: ${DURATION:-manual}"
   echo "with_map: $WITH_MAP"
   echo "log_level: $LOG_LEVEL"
+  echo "robot: $ROBOT"
+  echo "navi_mode: $NAVI_MODE"
+  echo "controller_mode: $CONTROLLER_MODE"
+  echo "max_log_mb: $MAX_LOG_MB"
 } > "$RUN_DIR/meta.txt"
-for f in common.yaml robots/a2.yaml; do
+for f in common.yaml "robots/${ROBOT}.yaml"; do
   [[ -f "$REPO/src/planner/plan_manage/config/$f" ]] && \
     cp "$REPO/src/planner/plan_manage/config/$f" "$RUN_DIR/" 2>/dev/null || true
 done
 
-TOPICS=(/tf /tf_static "$ODOM_TOPIC" /loc/robo/odom /loc/status
-        /global_path /planning/bspline /local_path
-        /cmd_vel /motion_enabled /planning/go2_execution_frozen
-        /local_planner/status /local_planner/diagnostics /self_inflation)
-[[ $WITH_MAP -eq 1 ]] && TOPICS+=(/grid_map/occupancy /grid_map/occupancy_inflate)
-
-echo "================================================================"
-echo " run dir : $RUN_DIR"
-echo " odom    : $ODOM_TOPIC"
-echo " 话题    : ${TOPICS[*]}"
-echo " 停止    : Ctrl-C（或 --duration 到点）"
-echo " 打标记  : bash $0 --event \"block 1\""
-echo "----------------------------------------------------------------"
-echo " 建议依次做："
-echo "   1) 正常巡航 60~90s"
-echo "   2) 挡住车 2~5s，松手（mark: block1 / release1）"
-echo "   3) 长时卡住 >=5s（mark: block_long / release_long）"
-echo "   4) 让它跑到目标收尾"
-echo "================================================================"
+if [[ "$QUIET" -eq 0 ]]; then
+  echo "================================================================"
+  echo " run dir : $RUN_DIR"
+  echo " robot   : $ROBOT  navi_mode=$NAVI_MODE  controller=$CONTROLLER_MODE"
+  echo " odom    : $ODOM_TOPIC"
+  echo " 话题    : ${TOPICS[*]}"
+  echo " 停止    : Ctrl-C（或 --duration 到点）"
+  echo " 打标记  : bash $0 --event \"block 1\""
+  echo "----------------------------------------------------------------"
+  echo " 建议依次做："
+  echo "   1) 正常巡航 60~90s"
+  echo "   2) 挡住车 2~5s，松手（mark: block1 / release1）"
+  echo "   3) 长时卡住 >=5s（mark: block_long / release_long）"
+  echo "   4) 让它跑到目标收尾"
+  echo "================================================================"
+fi
 
 BAG_PID=""; LAUNCH_PID=""; TAIL_PID=""; WATCH_PID=""; PARAM_PID=""
 
@@ -168,6 +270,14 @@ cleanup() {
       echo "[analyze] 失败链摘要 -> analysis/log_summary.txt"
     fi
   fi
+
+  # 日志过大时压缩，避免长期运行占满磁盘
+  if [[ -f "$RUN_DIR/run.log" && "$MAX_LOG_MB" -gt 0 ]]; then
+    size_mb=$(( $(stat -c%s "$RUN_DIR/run.log" 2>/dev/null || echo 0) / 1024 / 1024 ))
+    if [[ "$size_mb" -ge "$MAX_LOG_MB" ]]; then
+      gzip -f "$RUN_DIR/run.log" && echo "[done] run.log 已压缩为 run.log.gz"
+    fi
+  fi
   exit 0
 }
 trap cleanup INT TERM EXIT
@@ -187,17 +297,17 @@ echo "[bag] recording -> $RUN_DIR/bag"
 # ---- 启动规划栈（可选）----
 if [[ $NO_LAUNCH -eq 0 ]]; then
   LAUNCH_CMD=(ros2 launch scan_planner run.launch.py
-              is_real_world:=true navi_mode:=3 log_level:="$LOG_LEVEL")
-  # 如果用户在 "--" 后自己传了 robot:=xxx，就不再补默认的 robot:=a2
-  _has_robot=0
-  for _a in "${LAUNCH_EXTRA[@]}"; do [[ "$_a" == robot:=* ]] && _has_robot=1; done
-  [[ $_has_robot -eq 0 ]] && LAUNCH_CMD+=(robot:=a2)
+              is_real_world:=true robot:="$ROBOT" navi_mode:="$NAVI_MODE"
+              controller_mode:="$CONTROLLER_MODE" log_level:="$LOG_LEVEL")
+  # 用户在 "--" 后传入的 launch 参数优先级最高
   LAUNCH_CMD+=("${LAUNCH_EXTRA[@]}")
   ROS_LOG_DIR="$RUN_DIR/roslog" stdbuf -oL -eL "${LAUNCH_CMD[@]}" \
     > "$RUN_DIR/run.log" 2>&1 &
   LAUNCH_PID=$!
-  tail -n +1 -f "$RUN_DIR/run.log" &
-  TAIL_PID=$!
+  if [[ "$QUIET" -eq 0 ]]; then
+    tail -n +1 -f "$RUN_DIR/run.log" &
+    TAIL_PID=$!
+  fi
   # 5s 后抓一次“生效参数”，便于核对 traj_clock_max_lead / time_lead 等
   (
     sleep 5
@@ -214,7 +324,7 @@ if [[ $NO_LAUNCH -eq 0 ]]; then
   echo "[launch] 规划栈已启动（输出见 run.log）"
 else
   echo "[no-launch] 请自行启动规划栈，并把输出重定向到：$RUN_DIR/run.log"
-  echo "           例如： ros2 launch scan_planner run.launch.py log_level:=debug ... 2>&1 | tee $RUN_DIR/run.log"
+  echo "           例如： ros2 launch scan_planner run.launch.py robot:=$ROBOT navi_mode:=$NAVI_MODE log_level:=$LOG_LEVEL ... 2>&1 | tee $RUN_DIR/run.log"
 fi
 
 if [[ -n "$DURATION" ]]; then

@@ -43,6 +43,10 @@ jobs:
           colcon test --packages-select scan_planner --event-handlers console_direct+
           colcon test-result --verbose
 
+      - name: Tools self-test
+        shell: bash
+        run: ./tools/selftest_tools.sh
+
       - name: Sim smoke (empty_3m)
         shell: bash
         run: |

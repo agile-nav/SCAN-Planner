@@ -40,6 +40,28 @@ bash tools/clock_sync_test/record_run.sh A_normal
 
 停止：**Ctrl-C**（或 `--duration 120` 自动停）。
 
+常用选项：
+
+```bash
+--robot a2|go2|go2w       # 机型（默认 a2）
+--navi-mode 1|2|3         # 默认 3
+--controller-mode closed_loop|open_loop
+--extra-topics "/a /b"    # 追加录制话题（会从机型档案自动读 body_pose/sensor_pose/cloud）
+--log-level info|debug    # 规划栈日志级别（默认 debug）
+--max-log-mb 200          # 结束后 run.log 超过该大小自动 gzip
+--dry-run                 # 只打印配置，不启动
+--quiet                   # 不打印 banner / 不 tail
+--list-events             # 查看当前 run 的事件
+```
+
+分析时可加：
+
+```bash
+python3 tools/clock_sync_test/analyze_run.py --json --no-plot
+```
+
+`--json` 额外生成 `analysis/events.jsonl`，`--no-plot` 跳过 matplotlib。
+
 ## 建议的一次完整场景（一次 run 内做完）
 
 | 顺序 | 操作 | 打标记（另开终端） |
@@ -62,6 +84,8 @@ bash tools/clock_sync_test/record_run.sh A_normal
 ├── events.tsv                # 你打的标记
 ├── params_planner.yaml       # 生效参数快照（核对 max_lead 等）
 ├── params_controller.yaml
+├── roslog/                   # ROS_LOG_DIR 归档
+├── run.log.gz                # run.log 超过 --max-log-mb 时自动压缩
 └── analysis/
     ├── traj_clock.csv        # t, t_wall, t_proj, t_cur, lead, max_lead, dur, traj_id
     ├── ctl_clock.csv         # t, exec_time, t_proj, lead, dur, pos_err, traj_id

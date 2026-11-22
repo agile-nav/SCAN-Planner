@@ -246,6 +246,12 @@ def write_csv(path, rows, fields):
             w.writerow(r)
 
 
+def write_jsonl(path, rows):
+    with open(path, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
 def nearest(series, t, max_dt=0.5):
     """series: [(t, value...)] 已排序；返回 t 附近最近的一条。"""
     if not series:
@@ -321,6 +327,8 @@ def main():
                     help="run 目录；省略时使用 $CLOCK_SYNC_ROOT/current")
     ap.add_argument("--odom-topic", default="/lio/robo/odom")
     ap.add_argument("--no-bag", action="store_true")
+    ap.add_argument("--json", action="store_true", help="额外输出 analysis/events.jsonl")
+    ap.add_argument("--no-plot", action="store_true", help="只生成 CSV/摘要，不画图")
     args = ap.parse_args()
 
     if not args.run_dir:
@@ -342,6 +350,8 @@ def main():
     write_csv(os.path.join(ana, "ctl_clock.csv"), ctl,
               ["t", "exec_time", "t_proj", "lead", "dur", "pos_err", "traj_id"])
     write_csv(os.path.join(ana, "events.csv"), events, ["t", "approx", "kind", "detail"])
+    if args.json:
+        write_jsonl(os.path.join(ana, "events.jsonl"), events)
 
     bag = {"cmd": [], "odom": [], "traj": [], "frozen": [], "enabled": [], "status": []}
     if not args.no_bag:
@@ -465,6 +475,9 @@ def main():
         f.write("\n".join(lines) + "\n")
 
     # ---------- 画图（可选） ----------
+    if args.no_plot:
+        print("[plot] 已跳过（--no-plot）")
+        return 0
     try:
         import matplotlib
         matplotlib.use("Agg")

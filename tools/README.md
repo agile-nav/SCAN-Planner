@@ -28,6 +28,23 @@ python3 tools/view_stair_log.py
 
 详细说明见 [clock_sync_test/README.md](clock_sync_test/README.md)。
 
+## 场景 → 推荐工具
+
+| 你想知道 | 用什么 |
+|---|---|
+| 这次为什么没规划出来 | `log_query.py last-failure` |
+| 某个 `rid` 的完整链路 | `log_query.py rid <rid>` |
+| 失败原因分布/规划耗时 | `log_query.py summary` / `slow` |
+| 真机时钟/控制/卡住复盘 | `record_run.sh` → `analyze_run.py` |
+| 楼梯/窄通道碰撞复盘 | `view_stair_log.py` |
+| 现场实时健康 | `/local_planner/diagnostics` + `event=health` |
+
+工具自测：
+
+```bash
+./tools/selftest_tools.sh
+```
+
 ## keypoint_recorder
 
 Build and source the workspace, then run:

@@ -65,15 +65,17 @@ def parse_log(path):
                 targets.append(pt(v[10], v[11], 0.0))
                 goal = (float(v[5]), float(v[6]))
                 continue
-            m = RE_ASTAR.search(line) or RE_ASTAR_OLD.search(line)
+            m = RE_ASTAR.search(line)
             if m:
-                v = m.groups()
-                if len(v) == 7:  # 新格式：rid, start xyz, end xyz
-                    astar.append(pt(v[1], v[2], v[3]))
-                    astar.append(pt(v[4], v[5], v[6]))
-                else:            # 旧格式：start xyz, end xyz, rid
-                    astar.append(pt(v[0], v[1], v[2]))
-                    astar.append(pt(v[3], v[4], v[5]))
+                v = m.groups()  # rid, start xyz, end xyz
+                astar.append(pt(v[1], v[2], v[3]))
+                astar.append(pt(v[4], v[5], v[6]))
+                continue
+            m = RE_ASTAR_OLD.search(line)
+            if m:
+                v = m.groups()  # start xyz, end xyz, rid
+                astar.append(pt(v[0], v[1], v[2]))
+                astar.append(pt(v[3], v[4], v[5]))
                 continue
             m = RE_COLL.search(line)
             if m:
@@ -84,20 +86,29 @@ def parse_log(path):
 
 def main():
     ap = argparse.ArgumentParser(description='回放 scan_planner 日志到 RViz')
-    ap.add_argument('log', nargs='?', help='日志文件；省略则使用最新 scan_planner 日志')
+    ap.add_argument('logs', nargs='*', help='日志文件；省略则使用最新 scan_planner 日志')
     ap.add_argument('--topic', default='/stair_replay', help='输出 MarkerArray 话题')
     ap.add_argument('--frame', default='world', help='Fixed Frame')
     ap.add_argument('--rate', type=float, default=1.0, help='重发频率 Hz')
+    ap.add_argument('--point-size', type=float, default=0.12, help='A*/碰撞点大小')
+    ap.add_argument('--line-width', type=float, default=0.08, help='轨迹线宽')
     ap.add_argument('--once', action='store_true', help='发布一次后退出')
     args = ap.parse_args()
 
-    path = args.log or latest_log()
-    if not path or not os.path.isfile(path):
-        print(f'找不到日志文件: {path or "(未指定)"}', file=sys.stderr)
+    paths = args.logs or [p for p in [latest_log()] if p]
+    paths = [p for p in paths if os.path.isfile(p)]
+    if not paths:
+        print(f'找不到日志文件: {args.logs or "(未指定，且 ~/.ros/log 下也没有)"}', file=sys.stderr)
         return 2
-    robot, targets, astar, coll, goal = parse_log(path)
-    print(f'log={path} robot={len(robot)} targets={len(targets)} '
-          f'astar_pts={len(astar)} collisions={len(coll)} goal={goal}')
+    robot, targets, astar, coll, goal = [], [], [], [], None
+    for path in paths:
+        r, t, a, c, g = parse_log(path)
+        robot += r; targets += t; astar += a; coll += c
+        if g is not None:
+            goal = g
+        print(f'log={path} robot={len(r)} targets={len(t)} astar_pts={len(a)} collisions={len(c)}')
+    print(f'total robot={len(robot)} targets={len(targets)} astar_pts={len(astar)} '
+          f'collisions={len(coll)} goal={goal}')
 
     rclpy.init()
     node = Node('stair_log_viewer')
@@ -134,13 +145,13 @@ def main():
     def build():
         arr = MarkerArray()
         if robot:
-            arr.markers.append(line_marker('robot', 0, robot, (0.0, 1.0, 0.0, 1.0), 0.08))
+            arr.markers.append(line_marker('robot', 0, robot, (0.0, 1.0, 0.0, 1.0), args.line_width))
         if targets:
-            arr.markers.append(line_marker('target', 1, targets, (0.2, 0.4, 1.0, 1.0), 0.05))
+            arr.markers.append(line_marker('target', 1, targets, (0.2, 0.4, 1.0, 1.0), args.line_width * 0.6))
         if astar:
-            arr.markers.append(points_marker('astar_fail', 2, astar, (1.0, 0.0, 0.0, 1.0), 0.12))
+            arr.markers.append(points_marker('astar_fail', 2, astar, (1.0, 0.0, 0.0, 1.0), args.point_size))
         if coll:
-            arr.markers.append(points_marker('collision', 3, coll, (1.0, 0.5, 0.0, 1.0), 0.20))
+            arr.markers.append(points_marker('collision', 3, coll, (1.0, 0.5, 0.0, 1.0), args.point_size * 1.6))
         if goal:
             m = base_marker('goal', 4, Marker.SPHERE)
             m.pose.position = pt(goal[0], goal[1], 0.0)
