@@ -1,5 +1,33 @@
 # Tools
 
+## 日志查询与审计
+
+```bash
+python3 tools/log_query.py summary run.log
+python3 tools/log_query.py rid 42 run.log
+python3 tools/log_query.py last-failure run.log
+python3 tools/log_query.py export run.log --out run.jsonl
+python3 tools/log_audit.py --strict
+```
+
+`log_query.py` 支持 `summary/rid/last-failure/errors/slow/timeline/export`；
+`log_audit.py` 检查第一方裸输出、ANSI 转义，已接入 CI。
+
+## 真机录制与离线回放
+
+```bash
+# 录制日志 + bag + 参数快照，结束后自动分析并生成失败链摘要
+bash tools/clock_sync_test/record_run.sh A_normal --duration 120
+
+# 手动重新分析；省略 run_dir 时使用 ~/clock_sync_runs/current
+python3 tools/clock_sync_test/analyze_run.py
+
+# 离线回放楼梯/窄通道几何到 RViz（不传日志则用最新 scan_planner 日志）
+python3 tools/view_stair_log.py
+```
+
+详细说明见 [clock_sync_test/README.md](clock_sync_test/README.md)。
+
 ## keypoint_recorder
 
 Build and source the workspace, then run:

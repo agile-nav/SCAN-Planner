@@ -1,0 +1,100 @@
+# ============================================================================
+# bag_qos.yaml —— ros2 bag record 的 QoS 覆盖（G1-G3 验证用）
+#
+# 为什么需要：
+#   - transient_local 的保留型话题（/tf_static、/global_path、status、self_inflation …）
+#     用默认 volatile 只能收到“订阅之后”的消息，会丢掉启动时那一条；
+#   - best_effort 的传感器/地图话题（odom、cloud、/grid_map/*）用默认 reliable
+#     与发布端不兼容，会一条都收不到。
+#
+# 注意：ros2 bag record 会按这里的字段**构造完整 QoSProfile**，
+#       所以每个话题都必须给 history + depth（否则报
+#       "Invalid QoSProfile: History and/or depth settings are required."）。
+# 用法：ros2 bag record ... --qos-profile-overrides-path bag_qos.yaml
+# ============================================================================
+
+# ---- 保留型（transient_local）----
+/tf_static:
+  reliability: reliable
+  durability: transient_local
+  history: keep_last
+  depth: 1
+
+/global_path:
+  reliability: reliable
+  durability: transient_local
+  history: keep_last
+  depth: 1
+
+/local_planner/status:
+  reliability: reliable
+  durability: transient_local
+  history: keep_last
+  depth: 1
+
+/local_planner/diagnostics:
+  reliability: reliable
+  durability: transient_local
+  history: keep_last
+  depth: 1
+
+/self_inflation:
+  reliability: reliable
+  durability: transient_local
+  history: keep_last
+  depth: 1
+
+/loc/map:
+  reliability: reliable
+  durability: transient_local
+  history: keep_last
+  depth: 1
+
+/loc/keyframes:
+  reliability: reliable
+  durability: transient_local
+  history: keep_last
+  depth: 1
+
+/loc/submap:
+  reliability: reliable
+  durability: transient_local
+  history: keep_last
+  depth: 1
+
+# ---- 传感器 / 地图（best_effort；必须带 history/depth）----
+/lio/robo/odom:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 50
+
+/loc/robo/odom:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 50
+
+/lio/cloud_world:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 10
+
+/grid_map/occupancy:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 10
+
+/grid_map/occupancy_inflate:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 10
+
+/grid_map/depth_cloud:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 10
