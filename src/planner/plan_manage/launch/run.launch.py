@@ -25,7 +25,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    LogInfo,
+    OpaqueFunction,
+)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
@@ -46,6 +51,9 @@ def _setup(context):
     common_yaml = os.path.join(scan_share, "config", "common.yaml")
     is_real = _as_bool(LaunchConfiguration("is_real_world").perform(context))
     use_sim_time = _as_bool(LaunchConfiguration("use_sim_time").perform(context))
+    log_level = LaunchConfiguration("log_level").perform(context).strip().lower()
+    if log_level not in ("debug", "info", "warn", "error", "fatal"):
+        raise RuntimeError("log_level must be one of: debug, info, warn, error, fatal")
     sensor_type = LaunchConfiguration("sensor_type").perform(context)
     controller_mode = LaunchConfiguration("controller_mode").perform(context)
     keypoints_file = LaunchConfiguration("keypoints_file").perform(context)
@@ -129,6 +137,10 @@ def _setup(context):
         need_extrinsic = False
 
     common = {"use_sim_time": use_sim_time}
+
+    def log_args(node_name):
+        return ["--ros-args", "--log-level", f"{node_name}:={log_level}"]
+
     # 外部使能 /motion_enabled 的初始值：
     #   真机必须等遥控器 START（默认 false）；仿真没有遥控器，默认放开，
     #   否则规划器和控制器会一直等使能信号、机器人不动。
@@ -150,11 +162,18 @@ def _setup(context):
     # ---- 节点 1：规划器本体（最重要）----
     # parameters 按顺序叠加：先 common.yaml，再机型档案，再（可选）航点文件，最后覆盖项。
     actions = [
+        LogInfo(msg=(
+            f"[scan_planner] startup robot={robot} navi_mode={navi_mode} "
+            f"sensor={sensor_type} controller={controller_mode} real={str(is_real).lower()} "
+            f"motion_enabled={str(motion_default).lower()} log_level={log_level} "
+            f"init=({init_x:.2f},{init_y:.2f},{init_z:.2f})"
+        )),
         Node(
             package="scan_planner",
             executable="scan_planner_node",
             name="scan_planner_node",
             output="screen",
+            arguments=log_args("scan_planner_node"),
             parameters=[common_yaml, planner_profile_params]
             + ([keypoints_file] if keypoints_file else [])
             + [planner_overrides],
@@ -184,6 +203,7 @@ def _setup(context):
                 executable="robot_state_publisher",
                 name="robot_state_publisher",
                 output="screen",
+                arguments=log_args("robot_state_publisher"),
                 parameters=[
                     common,
                     {"robot_description": Command(_robot_description_command(robot_meta))},
@@ -200,6 +220,7 @@ def _setup(context):
                 executable="open_loop_controller",
                 name="open_loop_controller",
                 output="screen",
+                arguments=log_args("open_loop_controller"),
                 parameters=[
                     common_yaml,
                     common,
@@ -220,6 +241,7 @@ def _setup(context):
                 executable="closed_loop_controller",
                 name="closed_loop_controller",
                 output="screen",
+                arguments=log_args("closed_loop_controller"),
                 parameters=[common_yaml, controller_profile_params, common,
                             {"motion_enabled_default": motion_default}],
                 remappings=[
@@ -238,6 +260,7 @@ def _setup(context):
                     executable="quadruped_kinematic_sim",
                     name="quadruped_kinematic_sim",
                     output="screen",
+                    arguments=log_args("quadruped_kinematic_sim"),
                     parameters=[
                         common_yaml,
                         sim_profile_params,
@@ -266,6 +289,7 @@ def _setup(context):
                 executable="reference_path_publisher.py",
                 name="reference_path_publisher",
                 output="screen",
+                arguments=log_args("reference_path_publisher"),
                 parameters=[reference_path_file, common],
                 remappings=[
                     ("body_pose", body_pose),
@@ -286,6 +310,7 @@ def _setup(context):
                     executable="quadruped_gait_publisher",
                     name="quadruped_gait_publisher",
                     output="screen",
+                    arguments=log_args("quadruped_gait_publisher"),
                     parameters=[common_yaml, gait_profile_params, common],
                     remappings=[("body_pose", body_pose)],
                 ),
@@ -309,6 +334,7 @@ def _setup(context):
                                 "map_size_z",
                                 "obstacle_number",
                                 "use_sim_time",
+                                "log_level",
                             )
                         },
                         # 机型档案：simulator.launch.py 用它的 mockamap_node /
@@ -345,6 +371,8 @@ def generate_launch_description():
             DeclareLaunchArgument("init_y", default_value=""),
             DeclareLaunchArgument("init_z", default_value=""),
             DeclareLaunchArgument("use_sim_time", default_value="false"),
+            # 日志级别：debug/info/warn/error/fatal（同时下发给所有子节点）
+            DeclareLaunchArgument("log_level", default_value="info"),
             # 仿真是否自动放开 /motion_enabled（真机忽略：始终等遥控器 START）
             DeclareLaunchArgument("auto_enable", default_value="true"),
             OpaqueFunction(function=_setup),

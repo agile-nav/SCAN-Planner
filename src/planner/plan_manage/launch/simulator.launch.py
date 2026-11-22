@@ -34,6 +34,9 @@ def _setup(context):
     use_pcd_map = _as_bool(LaunchConfiguration("use_pcd_map").perform(context))
     use_gpu = _as_bool(LaunchConfiguration("use_gpu").perform(context))
     use_sim_time = _as_bool(LaunchConfiguration("use_sim_time").perform(context))
+    log_level = LaunchConfiguration("log_level").perform(context).strip().lower()
+    if log_level not in ("debug", "info", "warn", "error", "fatal"):
+        raise RuntimeError("log_level must be one of: debug, info, warn, error, fatal")
     pcd_map_file = LaunchConfiguration("pcd_map_file").perform(context)
     sensor_type = LaunchConfiguration("sensor_type").perform(context)
     map_x = float(LaunchConfiguration("map_size_x").perform(context))
@@ -60,6 +63,9 @@ def _setup(context):
     common_yaml = os.path.join(scan_share, "config", "common.yaml")
     nodes = []
 
+    def log_args(node_name):
+        return ["--ros-args", "--log-level", f"{node_name}:={log_level}"]
+
     # ---- 地图来源二选一 ----
     #   use_pcd_map=true  ：加载已有的 PCD 点云地图（更接近真实场景）
     #   use_pcd_map=false ：程序随机生成一张地图（默认，方便反复测试）
@@ -72,6 +78,7 @@ def _setup(context):
                 name="map_pub",
                 namespace="map_generator",
                 output="screen",
+                arguments=log_args("map_pub"),
                 parameters=[
                     {
                         "use_sim_time": use_sim_time,
@@ -92,6 +99,7 @@ def _setup(context):
                 executable="mockamap_node",
                 name="mockamap_node",
                 output="screen",
+                arguments=log_args("mockamap_node"),
                 parameters=[common_yaml, profile_params("mockamap_node"), {
                     "use_sim_time": use_sim_time,
                     "x_length": int(map_x),
@@ -114,6 +122,7 @@ def _setup(context):
                 executable="opengl_render_node" if use_gpu else "pcl_render_node",
                 name="pcl_render_node",
                 output="screen",
+                arguments=log_args("pcl_render_node"),
                 parameters=[common_yaml, profile_params("pcl_render_node"), {
                     "use_sim_time": use_sim_time,
                     "sensor_type": sensor_type,
@@ -140,6 +149,7 @@ def _setup(context):
                 executable="odom_visualization",
                 name="odom_visualization",
                 output="screen",
+                arguments=log_args("odom_visualization"),
                 parameters=[common_yaml, profile_params("odom_visualization"),
                             {"use_sim_time": use_sim_time}],
                 remappings=[
@@ -172,6 +182,7 @@ def generate_launch_description():
             DeclareLaunchArgument("obstacle_number", default_value="500"),
             DeclareLaunchArgument("profile_yaml", default_value=""),
             DeclareLaunchArgument("use_sim_time", default_value="false"),
+            DeclareLaunchArgument("log_level", default_value="info"),
             OpaqueFunction(function=_setup),
         ]
     )

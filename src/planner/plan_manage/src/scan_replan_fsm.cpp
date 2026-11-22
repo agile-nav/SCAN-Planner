@@ -138,6 +138,9 @@ namespace scan_planner
     // 仿真没有这个遥控器，launch 会把它置 true，否则规划器和控制器一直不动。
     motion_enabled_default_ = load_parameter<bool>(node_, "fsm.motion_enabled_default", false);
     motion_enabled_ = motion_enabled_default_;
+    if (!motion_enabled_)
+      RCLCPP_INFO(node_->get_logger(),
+                  "[fsm] event=gated reason=motion_disabled hint=\"waiting for /motion_enabled=true (remote START/B)\"");
     reference_tf_max_age_ = load_parameter<double>(node_, "fsm.reference_tf_max_age", 0.3);
     reference_tf_grace_ = load_parameter<double>(node_, "fsm.reference_tf_grace", 0.5);
     reference_tf_jump_translation_ = load_parameter<double>(node_, "fsm.reference_tf_jump_translation", 0.2);
