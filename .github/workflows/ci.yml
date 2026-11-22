@@ -19,6 +19,9 @@ jobs:
       - name: Docs audit
         run: python3 tools/docs_audit.py
 
+      - name: Log audit
+        run: python3 tools/log_audit.py --strict
+
       - name: Install dependencies
         shell: bash
         run: |

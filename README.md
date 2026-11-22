@@ -108,6 +108,34 @@ ros2 launch scan_planner run.launch.py \
 初始位置默认值按导航模式区分：`navi_mode:=1` 为 `(-19.0, 1.0, 0.25)`，其余模式为 `(-5.5, 5.5, 0.5)`（机型档案里可用 `init` 覆盖）；显式传入 `init_x` / `init_y` / `init_z` 时以下传值为准。
 
 
+## 日志与排查
+
+启动参数 `log_level` 控制所有节点的日志级别（`debug` / `info` / `warn` / `error` / `fatal`，默认 `info`）：
+
+```bash
+# 现场运行：只保留主线事件
+ros2 launch scan_planner run.launch.py log_level:=info
+
+# 排查问题：打开每次重规划、A* 分段、时钟诊断等明细
+ros2 launch scan_planner run.launch.py log_level:=debug
+```
+
+日志格式统一为 `[模块] event=... rid=... traj_id=... key=value`。`rid` 是本次重规划的关联号，可把 FSM、A*、优化器的日志串起来。完整字段与级别约定见 [docs/日志规范.md](docs/日志规范.md)。
+
+ROS 日志默认在 `~/.ros/log/`；可用 `ROS_LOG_DIR` 指定目录：
+
+```bash
+ROS_LOG_DIR=~/runs/2026-11-22 ros2 launch scan_planner run.launch.py log_level:=debug
+```
+
+持续录包/回归时，`tools/clock_sync_test/record_run.sh` 会自动使用 `log_level:=debug`，并把 ROS 日志归档到本次 run 的 `roslog/` 目录。
+
+提交前可运行静态检查，确保没有新增裸 `cout/cerr/printf` 或 ANSI 转义：
+
+```bash
+python3 tools/log_audit.py --strict
+```
+
 ## 配置与接口
 
 规划器、控制器和仿真器的**通用参数**集中在：
