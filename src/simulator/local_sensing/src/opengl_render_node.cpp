@@ -677,9 +677,9 @@ void rcvOdometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr message) 
     searchPoint.z = odom.pose.pose.position.z;
     if (_kdtreeLocalMap.radiusSearch(searchPoint, collision_range, pointIdxRadiusSearch,
                                      pointRadiusSquaredDistance) > 0) {
+      int env_hits = 0;
       if (use_uav_extra_model) {
         // check if the neighbor points are in the uav model
-        bool collision = false;
         for (int i = 0; i < pointIdxRadiusSearch.size(); i++) {
           int index = pointIdxRadiusSearch[i];
           PointType p = cloud_all_map.points[index];
@@ -694,22 +694,23 @@ void rcvOdometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr message) 
           int hash_z = (p_eigen(2) - uav_modelmin.z) / downsample_res;
           int hash_index = hash_x + hash_y * uavhash_xsize + hash_z * uavhash_xsize * uavhash_ysize;
           if (uavpoint_hashmap.find(hash_index) != uavpoint_hashmap.end()) {
-            collision = true;
-            RCLCPP_ERROR(ros_node->get_logger(), "ENVIRONMENT COLLISION DETECTED!!!");
-            // break;
+            ++env_hits;
             collision_points.points.push_back(p);
           }
         }
       } else {
-        RCLCPP_ERROR(ros_node->get_logger(), "ENVIRONMENT COLLISION DETECTED!!!");
+        env_hits = static_cast<int>(pointIdxRadiusSearch.size());
       }
+      RCLCPP_WARN_THROTTLE(ros_node->get_logger(), *ros_node->get_clock(), 1000,
+                           "[sim] event=collision kind=environment hits=%d pos=(%.2f,%.2f,%.2f)",
+                           env_hits, searchPoint.x, searchPoint.y, searchPoint.z);
     }
     if (dynobj_enable || drone_num > 1) {
       if (kdtree_dyn.radiusSearch(searchPoint, collision_range, pointIdxRadiusSearch,
                                   pointRadiusSquaredDistance) > 0) {
+        int dyn_hits = 0;
         if (use_uav_extra_model) {
           // check if the neighbor points are in the uav model
-          bool collision = false;
           for (int i = 0; i < pointIdxRadiusSearch.size(); i++) {
             int index = pointIdxRadiusSearch[i];
             PointType p = cloud_all_map.points[index];
@@ -719,15 +720,16 @@ void rcvOdometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr message) 
             int hash_index =
             hash_x + hash_y * uavhash_xsize + hash_z * uavhash_xsize * uavhash_ysize;
             if (uavpoint_hashmap.find(hash_index) != uavpoint_hashmap.end()) {
-              collision = true;
-              RCLCPP_ERROR(ros_node->get_logger(), "DYNAMIC OBSTACLES COLLISION DETECTED!!!");
-              // break;
+              ++dyn_hits;
               collision_points.points.push_back(p);
             }
           }
         } else {
-          RCLCPP_ERROR(ros_node->get_logger(), "DYNAMIC OBSTACLES COLLISION DETECTED!!!");
+          dyn_hits = static_cast<int>(pointIdxRadiusSearch.size());
         }
+        RCLCPP_WARN_THROTTLE(ros_node->get_logger(), *ros_node->get_clock(), 1000,
+                             "[sim] event=collision kind=dynamic hits=%d pos=(%.2f,%.2f,%.2f)",
+                             dyn_hits, searchPoint.x, searchPoint.y, searchPoint.z);
       }
     }
   }

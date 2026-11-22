@@ -907,14 +907,18 @@ void rcvOdometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr message)
     // 在机器人周围查一下有没有地图点 —— 查到就说明撞了
     if (_kdtreeLocalMap.radiusSearch(searchPoint, collision_range, pointIdxRadiusSearch, pointRadiusSquaredDistance) > 0)
     {
-      RCLCPP_ERROR(ros_node->get_logger(), "Environment collision detected");
+      RCLCPP_WARN_THROTTLE(ros_node->get_logger(), *ros_node->get_clock(), 1000,
+                           "[sim] event=collision kind=environment pos=(%.2f,%.2f,%.2f)",
+                           searchPoint.x, searchPoint.y, searchPoint.z);
     }
     // 再用动态障碍物的 KD 树查一次
     if (dynobj_enable && has_dyn_map)
     {
       if (kdtree_dyn.radiusSearch(searchPoint, collision_range, pointIdxRadiusSearch, pointRadiusSquaredDistance) > 0)
       {
-        RCLCPP_ERROR(ros_node->get_logger(), "Dynamic-object collision detected");
+        RCLCPP_WARN_THROTTLE(ros_node->get_logger(), *ros_node->get_clock(), 1000,
+                             "[sim] event=collision kind=dynamic pos=(%.2f,%.2f,%.2f)",
+                             searchPoint.x, searchPoint.y, searchPoint.z);
       }
     }
 
