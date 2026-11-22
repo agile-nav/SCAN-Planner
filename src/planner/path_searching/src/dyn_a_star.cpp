@@ -325,7 +325,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     // 把起终点转成格子坐标（必要时从障碍里挪出来）
     if (!ConvertToIndexAndAdjustStartEndPoints(start_pt, end_pt, start_idx, end_idx))
     {
-        RCLCPP_ERROR(rclcpp::get_logger("path_searching"),
+        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
                      "[Astar] INIT_ERR: start=(%.2f,%.2f,%.2f) adj_s=%.2fm end=(%.2f,%.2f,%.2f) adj_e=%.2fm pool=±%.2fm",
                      start_pt(0), start_pt(1), start_pt(2), last_start_adjust_,
                      end_pt(0), end_pt(1), end_pt(2), last_end_adjust_,

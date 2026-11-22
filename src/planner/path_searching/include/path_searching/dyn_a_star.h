@@ -156,8 +156,8 @@ inline bool AStar::Coord2Index(const Eigen::Vector3d &pt, Eigen::Vector3i &idx) 
 
 	if (idx(0) < 0 || idx(0) >= POOL_SIZE_(0) || idx(1) < 0 || idx(1) >= POOL_SIZE_(1) || idx(2) < 0 || idx(2) >= POOL_SIZE_(2))
 	{
-		RCLCPP_ERROR(rclcpp::get_logger("path_searching"),
-		             "Ran out of pool, index=%d %d %d", idx(0), idx(1), idx(2));
+		// 出搜索池是搜索/脱困控制流的一部分，由 AstarSearch 统一按 INIT_ERR 上报；
+		// 这里不逐次打印，避免脱困时每个候选点刷一条 ERROR。
 		return false;
 	}
 

@@ -114,7 +114,7 @@ private:
     traj_duration_ = traj_[0].getTimeSum();
     // 标记“已有轨迹”
     receive_traj_ = true;
-    RCLCPP_INFO(get_logger(), "Received trajectory %lld, duration %.3fs",
+    RCLCPP_DEBUG(get_logger(), "[ctrl] event=traj_received traj_id=%lld duration=%.3fs",
                 static_cast<long long>(traj_id_), traj_duration_);
   }
 

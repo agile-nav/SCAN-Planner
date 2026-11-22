@@ -239,7 +239,7 @@ private:
     // 标记“已经有轨迹可跟踪了”
     receive_traj_ = true;
     // 打印日志
-    RCLCPP_INFO(get_logger(), "Received trajectory %lld, duration %.3fs",
+    RCLCPP_DEBUG(get_logger(), "[ctrl] event=traj_received traj_id=%lld duration=%.3fs",
                 static_cast<long long>(traj_id_), traj_duration_);
   }
 
