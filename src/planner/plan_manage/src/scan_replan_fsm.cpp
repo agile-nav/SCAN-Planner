@@ -294,6 +294,24 @@ namespace scan_planner
     // 其它值 → 参数非法，直接抛异常退出
     else
       throw std::runtime_error("fsm.navi_mode must be 1, 2, or 3");
+    // 启动摘要：把现场最常调的生效参数集中打出来，避免排查时反复翻 YAML
+    RCLCPP_INFO(node_->get_logger(),
+                "[sys] event=startup navi_mode=%d horizon=%.2fm replan=%.2fm no_replan=%.2fm "
+                "emergency=%.2fs max_vel=%.2fm/s max_acc=%.2fm/s2 map_res=%.2fm",
+                navi_mode_, planning_horizon_, replan_thresh_, no_replan_thresh_,
+                emergency_time_, planner_manager_->pp_.max_vel_, planner_manager_->pp_.max_acc_,
+                planner_manager_->grid_map_->getResolution());
+    RCLCPP_INFO(node_->get_logger(),
+                "[sys] event=startup_recovery stuck=%.1fs retry_max=%d max_escape=%d "
+                "escape=%.2fm/%.1fs degrade=%.2fm consecutive_fail=%d "
+                "retry_backoff=%.2f-%.2fs traj_lead=%.2fs start_escape=%.2fm "
+                "latch_hard_error=%d diag_verbose=%d motion_enabled=%d",
+                stuck_window_, max_stuck_retry_, max_escape_total_,
+                escape_distance_, escape_duration_, goal_degrade_radius_,
+                max_consecutive_plan_fail_, replan_retry_min_, replan_retry_max_,
+                traj_clock_max_lead_, start_escape_max_offset_,
+                static_cast<int>(status_latch_hard_error_), static_cast<int>(diag_verbose_),
+                static_cast<int>(motion_enabled_));
   }
 
   // 预设航点模式的入口：收到第一帧里程计后，从第一个预设航点开始规划。
