@@ -7,6 +7,7 @@
 //   parameterizeToBspline：给一串点，反解出控制点
 // ============================================================================
 #include "bspline_opt/uniform_bspline.h"
+#include <rclcpp/rclcpp.hpp>
 
 namespace scan_planner
 {
@@ -197,7 +198,9 @@ namespace scan_planner
       {
 
         if (show)
-          cout << "[Check]: Infeasible vel " << i << " :" << vel.transpose() << endl;
+        RCLCPP_DEBUG(rclcpp::get_logger("bspline_opt"),
+                     "[bspline] event=infeasible_vel segment=%d vel=(%.2f,%.2f,%.2f)",
+                     i, vel(0), vel(1), vel(2));
         // 标记为不可行
         fea = false;
 
@@ -228,7 +231,9 @@ namespace scan_planner
       {
 
         if (show)
-          cout << "[Check]: Infeasible acc " << i << " :" << acc.transpose() << endl;
+        RCLCPP_DEBUG(rclcpp::get_logger("bspline_opt"),
+                     "[bspline] event=infeasible_acc segment=%d acc=(%.2f,%.2f,%.2f)",
+                     i, acc(0), acc(1), acc(2));
         fea = false;
 
         for (int j = 0; j < dimension; ++j)
@@ -276,21 +281,26 @@ namespace scan_planner
     // 参数检查：时间间隔必须为正
     if (ts <= 0)
     {
-      cout << "[B-spline]:time step error." << endl;
+RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"),
+                     "[bspline] event=parameterize_failed reason=invalid_ts");
       return;
     }
 
     // 已知点至少要 4 个，否则解不出控制点
     if (point_set.size() <= 3)
     {
-      cout << "[B-spline]:point set have only " << point_set.size() << " points." << endl;
+RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"),
+                     "[bspline] event=parameterize_failed reason=too_few_points points=%zu",
+                     point_set.size());
       return;
     }
 
     // 边界导数必须是 4 个：起点速度、终点速度、起点加速度、终点加速度
     if (start_end_derivative.size() != 4)
     {
-      cout << "[B-spline]:derivatives error." << endl;
+RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"),
+                     "[bspline] event=parameterize_failed reason=bad_derivatives count=%zu",
+                     start_end_derivative.size());
     }
 
     // K = 已知点的个数

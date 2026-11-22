@@ -566,7 +566,8 @@ inline void GridMap::setOccupied(Eigen::Vector3d pos) {
 // 手动设置某格占据/空闲：occ 只允许 0 或 1，否则报错
 inline void GridMap::setOccupancy(Eigen::Vector3d pos, double occ) {
   if (occ != 1 && occ != 0) {
-    cout << "occ value error!" << endl;
+RCLCPP_WARN(rclcpp::get_logger("grid_map"),
+                "[map] event=invalid_set_occupancy value=%.2f", occ);
     return;
   }
 

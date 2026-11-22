@@ -18,8 +18,6 @@
 #include <limits>
 #include <std_msgs/msg/color_rgba.hpp>
 
-using std::cout;
-using std::endl;
 namespace scan_planner
 {
   PlanningVisualization::PlanningVisualization(rclcpp::Node *node)

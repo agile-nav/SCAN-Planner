@@ -6,9 +6,8 @@
 //   直到梯度足够小或达到迭代上限。
 // ============================================================================
 #include <bspline_opt/gradient_descent_optimizer.h>
+#include <rclcpp/rclcpp.hpp>
 
-#define RESET "\033[0m"
-#define RED "\033[31m"
 
 GradientDescentOptimizer::RESULT
 // 优化主循环：算梯度 → 定步长（回溯线搜索）→ 更新变量 → 判断收敛。
@@ -17,13 +16,15 @@ GradientDescentOptimizer::optimize(Eigen::VectorXd &x_init_optimal, double &opt_
     // 参数检查：收敛阈值必须有效，否则直接失败
     if (min_grad_ < 1e-10)
     {
-        cout << RED << "min_grad_ is invalid:" << min_grad_ << RESET << endl;
+RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                    "[bspline] event=gradient_invalid reason=min_grad value=%g", min_grad_);
         return FAILED;
     }
     // 迭代上限也必须有效
     if (iter_limit_ <= 2)
     {
-        cout << RED << "iter_limit_ is invalid:" << iter_limit_ << RESET << endl;
+RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                    "[bspline] event=gradient_invalid reason=iter_limit value=%d", iter_limit_);
         return FAILED;
     }
 
@@ -74,7 +75,8 @@ GradientDescentOptimizer::optimize(Eigen::VectorXd &x_init_optimal, double &opt_
         // 步长算出 NaN/Inf（数值异常）→ 直接失败退出
         if (isnan(alpha) || isinf(alpha))
         {
-            cout << RED << "step size invalid! alpha=" << alpha << RESET << endl;
+RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                        "[bspline] event=gradient_invalid reason=step_size alpha=%g", alpha);
             return FAILED;
         }
 

@@ -87,7 +87,8 @@ public:
     case 2:
       return czs;
     default:
-      std::cout << "\033[31mIllegal axis!\033[0m" << std::endl;
+      // 非法 axis 属于调用方错误；返回空结果，不在纯数学头文件里引入日志依赖。
+      break;
     }
 
     vector<vector<double>> empty;
