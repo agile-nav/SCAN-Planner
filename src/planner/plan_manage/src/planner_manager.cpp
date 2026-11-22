@@ -111,9 +111,11 @@ namespace scan_planner
 
     // 创建 B 样条优化器，并把参数、地图、A* 全部注入给它
     bspline_optimizer_rebound_.reset(new BsplineOptimizer);
+    bspline_optimizer_rebound_->setLogger(node->get_logger());
     bspline_optimizer_rebound_->setParam(node_);
     bspline_optimizer_rebound_->setEnvironment(grid_map_);
     bspline_optimizer_rebound_->a_star_.reset(new AStar);
+    bspline_optimizer_rebound_->a_star_->setLogger(node->get_logger());
     // A* 搜索池按 XY 边长 + Z 深度参数化，默认保持本分支原来的 160×160×100。
     // 池子以"当前这一段的中点"为中心，物理覆盖 = 边长 × 分辨率：
     //   160 格 × 0.05 m = 8 m（XY 每侧 ±4.0 m）；100 格 × 0.05 m = 5 m（Z 每侧 ±2.5 m）。

@@ -47,6 +47,7 @@ void GridMap::initMap(rclcpp::Node *node)
 {
   // 记住节点指针（读参数、发日志、建话题都要用）
   node_ = node;
+  logger_ = node->get_logger();
 
   /* get parameter */
   // 下面这一大段：从 YAML 把所有参数读进 mp_（参数结构体）
@@ -69,7 +70,7 @@ void GridMap::initMap(rclcpp::Node *node)
   load_parameter(node_, "grid_map.tilt_collision_enable", mp_.tilt_collision_enable_, true);
   // 【P11 自过滤】传感器周围 self_filter_radius 球内的点不写入地图；<=0 = 关闭
   load_parameter(node_, "grid_map.self_filter_radius", mp_.self_filter_radius_, 0.0);
-  RCLCPP_INFO(node_->get_logger(), "[GridMap] self_filter_radius = %.2f m (<=0 关闭)", mp_.self_filter_radius_);
+  RCLCPP_INFO(logger_, "[GridMap] self_filter_radius = %.2f m (<=0 关闭)", mp_.self_filter_radius_);
   load_parameter(node_, "grid_map.map_sliding_en", mp_.map_sliding_en_, true);
   load_parameter(node_, "grid_map.map_sliding_thresh", mp_.map_sliding_thresh_, mp_.resolution_);
 
@@ -137,7 +138,7 @@ void GridMap::initMap(rclcpp::Node *node)
   // 传感器类型只允许 lidar / depth，写错了就回退成 lidar
   if (mp_.sensor_type_ != "lidar" && mp_.sensor_type_ != "depth")
   {
-    RCLCPP_ERROR(node_->get_logger(), "[GridMap] invalid grid_map.sensor_type: %s; falling back to lidar",
+    RCLCPP_ERROR(logger_, "[GridMap] invalid grid_map.sensor_type: %s; falling back to lidar",
                  mp_.sensor_type_.c_str());
     mp_.sensor_type_ = "lidar";
   }
@@ -160,7 +161,7 @@ void GridMap::initMap(rclcpp::Node *node)
   mp_.map_sliding_thresh_vox_ = std::max(1, static_cast<int>(std::ceil(mp_.map_sliding_thresh_ * mp_.resolution_inv_)));
 
   // 打印概率模型参数（打印概率本身，便于与 YAML 对照）
-  RCLCPP_INFO(node_->get_logger(),
+  RCLCPP_INFO(logger_,
               "[map] event=init p_hit=%.2f p_miss=%.2f p_min=%.2f p_max=%.2f p_occ=%.2f",
               mp_.p_hit_, mp_.p_miss_, mp_.p_min_, mp_.p_max_, mp_.p_occ_);
 
@@ -1170,7 +1171,7 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr 
   // 还没收到传感器位姿 → 不知道点云在世界系哪儿，先忽略
   if (!md_.has_ray_pose_)
   {
-    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+    RCLCPP_WARN_THROTTLE(logger_, *node_->get_clock(), 1000,
                          "[GridMap] no sensor_pose received for lidar cloud update");
     return;
   }

@@ -110,6 +110,7 @@ private:
 	uint64_t diag_rid_{0};
 	int diag_seg_{-1};
 	bool diag_verbose_{false};
+	rclcpp::Logger logger_{rclcpp::get_logger("path_searching")};
 	const double tie_breaker_ = 1.0 + 1.0 / 10000;
 
 	std::vector<GridNodePtr> gridPath_;
@@ -133,6 +134,7 @@ public:
 	ASTAR_RET AstarSearch(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt);
 
 	void setDiagContext(uint64_t rid, int seg, bool verbose) { diag_rid_ = rid; diag_seg_ = seg; diag_verbose_ = verbose; }
+	void setLogger(const rclcpp::Logger &logger) { logger_ = logger; }
 	double getLastStartAdjust() const { return last_start_adjust_; }
 	double getLastEndAdjust() const { return last_end_adjust_; }
 

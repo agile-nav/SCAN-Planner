@@ -171,6 +171,7 @@ namespace scan_planner
     ReplanFailure last_failure_{ReplanFailure::NONE};
     uint64_t diag_rid_{0};
     bool diag_verbose_{false};
+    rclcpp::Logger logger_{rclcpp::get_logger("bspline_opt")};
 
     /* cost function */
     /* calculate each part of cost function with control points q as input */
@@ -211,6 +212,7 @@ namespace scan_planner
     // 最近一次失败的原因（read-only）
     ReplanFailure lastFailureReason() const { return last_failure_; }
     void setDiagContext(uint64_t rid, bool verbose) { diag_rid_ = rid; diag_verbose_ = verbose; }
+    void setLogger(const rclcpp::Logger &logger) { logger_ = logger; }
     void clearLastFailure() { last_failure_ = ReplanFailure::NONE; }
   private:
 

@@ -131,7 +131,7 @@ namespace scan_planner
       }
       if (best_dir.squaredNorm() < 1e-12)
       {
-        RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+        RCLCPP_WARN(logger_,
                     "[P15] seg(%d,%d) cp=%d no free direction within %.2fm pos=(%.2f,%.2f,%.2f)",
                     seg.first, seg.second, j, 0.8, cps_.points(0, j), cps_.points(1, j), cps_.points(2, j));
         continue;
@@ -139,7 +139,7 @@ namespace scan_planner
       cps_.flag_temp[j] = true;
       cps_.base_point[j].push_back(best_base);
       cps_.direction[j].push_back(best_dir);
-      RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+      RCLCPP_WARN(logger_,
                   "[P15] seg(%d,%d) cp=%d base=(%.2f,%.2f,%.2f) dir=(%.2f,%.2f,%.2f) free_dist=%.2fm",
                   seg.first, seg.second, j,
                   best_base(0), best_base(1), best_base(2),
@@ -148,7 +148,7 @@ namespace scan_planner
       ++filled;
     }
     if (filled > 0)
-      RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+      RCLCPP_WARN(logger_,
                   "[P15] no A-star path for seg(%d,%d); synthesized %d obstacle-normal rebound directions",
                   seg.first, seg.second, filled);
   }
@@ -195,7 +195,7 @@ namespace scan_planner
 
       if (!found)
       {
-        RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+        RCLCPP_WARN(logger_,
                     "[P20] cp=%d still occupied; no free point within %.2fm pos=(%.2f,%.2f,%.2f)",
                     j, 0.8, old_pt(0), old_pt(1), old_pt(2));
         continue;
@@ -206,7 +206,7 @@ namespace scan_planner
       cps_.base_point[j].clear();
       cps_.direction[j].clear();
       moved = true;
-      RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+      RCLCPP_WARN(logger_,
                   "[P20] pulled cp=%d out of inflation by %.2fm from (%.2f,%.2f,%.2f) to (%.2f,%.2f,%.2f)",
                   j, (best_pt - old_pt).norm(),
                   old_pt(0), old_pt(1), old_pt(2),
@@ -309,7 +309,7 @@ namespace scan_planner
           if (in_id >= 0 && out_id >= in_id && out_id < init_points.cols())
             segment_ids.push_back(std::pair<int, int>(in_id, out_id));
           else
-            RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+            RCLCPP_WARN(logger_,
                         "Skip invalid collision segment: in_id=%d, out_id=%d", in_id, out_id);
         }
       }
@@ -330,7 +330,7 @@ namespace scan_planner
         {
           // 【诊断】A* 失败一次打全：类型 / 段号 / 段长 / 两端坐标 / 两端是否在膨胀区(1=障碍 0=空 -1=出图)
           const int id_in = segment_ids[i].first, id_out = segment_ids[i].second;
-          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+          RCLCPP_WARN(logger_,
               "[A-star FAIL] type=%s seg(in_id=%d,out_id=%d) len=%.2fm | in=(%.2f,%.2f,%.2f) occ_in=%d | "
               "out=(%.2f,%.2f,%.2f) occ_out=%d adj_s=%.2fm adj_e=%.2fm rid=%llu",
               replanFailureToString(ret == ASTAR_RET::INIT_ERR ? ReplanFailure::ASTAR_INIT_ERR
@@ -350,7 +350,7 @@ namespace scan_planner
         if (path.size() < 2)
         {
           // A* 返回的路径太短 → 这一段拿不到推出方向，但不必放弃整条优化
-          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+          RCLCPP_WARN(logger_,
                       "A-star path has fewer than 2 points; keep optimizing without a rebound direction rid=%llu seg=%d",
                       static_cast<unsigned long long>(diag_rid_), static_cast<int>(i));
           a_star_paths.push_back(std::vector<Eigen::Vector3d>());
@@ -368,7 +368,7 @@ namespace scan_planner
         // 真的绕不开时，会在收尾的碰撞检查里以 START_IN_OBSTACLE / OPTIMIZE_FAILED 等
         // 更准确的原因失败。
         // 注意：这里不写 last_failure_，避免"还能继续优化"的情况被上报成一次硬失败。
-        RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+        RCLCPP_WARN(logger_,
                     "A-star failed on a collision segment (ret=%d): in=(%.2f,%.2f,%.2f) out=(%.2f,%.2f,%.2f) seg_len=%.2f m; "
                     "keep optimizing without a rebound direction",
                     static_cast<int>(ret), in(0), in(1), in(2), out(0), out(1), out(2), (out - in).norm());
@@ -459,7 +459,7 @@ namespace scan_planner
         // 【P15】没有 A* 路径 → 用“障碍面 + 外法线”兜底给出推出方向（同一套语义）
         if (rebound_fallback_enable_)
           synthesizeReboundFromObstacle(segment_ids[i]);
-        RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+        RCLCPP_WARN(logger_,
                     "Skip invalid A-star path while assigning control point directions");
         continue;
       }
@@ -1103,7 +1103,7 @@ namespace scan_planner
         // 一路找到头都没找到 → 说明机器人本身已经在障碍里
         if (j < 0) // fail to get the obs free point
         {
-          RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"), "The robot is inside an obstacle");
+          RCLCPP_ERROR(logger_, "The robot is inside an obstacle");
           in_id = 0;
         }
 
@@ -1121,7 +1121,7 @@ namespace scan_planner
         // 连终点都在障碍里 → 这条轨迹救不回来，标记为错误并停止
         if (j >= cps_.size) // fail to get the obs free point
         {
-          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+          RCLCPP_WARN(logger_,
                       "Trajectory terminal point is in an obstacle; skip this plan");
 
           force_stop_type_ = STOP_FOR_ERROR;
@@ -1158,7 +1158,7 @@ namespace scan_planner
           if (ret != ASTAR_RET::SUCCESS)
           {
             // 【诊断】A* 失败一次打全：类型 / 段号 / 段长 / 两端坐标 / 两端是否在膨胀区(1=障碍 0=空 -1=出图)
-            RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+            RCLCPP_WARN(logger_,
                 "[A-star FAIL] type=%s seg(in_id=%d,out_id=%d) len=%.2fm | in=(%.2f,%.2f,%.2f) occ_in=%d | "
                 "out=(%.2f,%.2f,%.2f) occ_out=%d adj_s=%.2fm adj_e=%.2fm rid=%llu",
                 replanFailureToString(ret == ASTAR_RET::INIT_ERR ? ReplanFailure::ASTAR_INIT_ERR
@@ -1182,13 +1182,13 @@ namespace scan_planner
             queue.push_back(std::make_pair(seg.first, mid));
             queue.push_back(std::make_pair(mid, seg.second));
             if (++split_cnt % 10 == 1)
-              RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+              RCLCPP_WARN(logger_,
                           "[P15] A-star failed on seg(%d,%d); split at %d and retry (%d splits so far)",
                           seg.first, seg.second, mid, split_cnt);
             continue;
           }
           if (!got_path)
-            RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+            RCLCPP_WARN(logger_,
                         "[P15] A-star failed on the shortest seg(%d,%d); keep optimizing without a rebound direction",
                         seg.first, seg.second);
           resolved.push_back(seg);
@@ -1205,7 +1205,7 @@ namespace scan_planner
           // 【P15】没有 A* 路径 → 用“障碍面 + 外法线”兜底给出推出方向（同一套语义）
           if (rebound_fallback_enable_)
             synthesizeReboundFromObstacle(segment_ids[i]);
-          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+          RCLCPP_WARN(logger_,
                       "Skip invalid A-star path while assigning rebound directions");
           continue;
         }
@@ -1322,7 +1322,7 @@ namespace scan_planner
             }
         }
         else
-          RCLCPP_WARN(rclcpp::get_logger("bspline_opt"), "Failed to generate rebound direction");
+          RCLCPP_WARN(logger_, "Failed to generate rebound direction");
       }
 
       // 告诉 L-BFGS：方向已更新，请中止这一轮、从头重新优化
@@ -1454,7 +1454,7 @@ namespace scan_planner
             // 只有有限次仍失败，才判这条轨迹不可用。
             if (t <= bspline_interval_) // First 3 control points in obstacles!
             {
-              RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+              RCLCPP_WARN(logger_,
                           "First three control points are in obstacles; t=%.3f rid=%llu "
                           "pitch=%.1fdeg roll=%.1fdeg "
                           "cp1=(%.2f,%.2f,%.2f) cp2=(%.2f,%.2f,%.2f) cp3=(%.2f,%.2f,%.2f) cp4=(%.2f,%.2f,%.2f)",
@@ -1470,7 +1470,7 @@ namespace scan_planner
               {
                 ++first_cp_escape_tries;
                 first_cp_retry = true;
-                RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+                RCLCPP_WARN(logger_,
                             "[P20] first control points occupied; pulled out and retry optimization (%d/3) rid=%llu",
                             first_cp_escape_tries,
                             static_cast<unsigned long long>(diag_rid_));
@@ -1497,7 +1497,7 @@ namespace scan_planner
         // 全程没有碰撞 → 这次优化成功
         if (!flag_occ)
         {
-          RCLCPP_DEBUG(rclcpp::get_logger("bspline_opt"),
+          RCLCPP_DEBUG(logger_,
                       "[diag] rid=%llu stage=opt event=lbfgs_done iter=%d time_ms=%.3f total_ms=%.3f cost=%.3f",
                       static_cast<unsigned long long>(diag_rid_), iter_num_, time_ms, total_time_ms, final_cost);
           // 标记成功
@@ -1511,7 +1511,7 @@ namespace scan_planner
           // 避障权重翻倍（逼优化器更重视避障）
           new_lambda2_ *= 2;
 
-          RCLCPP_DEBUG(rclcpp::get_logger("bspline_opt"),
+          RCLCPP_DEBUG(logger_,
                           "[diag] rid=%llu stage=opt event=lbfgs_restart iter=%d time_ms=%.3f",
                           static_cast<unsigned long long>(diag_rid_), iter_num_, time_ms);
         }
@@ -1522,14 +1522,14 @@ namespace scan_planner
         flag_force_return = true;
         // 记录一次中断
         rebound_times++;
-        RCLCPP_DEBUG(rclcpp::get_logger("bspline_opt"),
+        RCLCPP_DEBUG(logger_,
                     "[diag] rid=%llu stage=opt event=lbfgs_rebound iter=%d time_ms=%.3f",
                     static_cast<unsigned long long>(diag_rid_), iter_num_, time_ms);
       }
       else
       {
         // 其它求解错误 → 打警告并放弃本次规划
-        RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+        RCLCPP_WARN(logger_,
                     "Solver error. Return=%d, %s; skip this plan", result, lbfgs::lbfgs_strerror(result));
         if (last_failure_ == ReplanFailure::NONE) last_failure_ = ReplanFailure::OPTIMIZE_FAILED;
         // while (ros::ok());
@@ -1588,7 +1588,7 @@ namespace scan_planner
       }
       else
       {
-        RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"),
+        RCLCPP_ERROR(logger_,
                      "Solver error while refining: return=%d, %s", result, lbfgs::lbfgs_strerror(result));
       }
 

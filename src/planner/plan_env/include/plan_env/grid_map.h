@@ -355,6 +355,7 @@ public:
 private:
 // 参数与数据两个成员：mp_ 存参数，md_ 存运行时数据。
   MappingParameters mp_;
+  rclcpp::Logger logger_{rclcpp::get_logger("grid_map")};
   MappingData md_;
 
   // 平滑后的机体姿态：碰撞查询用 body_pitch_；可视化用四元数与 roll/yaw
@@ -566,7 +567,7 @@ inline void GridMap::setOccupied(Eigen::Vector3d pos) {
 // 手动设置某格占据/空闲：occ 只允许 0 或 1，否则报错
 inline void GridMap::setOccupancy(Eigen::Vector3d pos, double occ) {
   if (occ != 1 && occ != 0) {
-RCLCPP_WARN(rclcpp::get_logger("grid_map"),
+    RCLCPP_WARN(logger_,
                 "[map] event=invalid_set_occupancy value=%.2f", occ);
     return;
   }

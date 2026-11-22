@@ -141,7 +141,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
     {
         static int same_cell_cnt = 0;
         if (++same_cell_cnt % 20 == 1)
-            RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+            RCLCPP_WARN(logger_,
                         "[Astar] start and end map to the same cell (%.2f,%.2f,%.2f); skip degenerate segment",
                         start_pt(0), start_pt(1), start_pt(2));
         return false;
@@ -210,7 +210,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
 
         if (!found)
         {
-            RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+            RCLCPP_WARN(logger_,
                         "[Astar] No free start point within %.2f m of (%.2f, %.2f, %.2f)",
                         kMaxOffset, start_pt(0), start_pt(1), start_pt(2));
             return false;
@@ -219,7 +219,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         // 脱困成功。偶尔打一条日志，便于统计"起点被推出膨胀层"的频率与距离
         static int escape_cnt = 0;
         if (++escape_cnt % 50 == 1)
-            RCLCPP_INFO(rclcpp::get_logger("path_searching"),
+            RCLCPP_INFO(logger_,
                         "[Astar] start point pushed out of obstacle by %.2f m",
                         (escaped_pt - start_pt).norm());
 
@@ -272,7 +272,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
 
         if (!found)
         {
-            RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+            RCLCPP_WARN(logger_,
                         "[Astar] No free end point within %.2f m of (%.2f, %.2f, %.2f)",
                         k_end_max_offset, end_pt(0), end_pt(1), end_pt(2));
             return false;
@@ -280,7 +280,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
 
         static int end_escape_cnt = 0;
         if (++end_escape_cnt % 50 == 1)
-            RCLCPP_INFO(rclcpp::get_logger("path_searching"),
+            RCLCPP_INFO(logger_,
                         "[Astar] end point pushed out of obstacle by %.2f m",
                         (escaped_end_pt - end_pt).norm());
         end_pt = escaped_end_pt;
@@ -325,7 +325,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     // 把起终点转成格子坐标（必要时从障碍里挪出来）
     if (!ConvertToIndexAndAdjustStartEndPoints(start_pt, end_pt, start_idx, end_idx))
     {
-        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+        RCLCPP_WARN(logger_,
                      "[Astar] INIT_ERR: start=(%.2f,%.2f,%.2f) adj_s=%.2fm end=(%.2f,%.2f,%.2f) adj_e=%.2fm pool=±%.2fm",
                      start_pt(0), start_pt(1), start_pt(2), last_start_adjust_,
                      end_pt(0), end_pt(1), end_pt(2), last_end_adjust_,
@@ -394,7 +394,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     // 【诊断】blocked_cnt：被障碍挡掉的邻居数；与 expanded 一起回答"为什么搜不到路"
     int blocked_cnt = 0;
     auto reportAstarFailure = [&](const char *why) {
-      RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+      RCLCPP_WARN(logger_,
                   "[Astar] %s: expanded=%d blocked=%d(%.0f%%) time=%.3fs pool=±%.2fm "
                   "start=(%.2f,%.2f,%.2f) adj_s=%.2fm end=(%.2f,%.2f,%.2f) adj_e=%.2fm rid=%llu seg=%d",
                   why, num_iter, blocked_cnt,
@@ -427,7 +427,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
             // 顺着来路倒推出整条路径
             gridPath_ = retrievePath(current);
             if (diag_verbose_)
-              RCLCPP_INFO(rclcpp::get_logger("path_searching"),
+              RCLCPP_INFO(logger_,
                           "[Astar] SUCCESS rid=%llu seg=%d expanded=%d blocked=%d time=%.3fs pool=±%.2fm path_pts=%zu",
                           static_cast<unsigned long long>(diag_rid_), diag_seg_, num_iter, blocked_cnt,
                           std::chrono::duration<double>(std::chrono::steady_clock::now() - time_1).count(),
@@ -513,7 +513,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
         // 超过 0.2 秒还没搜完 → 放弃本次搜索
         if (std::chrono::duration<double>(time_2 - time_1).count() > 0.2)
         {
-            RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+            RCLCPP_WARN(logger_,
                         "Failed in A-star path search: 0.2 second time limit exceeded");
             reportAstarFailure("SEARCH_ERR(timeout 0.2s)");
             return ASTAR_RET::SEARCH_ERR;
@@ -526,7 +526,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     const double elapsed = std::chrono::duration<double>(time_2 - time_1).count();
     // 如果这次搜索特别慢（超过 0.1 秒），打一条警告方便排查
     if (elapsed > 0.1)
-        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+        RCLCPP_WARN(logger_,
                     "A-star path search took %.3fs, iter=%d", elapsed, num_iter);
 
     // 【诊断 P12】"为什么搜不到路"——把搜索平面**真实看到**的东西打出来（每 5 秒最多一张）。
@@ -592,18 +592,18 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
               ++exp_ring5_e_adj;
           }
         const Eigen::Vector3d mid = (s_adj + e_adj) / 2.0;
-        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+        RCLCPP_WARN(logger_,
                     "[Astar] 平面占用图① 原始: start=(%.2f,%.2f,%.2f) occ=%d | end=(%.2f,%.2f,%.2f) occ=%d | Δz=%.2fm | 原始E周围8格被占=%d/8",
                     start_pt(0), start_pt(1), start_pt(2), occ_s,
                     end_pt(0), end_pt(1), end_pt(2), occ_e,
                     end_pt(2) - start_pt(2), ring_occ);
-        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+        RCLCPP_WARN(logger_,
                     "[Astar] 平面占用图② 搜索实际用: Sa=(%.2f,%.2f,%.2f) occ=%d | Ea=(%.2f,%.2f,%.2f) occ=%d | 推移 Δs=%.2fm(%.2f,%.2f) Δe=%.2fm(%.2f,%.2f)",
                     s_adj(0), s_adj(1), s_adj(2), occ_sa,
                     e_adj(0), e_adj(1), e_adj(2), occ_ea,
                     last_start_adjust_, s_adj(0) - start_pt(0), s_adj(1) - start_pt(1),
                     last_end_adjust_, e_adj(0) - end_pt(0), e_adj(1) - end_pt(1));
-        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+        RCLCPP_WARN(logger_,
                     "[Astar] 平面占用图③ Ea 周围: 3x3被占=%d/8  3x3被搜索到=%d/8  5x5外圈被搜索到=%d/24 | expanded=%d blocked=%d pool=±%.2fm | 1格=0.20m .空 #占据 o出图 S/E=原始 s/e=搜索实际",
                     occ_ring_e_adj, exp_ring3_e_adj, exp_ring5_e_adj, num_iter, blocked_cnt,
                     POOL_SIZE_(0) * step_size_ * 0.5);
@@ -631,7 +631,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
           }
           map += "\n";
         }
-        RCLCPP_WARN(rclcpp::get_logger("path_searching"), "%s", map.c_str());
+        RCLCPP_WARN(logger_, "%s", map.c_str());
       }
     }
 
