@@ -1147,7 +1147,7 @@ namespace scan_planner
     // 1 Hz 诊断：t_cur 与"实际投影进度 + 允许超前量"的关系
     {
       const double t_cur_now = (now - info->start_time_).seconds();
-      RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+      RCLCPP_DEBUG_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                            "[traj-clock] t_wall=%.2f t_proj=%.2f t_cur=%.2f lead=%.2f max_lead=%.2f dur=%.2f traj_id=%d",
                            t_wall, t_proj, t_cur_now, t_cur_now - t_proj, traj_clock_max_lead_,
                            info->duration_, info->traj_id_);
@@ -2127,7 +2127,7 @@ namespace scan_planner
     static string state_str[7] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP"};
 
     // 打印当前状态名（调试用）
-    RCLCPP_INFO(node_->get_logger(), "[FSM] state: %s", state_str[int(exec_state_)].c_str());
+    RCLCPP_DEBUG(node_->get_logger(), "[FSM] state: %s", state_str[int(exec_state_)].c_str());
   }
 
   // ==========================================================================
@@ -2168,9 +2168,9 @@ namespace scan_planner
       // 打印状态；顺便提示是否还缺里程计 / 目标
       printFSMExecState();
       if (!have_odom_)
-        RCLCPP_WARN(node_->get_logger(), "[FSM] no odom");
+        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 10000, "[fsm] event=no_odom");
       if (!trigger_)
-        RCLCPP_INFO(node_->get_logger(), "[FSM] wait for goal");
+        RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 10000, "[fsm] event=wait_goal");
       // 计数清零
       fsm_num = 0;
     }
@@ -3146,7 +3146,7 @@ namespace scan_planner
 
     // 打印规划结果（ROS 日志，带 rid）
     const auto fail_reason = planner_manager_ ? planner_manager_->lastFailureReason() : ReplanFailure::NONE;
-    RCLCPP_INFO(node_->get_logger(),
+    RCLCPP_DEBUG(node_->get_logger(),
                 "[diag] rid=%llu stage=fsm event=replan ok=%d reason=%s traj_id=%d",
                 static_cast<unsigned long long>(replan_rid_), static_cast<int>(plan_success),
                 replanFailureToString(fail_reason), planner_manager_ ? planner_manager_->local_data_.traj_id_ : -1);
@@ -3179,7 +3179,7 @@ namespace scan_planner
             tdir.normalize();
         }
       }
-      RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), diag_throttle_ms_,
+      RCLCPP_DEBUG_THROTTLE(node_->get_logger(), *node_->get_clock(), diag_throttle_ms_,
                            "[replan-geom] rid=%llu ok=%d robot=(%.2f,%.2f,yaw=%.0f) goal=(%.2f,%.2f) d_goal=%.2f "
                            "start=(%.2f,%.2f) target=(%.2f,%.2f) d_target=%.2f bearing=%.0fdeg "
                            "traj_dir=(%.2f,%.2f) traj_dur=%.2f",

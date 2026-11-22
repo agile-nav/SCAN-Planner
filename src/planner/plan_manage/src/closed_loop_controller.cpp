@@ -400,7 +400,7 @@ private:
       command = geometry_msgs::msg::Twist();
     // 1 Hz 诊断（纯观测）：exec_time 与"实测位置在轨迹上的投影"的差 = 参考超前量
     {
-      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+      RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 1000,
                            "[ctl-clock] exec_time=%.2f t_proj=%.2f lead=%.2f dur=%.2f pos_err=%.2f traj_id=%lld",
                            exec_time_, t_proj, exec_time_ - t_proj, traj_duration_,
                            pos_error.norm(), static_cast<long long>(traj_id_));

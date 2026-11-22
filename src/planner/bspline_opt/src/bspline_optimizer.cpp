@@ -1497,7 +1497,7 @@ namespace scan_planner
         // 全程没有碰撞 → 这次优化成功
         if (!flag_occ)
         {
-          RCLCPP_INFO(rclcpp::get_logger("bspline_opt"),
+          RCLCPP_DEBUG(rclcpp::get_logger("bspline_opt"),
                       "[diag] rid=%llu stage=opt event=lbfgs_done iter=%d time_ms=%.3f total_ms=%.3f cost=%.3f",
                       static_cast<unsigned long long>(diag_rid_), iter_num_, time_ms, total_time_ms, final_cost);
           // 标记成功
@@ -1511,7 +1511,7 @@ namespace scan_planner
           // 避障权重翻倍（逼优化器更重视避障）
           new_lambda2_ *= 2;
 
-          RCLCPP_INFO(rclcpp::get_logger("bspline_opt"),
+          RCLCPP_DEBUG(rclcpp::get_logger("bspline_opt"),
                           "[diag] rid=%llu stage=opt event=lbfgs_restart iter=%d time_ms=%.3f",
                           static_cast<unsigned long long>(diag_rid_), iter_num_, time_ms);
         }
@@ -1522,7 +1522,7 @@ namespace scan_planner
         flag_force_return = true;
         // 记录一次中断
         rebound_times++;
-        RCLCPP_INFO(rclcpp::get_logger("bspline_opt"),
+        RCLCPP_DEBUG(rclcpp::get_logger("bspline_opt"),
                     "[diag] rid=%llu stage=opt event=lbfgs_rebound iter=%d time_ms=%.3f",
                     static_cast<unsigned long long>(diag_rid_), iter_num_, time_ms);
       }

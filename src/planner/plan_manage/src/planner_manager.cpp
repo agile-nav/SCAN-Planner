@@ -162,7 +162,7 @@ namespace scan_planner
     // 下面几行只是调试打印：每次调用打一条分隔线并显示起终点
     last_failure_ = ReplanFailure::NONE;
     static int count = 0;
-    RCLCPP_INFO(node_->get_logger(),
+    RCLCPP_DEBUG(node_->get_logger(),
                 "[rebo replan] #%d rid=%llu start=(%.2f,%.2f,%.2f) vel=(%.2f,%.2f,%.2f) "
                 "goal=(%.2f,%.2f,%.2f) target_vel=(%.2f,%.2f,%.2f)",
                 count++, static_cast<unsigned long long>(diag_rid_),
@@ -417,7 +417,7 @@ namespace scan_planner
     // STEP 5：后端优化（L-BFGS）。同时优化平滑度、避障、速度/加速度限制。
     // flag_step_1_success = 优化是否收敛成功。
     bool flag_step_1_success = bspline_optimizer_rebound_->BsplineOptimizeTrajRebound(ctrl_pts, ts);
-    RCLCPP_INFO(node_->get_logger(), "[diag] rid=%llu stage=opt event=step1 ok=%d t_init=%.3f",
+    RCLCPP_DEBUG(node_->get_logger(), "[diag] rid=%llu stage=opt event=step1 ok=%d t_init=%.3f",
                 static_cast<unsigned long long>(diag_rid_), static_cast<int>(flag_step_1_success), t_init);
     if (!flag_step_1_success)
     {
@@ -525,7 +525,7 @@ namespace scan_planner
     updateTrajInfo(pos, node_->now());
 
     // 打印三个阶段的总耗时
-    RCLCPP_INFO(node_->get_logger(),
+    RCLCPP_DEBUG(node_->get_logger(),
                 "[diag] rid=%llu stage=opt event=total t_init=%.3f t_opt=%.3f t_refine=%.3f total=%.3f",
                 static_cast<unsigned long long>(diag_rid_), t_init, t_opt, t_refine, t_init + t_opt + t_refine);
 
@@ -756,7 +756,7 @@ namespace scan_planner
     // std::cout << "ratio: " << ratio << std::endl;
     // 第一步：把轨迹时间拉长 ratio 倍，并重新采样/拟合，得到新控制点
     reparamBspline(traj, start_end_derivative, ratio, ctrl_pts, ts, t_inc);
-    RCLCPP_INFO(node_->get_logger(), "[diag] rid=%llu stage=feas event=refine ratio=%.3f ts=%.3f",
+    RCLCPP_DEBUG(node_->get_logger(), "[diag] rid=%llu stage=feas event=refine ratio=%.3f ts=%.3f",
                 static_cast<unsigned long long>(diag_rid_), ratio, ts);
 
     // 用新控制点重建轨迹对象
