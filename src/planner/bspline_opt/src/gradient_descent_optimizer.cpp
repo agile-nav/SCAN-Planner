@@ -16,14 +16,14 @@ GradientDescentOptimizer::optimize(Eigen::VectorXd &x_init_optimal, double &opt_
     // 参数检查：收敛阈值必须有效，否则直接失败
     if (min_grad_ < 1e-10)
     {
-RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+RCLCPP_WARN(logger_,
                     "[bspline] event=gradient_invalid reason=min_grad value=%g", min_grad_);
         return FAILED;
     }
     // 迭代上限也必须有效
     if (iter_limit_ <= 2)
     {
-RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+RCLCPP_WARN(logger_,
                     "[bspline] event=gradient_invalid reason=iter_limit value=%d", iter_limit_);
         return FAILED;
     }
@@ -75,7 +75,7 @@ RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
         // 步长算出 NaN/Inf（数值异常）→ 直接失败退出
         if (isnan(alpha) || isinf(alpha))
         {
-RCLCPP_WARN(rclcpp::get_logger("bspline_opt"),
+RCLCPP_WARN(logger_,
                         "[bspline] event=gradient_invalid reason=step_size alpha=%g", alpha);
             return FAILED;
         }

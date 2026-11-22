@@ -390,7 +390,8 @@ namespace scan_planner
     Eigen::MatrixXd ctrl_pts;
     // STEP 3：把上面那串点拟合（参数化）成一条 B 样条，得到“控制点” ctrl_pts。
     // B 样条是后续优化的载体：优化器只调整这些控制点。
-    UniformBspline::parameterizeToBspline(ts, point_set, start_end_derivatives, ctrl_pts);
+    UniformBspline::parameterizeToBspline(ts, point_set, start_end_derivatives, ctrl_pts,
+                                          node_->get_logger());
     if (ctrl_pts.size() == 0)
     {
       continuous_failures_count_++;
@@ -438,6 +439,7 @@ namespace scan_planner
     /*** STEP 3: REFINE(RE-ALLOCATE TIME) IF NECESSARY ***/
     // 用控制点构造一条三次 B 样条——这就是候选轨迹
     UniformBspline pos = UniformBspline(ctrl_pts, 3, ts);
+    pos.setLogger(node_->get_logger());
     // STEP 6：可行性检查。把物理限制告诉轨迹，然后看它有没有超速/超加速度。
     pos.setPhysicalLimits(pp_.max_vel_, pp_.max_acc_, pp_.feasibility_tolerance_);
 
@@ -472,6 +474,7 @@ namespace scan_planner
       if (flag_step_2_success)
       {
         pos = UniformBspline(optimal_control_points, 3, ts);
+        pos.setLogger(node_->get_logger());
         // 【P21】细化后的起点必须仍然贴着规划起点，否则控制器会长期 t_proj=0
         const double head_err = (pos.evaluateDeBoorT(0.0).head<2>() - start_pt.head<2>()).norm();
         if (pp_.max_head_mismatch_ > 0.0 && head_err > pp_.max_head_mismatch_)
@@ -551,7 +554,9 @@ namespace scan_planner
     }
 
     // 把这条静止轨迹记录进 local_data_（这样控制器会立刻刹停）
-    updateTrajInfo(UniformBspline(control_points, 3, 1.0), node_->now());
+    UniformBspline stop_traj(control_points, 3, 1.0);
+    stop_traj.setLogger(node_->get_logger());
+    updateTrajInfo(stop_traj, node_->now());
 
     return true;
   }
@@ -572,7 +577,9 @@ namespace scan_planner
     }
 
     // 直接写入 local_data_，随后由 FSM 发布；控制器只跟踪，不再做规划检查
-    updateTrajInfo(UniformBspline(control_points, 3, ts), node_->now());
+    UniformBspline backup_traj(control_points, 3, ts);
+    backup_traj.setLogger(node_->get_logger());
+    updateTrajInfo(backup_traj, node_->now());
     return true;
   }
 
@@ -763,6 +770,7 @@ namespace scan_planner
 
     // 用新控制点重建轨迹对象
     traj = UniformBspline(ctrl_pts, 3, ts);
+    traj.setLogger(node_->get_logger());
 
     // 第二步：把新轨迹按固定时间间隔采样成“参考点” ref_pts_
     double t_step = traj.getTimeSum() / (ctrl_pts.cols() - 3);
@@ -875,7 +883,8 @@ namespace scan_planner
       point_set.push_back(bspline.evaluateDeBoorT(time));
     }
     // 第三步：用这些点重新拟合出新的控制点
-    UniformBspline::parameterizeToBspline(dt, point_set, start_end_derivative, ctrl_pts);
+    UniformBspline::parameterizeToBspline(dt, point_set, start_end_derivative, ctrl_pts,
+                                          node_->get_logger());
   }
 
   // 以 goal 为圆心由近到远找一个"既站得住、又真的走得过去"的点。

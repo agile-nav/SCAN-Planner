@@ -156,6 +156,7 @@ namespace scan_planner
     Eigen::VectorXd knot(u_.rows() - 2);
     knot = u_.segment(1, u_.rows() - 2);
     derivative.setKnot(knot);
+    derivative.setLogger(logger_);
 
     return derivative;
   }
@@ -198,7 +199,7 @@ namespace scan_planner
       {
 
         if (show)
-        RCLCPP_DEBUG(rclcpp::get_logger("bspline_opt"),
+        RCLCPP_DEBUG(logger_,
                      "[bspline] event=infeasible_vel segment=%d vel=(%.2f,%.2f,%.2f)",
                      i, vel(0), vel(1), vel(2));
         // 标记为不可行
@@ -231,7 +232,7 @@ namespace scan_planner
       {
 
         if (show)
-        RCLCPP_DEBUG(rclcpp::get_logger("bspline_opt"),
+        RCLCPP_DEBUG(logger_,
                      "[bspline] event=infeasible_acc segment=%d acc=(%.2f,%.2f,%.2f)",
                      i, acc(0), acc(1), acc(2));
         fea = false;
@@ -276,12 +277,13 @@ namespace scan_planner
 //   解这个方程组就得到 (K+6) 个控制点。
   void UniformBspline::parameterizeToBspline(const double &ts, const vector<Eigen::Vector3d> &point_set,
                                              const vector<Eigen::Vector3d> &start_end_derivative,
-                                             Eigen::MatrixXd &ctrl_pts)
+                                             Eigen::MatrixXd &ctrl_pts,
+                                             const rclcpp::Logger &logger)
   {
     // 参数检查：时间间隔必须为正
     if (ts <= 0)
     {
-RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"),
+      RCLCPP_ERROR(logger,
                      "[bspline] event=parameterize_failed reason=invalid_ts");
       return;
     }
@@ -289,7 +291,7 @@ RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"),
     // 已知点至少要 4 个，否则解不出控制点
     if (point_set.size() <= 3)
     {
-RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"),
+      RCLCPP_ERROR(logger,
                      "[bspline] event=parameterize_failed reason=too_few_points points=%zu",
                      point_set.size());
       return;
@@ -298,7 +300,7 @@ RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"),
     // 边界导数必须是 4 个：起点速度、终点速度、起点加速度、终点加速度
     if (start_end_derivative.size() != 4)
     {
-RCLCPP_ERROR(rclcpp::get_logger("bspline_opt"),
+      RCLCPP_ERROR(logger,
                      "[bspline] event=parameterize_failed reason=bad_derivatives count=%zu",
                      start_end_derivative.size());
     }

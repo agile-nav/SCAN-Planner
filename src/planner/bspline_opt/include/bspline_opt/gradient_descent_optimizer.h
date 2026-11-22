@@ -16,6 +16,7 @@
 #include <limits>
 #include <vector>
 #include <Eigen/Eigen>
+#include <rclcpp/rclcpp.hpp>
 
 using namespace std;
 
@@ -49,6 +50,7 @@ public:
   void set_xtol_rel(double xtol_rel) { xtol_rel_ = xtol_rel; }
   void set_xtol_abs(double xtol_abs) { xtol_abs_ = xtol_abs; }
   void set_min_grad(double min_grad) { min_grad_ = min_grad; }
+  void setLogger(const rclcpp::Logger &logger) { logger_ = logger; }
 
 // 开始优化：从初值出发反复迭代，返回结果状态，最优代价写入 opt_f。
   RESULT optimize(Eigen::VectorXd &x_init_optimal, double &opt_f);
@@ -61,6 +63,7 @@ private:
   double xtol_abs_;
   double min_grad_;
   double time_limit_;
+  rclcpp::Logger logger_{rclcpp::get_logger("bspline_opt")};
   void *f_data_;
   objfunDef objfun_;
 };

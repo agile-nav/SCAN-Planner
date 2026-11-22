@@ -92,6 +92,7 @@ private:
     for (size_t i = 0; i < msg->knots.size(); ++i) knots(i) = msg->knots[i];
     // 构造 B 样条，再用真实节点覆盖
     pos_traj = UniformBspline(pos_pts, msg->order, 0.1);
+    pos_traj.setLogger(get_logger());
     pos_traj.setKnot(knots);
     return true;
   }

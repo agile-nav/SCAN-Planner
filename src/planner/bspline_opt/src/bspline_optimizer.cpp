@@ -1435,6 +1435,7 @@ namespace scan_planner
 
         // 用优化后的控制点重建轨迹，自己再检查一遍碰撞
         UniformBspline traj = UniformBspline(cps_.points, 3, bspline_interval_);
+        traj.setLogger(logger_);
         double tm, tmp;
         traj.getTimeSpan(tm, tmp);
         double t_step = (tmp - tm) / ((traj.evaluateDeBoorT(tmp) - traj.evaluateDeBoorT(tm)).norm() / grid_map_->getResolution());
@@ -1593,6 +1594,7 @@ namespace scan_planner
       }
 
       UniformBspline traj = UniformBspline(cps_.points, 3, bspline_interval_);
+      traj.setLogger(logger_);
       double tm, tmp;
       traj.getTimeSpan(tm, tmp);
       double t_step = (tmp - tm) / ((traj.evaluateDeBoorT(tmp) - traj.evaluateDeBoorT(tm)).norm() / grid_map_->getResolution()); // Step size is defined as the maximum size that can passes through every grid.

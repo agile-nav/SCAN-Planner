@@ -27,6 +27,7 @@
 #include <Eigen/Eigen>
 #include <algorithm>
 #include <iostream>
+#include <rclcpp/rclcpp.hpp>
 
 using namespace std;
 
@@ -64,6 +65,8 @@ namespace scan_planner
 
     // 物理限制：最大速度/最大加速度，以及允许超限的容差比例
     double limit_vel_, limit_acc_, feasibility_tolerance_; // physical limits and feasibility tolerance
+    // 日志：默认模块 logger；持有节点的调用方通过 setLogger 注入
+    rclcpp::Logger logger_{rclcpp::get_logger("bspline_opt")};
 
   public:
     /* ---------- 构造 / 析构 ---------- */
@@ -72,6 +75,7 @@ namespace scan_planner
     // 用控制点/阶数/时间间隔构造（内部会生成节点向量）
     UniformBspline(const Eigen::MatrixXd &points, const int &order, const double &interval);
     ~UniformBspline();
+    void setLogger(const rclcpp::Logger &logger) { logger_ = logger; }
 
     // 取控制点矩阵（内联版；另有带下划线的 getControlPoint 同义）
     Eigen::MatrixXd get_control_points(void) { return control_points_; }
@@ -116,7 +120,8 @@ namespace scan_planner
     // 输出: ctrl_pts —— 反解出的控制点矩阵(3 x N)。解的是线性方程组，见 .cpp
     static void parameterizeToBspline(const double &ts, const vector<Eigen::Vector3d> &point_set,
                                       const vector<Eigen::Vector3d> &start_end_derivative,
-                                      Eigen::MatrixXd &ctrl_pts);
+                                      Eigen::MatrixXd &ctrl_pts,
+                                      const rclcpp::Logger &logger = rclcpp::get_logger("bspline_opt"));
 
     /* check feasibility, adjust time */
     /* ---------- 可行性检查 + 时间重分配 ---------- */

@@ -219,6 +219,7 @@ private:
     for (size_t i = 0; i < msg->knots.size(); ++i) knots(i) = msg->knots[i];
     // 用控制点+阶数构造 B 样条（时间间隔先随便给 0.1，下面用真实节点覆盖）
     UniformBspline position(points, msg->order, 0.1);
+    position.setLogger(get_logger());
     // 用消息里的真实节点向量替换
     position.setKnot(knots);
     // 保存位置曲线和速度曲线
