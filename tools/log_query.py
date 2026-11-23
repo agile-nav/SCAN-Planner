@@ -209,6 +209,7 @@ def cmd_timeline(records, args):
         "state", "mission_done", "mission_abandoned", "goal_degraded", "goal_truncated",
         "goal_degrade_rollback", "stuck_retry", "backup_start", "backup_done",
         "backup_short", "replan_failed", "search_failed",
+        "path_cycle", "path_too_long", "memory_error", "emergency_stop_failed",
     }
     for r in records:
         if r["event"] in keep:

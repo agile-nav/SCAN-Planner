@@ -100,7 +100,7 @@ private:
 
 	inline int checkOccupancy(const Eigen::Vector3d &pos, const double yaw) { return grid_map_->getInflateOccupancy(pos, yaw); }
 
-	std::vector<GridNodePtr> retrievePath(GridNodePtr current);
+	bool retrievePath(GridNodePtr current, std::vector<GridNodePtr> &path);
 
 	double step_size_, inv_step_size_;
 	Eigen::Vector3d center_;

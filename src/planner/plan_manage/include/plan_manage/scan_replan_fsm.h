@@ -205,6 +205,9 @@ namespace scan_planner
     rclcpp::Time last_health_log_time_{0, 0, RCL_ROS_TIME};
     rclcpp::Time last_diag_pub_time_{0, 0, RCL_ROS_TIME};
     bool enable_fail_safe_{true}, need_hover_stop_{false};
+    // 重规划分配失败（std::bad_alloc）后置位；下一次收尾统一转 EMERGENCY_STOP，
+    // 避免异常继续向外传播导致节点退出。
+    bool memory_error_latched_{false};
     FSM_EXEC_STATE exec_state_{INIT};
     int continuously_called_times_{0};
     // 短周期失败计数：服务于脱困后撤（分工说明见 max_consecutive_plan_fail_）
@@ -365,6 +368,8 @@ namespace scan_planner
     // ---------- 辅助函数（内部使用） ----------
     /* helper functions */
     bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj); // front-end and back-end method
+    bool callReboundReplanImpl(bool flag_use_poly_init, bool flag_randomPolyTraj);
+    void handleReplanMemoryError(double plan_ms);
     bool callEmergencyStop(Eigen::Vector3d stop_pos);                          // front-end and back-end method
     bool planFromCurrentTraj();
     void setStartStateFromOdomOrCurrentTraj();

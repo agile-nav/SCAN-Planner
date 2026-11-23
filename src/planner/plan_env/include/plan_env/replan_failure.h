@@ -29,6 +29,7 @@ enum class ReplanFailure
   EMERGENCY_TF_JUMP_FAIL,         // TF 跳变后重规划失败急停
   EMERGENCY_TF_MISSING_COLLISION, // TF 缺失期间又检测到碰撞急停
   MAX_REPLAN_FAIL,                // 连续失败达上限
+  MEMORY_ERROR,                   // 重规划期间内存分配失败（std::bad_alloc）
   UNKNOWN
 };
 
@@ -52,6 +53,7 @@ inline bool replanFailureNeedsIntervention(ReplanFailure f)
   case ReplanFailure::TARGET_OCCUPIED:  // 目标不可达
   case ReplanFailure::MAX_REPLAN_FAIL:  // 连续失败超限
   case ReplanFailure::EMERGENCY_SAFETY: // 碰撞急停
+  case ReplanFailure::MEMORY_ERROR:     // 规划器内存分配失败，进程状态不可信
     return true;
   default:
     return false;
@@ -97,6 +99,8 @@ inline const char *replanFailureToString(ReplanFailure f)
     return "emergency_tf_missing_collision";
   case ReplanFailure::MAX_REPLAN_FAIL:
     return "max_replan_fail";
+  case ReplanFailure::MEMORY_ERROR:
+    return "memory_error";
   case ReplanFailure::UNKNOWN:
     return "unknown";
   }

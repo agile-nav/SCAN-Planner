@@ -26,6 +26,7 @@
 #include <chrono>
 #include <cstdio>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <tf2/time.hpp>
 #include <tf2/exceptions.hpp>
@@ -2212,6 +2213,7 @@ namespace scan_planner
     //   触发脱困后撤，或直接被判定为"失败太多"。
     replan_fail_count_ = 0;
     consecutive_plan_fails_ = 0;
+    memory_error_latched_ = false;
     // 脱困状态也必须复位：否则 escape_active_ 残留会让下一条轨迹被当成
     //   "后撤轨迹"整段劫持（EXEC_TRAJ 的 escape 分支会提前 return）。
     escape_active_ = false;
@@ -2829,6 +2831,18 @@ namespace scan_planner
 
   void SCANReplanFSM::finishProcess()
   {
+    // 重规划期间出现 std::bad_alloc：进程状态已不可信，直接转入急停。
+    // 这里统一处理，避免 GEN_NEW_TRAJ/REPLAN_TRAJ 的失败分支把状态又改回去。
+    if (memory_error_latched_)
+    {
+      memory_error_latched_ = false;
+      need_hover_stop_ = true;
+      flag_escape_emergency_ = true;
+      setStatusReason(ReplanFailure::MEMORY_ERROR);
+      changeFSMExecState(EMERGENCY_STOP, "MEMORY_ERROR");
+      return;
+    }
+
     // 【连续失败兜底】"目标不可达 / 反复 optimize_failed"这类场景没有出路：
     //   脱困后撤能挪动一点、replan_fail_count_ 会被清零，于是会无限「退避重试→后撤」。
     //   consecutive_plan_fails_ 的清零条件要精确说清（很容易记错）：
@@ -3226,6 +3240,42 @@ namespace scan_planner
   // flag_randomPolyTraj：是否在初始猜测里插一个随机点（用来跳出卡死）。
   bool SCANReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
+    // 已经确认内存状态不可信：本轮不再尝试分配，交由 finishProcess() 转急停。
+    if (memory_error_latched_)
+      return false;
+    const auto plan_t0 = std::chrono::steady_clock::now();
+    try
+    {
+      return callReboundReplanImpl(flag_use_poly_init, flag_randomPolyTraj);
+    }
+    catch (const std::bad_alloc &)
+    {
+      const double plan_ms =
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - plan_t0).count();
+      handleReplanMemoryError(plan_ms);
+      return false;
+    }
+  }
+
+  void SCANReplanFSM::handleReplanMemoryError(double plan_ms)
+  {
+    memory_error_latched_ = true;
+    RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                          "[fsm] event=memory_error rid=%llu traj_id=%d reason=bad_alloc "
+                          "action=emergency_stop plan_ms=%.1f",
+                          static_cast<unsigned long long>(replan_rid_),
+                          planner_manager_ ? planner_manager_->local_data_.traj_id_ : -1,
+                          plan_ms);
+    setStatusReason(ReplanFailure::MEMORY_ERROR);
+    recordReplanResult(false, ReplanFailure::MEMORY_ERROR, plan_ms);
+    // 当前线程已经无法安全继续本轮规划：只置位，由 finishProcess() 统一切急停。
+    // 不在这里 changeFSMExecState()，否则调用方会紧接着把状态改回 GEN_NEW_TRAJ/REPLAN_TRAJ。
+    need_hover_stop_ = true;
+    flag_escape_emergency_ = true;
+  }
+
+  bool SCANReplanFSM::callReboundReplanImpl(bool flag_use_poly_init, bool flag_randomPolyTraj)
+  {
     const auto plan_t0 = std::chrono::steady_clock::now();
     auto plan_ms = [&]() {
       return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - plan_t0).count();
@@ -3441,6 +3491,8 @@ namespace scan_planner
   // 紧急停止：让总管生成一条“停在 stop_pos”的轨迹，并发布出去。
   bool SCANReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)
   {
+    try
+    {
 
     // 让规划总管生成一条“停在原地”的轨迹
     planner_manager_->EmergencyStop(stop_pos);
@@ -3477,6 +3529,16 @@ namespace scan_planner
     publishLocalPath(info->position_traj_);
 
     return true;
+    }
+    catch (const std::bad_alloc &)
+    {
+      RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                            "[fsm] event=emergency_stop_failed rid=%llu traj_id=%d "
+                            "reason=bad_alloc action=stop_on_controller_timeout",
+                            static_cast<unsigned long long>(replan_rid_),
+                            planner_manager_ ? planner_manager_->local_data_.traj_id_ : -1);
+      return false;
+    }
   }
 
   // 查询“参考坐标系 → world 系”的变换。

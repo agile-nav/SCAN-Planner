@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cmath>
 #include <string>
+#include <unordered_set>
 
 using namespace std;
 using namespace Eigen;
@@ -112,20 +113,54 @@ double AStar::getEuclHeu(GridNodePtr node1, GridNodePtr node2)
 }
 
 // 找到终点后，顺着 cameFrom 一路往回走，得到整条路径（此时是“终点→起点”的顺序）。
-vector<GridNodePtr> AStar::retrievePath(GridNodePtr current)
+// 返回 false 表示 cameFrom 链异常（成环或长度超过搜索池），此时不返回半条路径。
+bool AStar::retrievePath(GridNodePtr current, vector<GridNodePtr> &path)
 {
-    vector<GridNodePtr> path;
-    // 从终点开始，逐个把节点加入路径
-    path.push_back(current);
-
-    // 顺着“我是从哪来的(cameFrom)”一路往回走，直到起点
-    while (current->cameFrom != NULL)
+    path.clear();
+    if (current == nullptr)
     {
-        current = current->cameFrom;
-        path.push_back(current);
+        RCLCPP_WARN(logger_,
+                    "[astar] event=path_cycle rid=%llu seg=%d reason=null_node path_len=0 limit=%zu",
+                    static_cast<unsigned long long>(diag_rid_), diag_seg_,
+                    static_cast<size_t>(POOL_SIZE_(0)) * POOL_SIZE_(1) * POOL_SIZE_(2));
+        return false;
     }
 
-    return path;
+    const size_t max_path = static_cast<size_t>(POOL_SIZE_(0)) * POOL_SIZE_(1) * POOL_SIZE_(2);
+    unordered_set<GridNodePtr> visited;
+    visited.reserve(std::min<size_t>(max_path, 1024));
+
+    while (current != nullptr)
+    {
+        // cameFrom 链只能沿父节点前进；重复访问同一节点说明链成环。
+        if (!visited.insert(current).second)
+        {
+            RCLCPP_WARN(logger_,
+                        "[astar] event=path_cycle rid=%llu seg=%d path_len=%zu limit=%zu node=(%d,%d,%d)",
+                        static_cast<unsigned long long>(diag_rid_), diag_seg_,
+                        path.size(), max_path,
+                        current->index(0), current->index(1), current->index(2));
+            path.clear();
+            return false;
+        }
+
+        // 无环时，路径最多覆盖搜索池中的每个节点一次。
+        if (path.size() >= max_path)
+        {
+            RCLCPP_WARN(logger_,
+                        "[astar] event=path_too_long rid=%llu seg=%d path_len=%zu limit=%zu node=(%d,%d,%d)",
+                        static_cast<unsigned long long>(diag_rid_), diag_seg_,
+                        path.size(), max_path,
+                        current->index(0), current->index(1), current->index(2));
+            path.clear();
+            return false;
+        }
+
+        path.push_back(current);
+        current = current->cameFrom;
+    }
+
+    return true;
 }
 
 // 把世界坐标转成格子坐标；如果起点或终点正好落在障碍里，
@@ -432,8 +467,15 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
             // printf("\033[34mA star iter:%d, time:%.3f\033[0m\n",num_iter, (time_2 - time_1).toSec()*1000);
             // if((time_2 - time_1).toSec() > 0.1)
             //     ROS_WARN("Time consume in A star path finding is %f", (time_2 - time_1).toSec() );
-            // 顺着来路倒推出整条路径
-            gridPath_ = retrievePath(current);
+            // 顺着来路倒推出整条路径；如果 cameFrom 链异常，本次搜索按失败处理，
+            // 不把半条/成环的路径交给优化器。
+            vector<GridNodePtr> path;
+            if (!retrievePath(current, path))
+            {
+                gridPath_.clear();
+                return ASTAR_RET::SEARCH_ERR;
+            }
+            gridPath_.swap(path);
             if (diag_verbose_)
               RCLCPP_INFO(logger_,
                           "[Astar] SUCCESS rid=%llu seg=%d expanded=%d blocked=%d time=%.3fs pool=±%.2fm path_pts=%zu",
