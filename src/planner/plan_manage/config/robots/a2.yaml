@@ -41,8 +41,10 @@ scan_planner_node:
     # 实测：A* 失败全是 SEARCH_ERR(ret=2)、失败段长中位 1.56 m/最大 3.35 m，
     # 端点都在 100 的池子内，但绕行通路可能被池子卡住 ⇒ 本轮实验放大到 160
     manager.a_star_pool_size: 160
-    manager.max_vel: 1.0
-    optimization.max_vel: 1.0
+    manager.max_vel: 0.7
+    optimization.max_vel: 0.7
+    manager.max_acc: 1.0
+    optimization.max_acc: 1.0
     # 局部滑动地图尺寸(米)与更新范围(米)
     grid_map.sliding_map_size_x: 12.0
     grid_map.sliding_map_size_y: 12.0
@@ -63,8 +65,8 @@ scan_planner_node:
     grid_map.fy: 609.22021484375
     grid_map.double_cylinder_radius: 0.25
     grid_map.double_cylinder_offset: 0.18
-    grid_map.self_filter_radius: 0.45
-    # 【P11 自过滤】滤掉机器人自身回波（0=关闭）。先试 0.45，看 A* 的 expanded 是否明显变大
+    grid_map.self_filter_radius: 0.3
+    # 【P11 自过滤】滤掉机器人自身回波（0=关闭）；当前取 0.3 m。
     # 竖直膨胀（注意：参数名与论文的 d_up/d_down 相反，按代码口径填）：
     #   保护区间 = [h_c − z_up, h_c + z_down]，h_c 为机身中心离地高度
     grid_map.obstacles_inflation_z_up: 0.1
@@ -73,15 +75,15 @@ scan_planner_node:
 closed_loop_controller:
   ros__parameters:
     # 闭环控制器的前进速度上限(米/秒)
-    max_vx: 1.0
-    max_vy: 0.5
+    max_vx: 0.7
+    max_vy: 0.3
     # 转向角速度上限(弧度/秒)
-    max_vyaw: 1.2
+    max_vyaw: 0.8
 
 quadruped_kinematic_sim:
   ros__parameters:
     # 仅在仿真下使用；与上面的速度上限保持一致
-    max_vx: 1.0
+    max_vx: 0.7
 
 # 以下不是节点参数，由 run.launch.py 读取使用
 robot_topics:
