@@ -2978,14 +2978,16 @@ namespace scan_planner
       return false;
     }
 
-    // 让规划总管做一次局部重规划（普通方式）
-    bool success = callReboundReplan(true, false);
-    // 第一次失败 → 再用“带随机点”的方式试一次（有助于跳出卡死）
+    // 优先沿用上一段轨迹的剩余部分；失败后再退化到多项式初值/随机初值。
+    bool success = callReboundReplan(false, false);
+    if (!success)
+      success = callReboundReplan(true, false);
+    // 仍然失败 → 用“带随机点”的方式试一次（有助于跳出卡死）
     if (!success)
     {
       success = callReboundReplan(true, true);
       if (!success)
-        // 两次都失败 → 放弃本轮
+        // 都失败 → 放弃本轮
         return false;
     }
 
