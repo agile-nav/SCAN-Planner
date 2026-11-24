@@ -1473,7 +1473,8 @@ namespace scan_planner
       // 【连续失败超限】任务已被主动放弃：必须排在 !status_have_goal_ 之前，
       //   否则会因为目标已清空而被报成 idle，上层看不到"这次任务失败了"。
       //   收到新目标时由 armPlannerStatus/notePlanResult 清除。
-      state = "failed";
+      // TEMP: 临时测试，不上报 failed；放弃任务后回 idle
+      state = "idle";
     }
     else if (!status_have_goal_)
     {
@@ -1589,7 +1590,8 @@ namespace scan_planner
               else
               {
                 // 未启用锁存（默认）时，硬错误也只报 failed，故障消失即可自恢复
-                state = "failed";
+                // TEMP: 临时测试，不上报 failed；持续问题按 running 处理
+                state = "running";
               }
             }
           }
@@ -1654,7 +1656,8 @@ namespace scan_planner
     if (!status_have_goal_)                       return "idle";
     if (status_is_stop_)                          return "idle";
     if (status_error_latched_)                    return "error";
-    if (status_problem_since_.nanoseconds() != 0) return "failed";  // 失败计时中（近似）
+    // TEMP: 临时测试，不上报 failed；持续问题按 running 处理
+    if (status_problem_since_.nanoseconds() != 0) return "running";
     return "running";
   }
 
@@ -2863,7 +2866,8 @@ namespace scan_planner
       status_gave_up_ = true;
       setStatusReason(ReplanFailure::MAX_REPLAN_FAIL);
       abandonMission("CONSECUTIVE_FAIL_LIMIT");
-      publishPlannerStatus("failed");
+      // TEMP: 临时测试，不上报 failed
+      publishPlannerStatus("idle");
       return;
     }
 
