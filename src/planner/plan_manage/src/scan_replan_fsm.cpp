@@ -3656,6 +3656,7 @@ namespace scan_planner
     auto toWorld = [&](const Eigen::Vector3d &reference_point) {
       return reference_to_world * reference_point;
     };
+    planner_manager_->setReferenceTransform(reference_to_world);
     const double max_vel = planner_manager_->pp_.max_vel_;
     const double max_acc = planner_manager_->pp_.max_acc_;
     const double duration = planner_manager_->global_data_.global_duration_;

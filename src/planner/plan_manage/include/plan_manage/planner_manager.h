@@ -82,6 +82,12 @@ namespace scan_planner
     GlobalTrajData global_data_;
     GridMap::Ptr grid_map_;
 
+    // 全局轨迹存储在参考系中；局部规划使用世界系，采样引导点前需要这个变换。
+    void setReferenceTransform(const Eigen::Isometry3d &reference_to_world)
+    {
+      reference_to_world_ = reference_to_world;
+    }
+
     // 最近一次 reboundReplan 失败的原因
     ReplanFailure lastFailureReason() const { return last_failure_; }
     void setDiagContext(uint64_t rid, bool verbose) {
@@ -105,7 +111,12 @@ namespace scan_planner
     ReplanFailure last_failure_{ReplanFailure::NONE};
     uint64_t diag_rid_{0};
     bool diag_verbose_{false};
+    Eigen::Isometry3d reference_to_world_{Eigen::Isometry3d::Identity()};
 
+    // 沿全局参考轨迹采样一条从 start 附近到当前局部目标的引导路径。
+    // 供“初始路径主段/剩余轨迹连接段”共用。
+    bool sampleGlobalGuidePath(const Eigen::Vector3d &start, double ts,
+                               std::vector<Eigen::Vector3d> &points);
     // 把刚算出来的轨迹记录进 local_data_（开始时间、时长、轨迹本体等）
     void updateTrajInfo(const UniformBspline &position_traj, const rclcpp::Time time_now);
     // 检查轨迹的速度/加速度有没有超出物理限制（超了说明这条轨迹不安全）

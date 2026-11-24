@@ -19,7 +19,9 @@
 // #include <fstream>
 // 依赖：本包的头文件（声明）+ std::chrono（计时，用来统计各阶段耗时）
 #include <plan_manage/planner_manager.h>
+#include <algorithm>
 #include <chrono>
+#include <limits>
 #include <thread>
 #include <plan_manage/goal_degrade_utils.h>
 
@@ -156,6 +158,41 @@ namespace scan_planner
   // 内部按 5 个 STEP 顺序执行（下面每步都有注释）。
   // 只要任何一步判断为“不安全/不可行”，就返回 false，绝不发布坏轨迹。
   // ==========================================================================
+  // 沿全局轨迹从离 start 最近的时刻采样到本次局部目标时刻。
+  // 这是初始路径主段和剩余轨迹连接段共用的唯一引导采样入口。
+  bool SCANPlannerManager::sampleGlobalGuidePath(
+      const Eigen::Vector3d &start, double ts, std::vector<Eigen::Vector3d> &points)
+  {
+    points.clear();
+    const double duration = global_data_.global_duration_;
+    if (duration <= 1e-3 || ts <= 1e-3)
+      return false;
+    auto to_world = [&](const Eigen::Vector3d &reference_point) {
+      return reference_to_world_ * reference_point;
+    };
+    double t_start = 0.0;
+    double min_dist = std::numeric_limits<double>::infinity();
+    constexpr double project_step = 0.05;
+    for (double gt = 0.0; gt <= duration; gt += project_step)
+    {
+      const double d = (to_world(global_data_.global_traj_.evaluate(gt)) - start).norm();
+      if (d < min_dist)
+      {
+        min_dist = d;
+        t_start = gt;
+      }
+    }
+    const double t_target = std::clamp(global_data_.last_progress_time_, 0.0, duration);
+    if (t_target <= t_start + ts)
+      return false;
+
+    points.push_back(start);
+    for (double gt = t_start + ts; gt < t_target; gt += ts)
+      points.push_back(to_world(global_data_.global_traj_.evaluate(gt)));
+    points.push_back(to_world(global_data_.global_traj_.evaluate(t_target)));
+    return points.size() >= 7;
+  }
+
   bool SCANPlannerManager::reboundReplan(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel,
                                         Eigen::Vector3d start_acc, Eigen::Vector3d local_target_pt,
                                         Eigen::Vector3d local_target_vel, bool flag_polyInit, bool flag_randomPolyTraj)
@@ -208,9 +245,21 @@ namespace scan_planner
       // 【情况 A】用多项式造初始路径：第一次规划 / 目标变了 / 被强制要求
       if (flag_first_call || flag_polyInit || flag_force_polynomial /*|| ( start_pt - local_target_pt ).norm() < 1.0*/) // Initial path generated from a min-snap traj by order.
       {
+        const bool force_poly = flag_force_polynomial;
         flag_first_call = false;
         flag_force_polynomial = false;
 
+        std::vector<Eigen::Vector3d> guide_points;
+        if (!flag_randomPolyTraj && !force_poly &&
+            sampleGlobalGuidePath(start_pt, ts, guide_points))
+        {
+          // 主初始路径直接沿全局参考轨迹采样，不再从起点拉直线到目标。
+          point_set = std::move(guide_points);
+          start_end_derivatives = {start_vel, local_target_vel, start_acc,
+                                   Eigen::Vector3d::Zero()};
+        }
+        else
+        {
         // gl_traj 是一条多项式轨迹，作为后续优化的“初始猜测”
         PolynomialTraj gl_traj;
 
@@ -281,6 +330,7 @@ namespace scan_planner
         start_end_derivatives.push_back(local_target_vel);
         start_end_derivatives.push_back(gl_traj.evaluateAcc(0));
         start_end_derivatives.push_back(gl_traj.evaluateAcc(t));
+        }
       }
       // 【情况 B】沿用上一条轨迹：保留已走过的部分，只把尾部接到新目标上
       else // Initial path generated from previous trajectory.
@@ -307,31 +357,52 @@ namespace scan_planner
         // 同样把多走的一步退回来
         t -= ts;
 
-        // 如果上一条轨迹剩下太短、够不到目标，就再补一段多项式
-        double poly_time = (local_data_.position_traj_.evaluateDeBoorT(t) - local_target_pt).norm() / pp_.max_vel_ * 2;
+        // 上一条轨迹末端到新局部目标的连接段：
+        //   优先沿全局参考轨迹采样；只有拿不到有效全局段时才退回自由多项式。
+        const Eigen::Vector3d tail_end = local_data_.position_traj_.evaluateDeBoorT(t);
+        const double poly_time = (tail_end - local_target_pt).norm() / pp_.max_vel_ * 2;
         if (poly_time > ts)
         {
-          // 从轨迹末端“接”一段多项式到目标，速度和加速度保持连续
-          PolynomialTraj gl_traj = PolynomialTraj::one_segment_traj_gen(local_data_.position_traj_.evaluateDeBoorT(t),
-                                                                        local_data_.velocity_traj_.evaluateDeBoorT(t),
-                                                                        local_data_.acceleration_traj_.evaluateDeBoorT(t),
-                                                                        local_target_pt, local_target_vel, Eigen::Vector3d::Zero(), poly_time);
-
-          // 把新补的这段也加进点集
-          for (t = ts; t < poly_time; t += ts)
+          bool used_guide = false;
+          std::vector<Eigen::Vector3d> guide_points;
+          if (sampleGlobalGuidePath(tail_end, ts, guide_points))
           {
-            // 防御性检查：弧长表不能为空（为空说明前面的采样出了问题）
-            if (!pseudo_arc_length.empty())
+            for (size_t gi = 1; gi < guide_points.size(); ++gi)
             {
-              segment_point.push_back(gl_traj.evaluate(t));
-              pseudo_arc_length.push_back((segment_point.back() - segment_point[segment_point.size() - 2]).norm() + pseudo_arc_length.back());
+              if (pseudo_arc_length.empty())
+                break;
+              segment_point.push_back(guide_points[gi]);
+              pseudo_arc_length.push_back(
+                  (segment_point.back() - segment_point[segment_point.size() - 2]).norm() +
+                  pseudo_arc_length.back());
             }
-            else
+            used_guide = true;
+            RCLCPP_DEBUG(node_->get_logger(),
+                         "[diag] rid=%llu event=guide_connect mode=guide points=%zu t_target=%.3f",
+                         static_cast<unsigned long long>(diag_rid_), guide_points.size(),
+                         global_data_.last_progress_time_);
+          }
+
+          if (!used_guide)
+          {
+            // 没有可用的全局段：保留原有多项式兜底，保证速度/加速度连续
+            PolynomialTraj gl_traj = PolynomialTraj::one_segment_traj_gen(
+                tail_end,
+                local_data_.velocity_traj_.evaluateDeBoorT(t),
+                local_data_.acceleration_traj_.evaluateDeBoorT(t),
+                local_target_pt, local_target_vel, Eigen::Vector3d::Zero(), poly_time);
+            for (double tt = ts; tt < poly_time; tt += ts)
             {
-              // 打日志并放弃本轮规划
-              RCLCPP_ERROR(node_->get_logger(), "pseudo_arc_length is empty; aborting replan");
-              continuous_failures_count_++;
-              return false;
+              if (pseudo_arc_length.empty())
+              {
+                RCLCPP_ERROR(node_->get_logger(), "pseudo_arc_length is empty; aborting replan");
+                continuous_failures_count_++;
+                return false;
+              }
+              segment_point.push_back(gl_traj.evaluate(tt));
+              pseudo_arc_length.push_back(
+                  (segment_point.back() - segment_point[segment_point.size() - 2]).norm() +
+                  pseudo_arc_length.back());
             }
           }
         }
