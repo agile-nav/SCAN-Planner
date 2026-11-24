@@ -15,7 +15,7 @@ if [[ -f /opt/ros/humble/setup.bash ]]; then
   set -u
 fi
 
-bash -n tools/clock_sync_test/record_run.sh
+bash -n tools/clock_sync_test/record_run.sh tools/record_raw_bag.sh
 python3 -m py_compile \
   tools/log_query.py \
   tools/clock_sync_test/analyze_run.py \
@@ -81,5 +81,15 @@ bash tools/clock_sync_test/record_run.sh selftest --dry-run --robot a2 \
 grep -q "robot: a2" "$TMP/dry.txt"
 grep -q "/demo/topic_a" "$TMP/dry.txt"
 grep -q "/lio/robo/odom" "$TMP/dry.txt"
+
+bash tools/record_raw_bag.sh --list > "$TMP/raw_list.txt"
+grep -q "/lio/cloud_world" "$TMP/raw_list.txt"
+grep -q "/grid_map/occupancy_inflate" "$TMP/raw_list.txt"
+grep -q "/camera/color/image_raw" "$TMP/raw_list.txt"
+bash tools/record_raw_bag.sh --list --no-camera --no-grid-map > "$TMP/raw_list2.txt"
+if grep -q "/camera/color/image_raw" "$TMP/raw_list2.txt"; then
+  echo "[selftest] --no-camera 未生效" >&2
+  exit 1
+fi
 
 echo "[selftest] tools OK"

@@ -14,6 +14,24 @@ python3 tools/log_audit.py --strict
 `log_query.py` 支持 `summary/rid/last-failure/errors/slow/timeline/export`；
 `log_audit.py` 检查第一方裸输出、ANSI 转义，已接入 CI。
 
+## 一键原始录包
+
+```bash
+# 默认：TF、LIO/定位里程计、点云、RGB、cmd_vel、全局/局部路径、栅格地图
+tools/record_raw_bag.sh
+
+# 指定输出/时长；去掉相机或栅格地图
+tools/record_raw_bag.sh --out ~/bags/run1 --duration 120
+tools/record_raw_bag.sh --no-camera
+tools/record_raw_bag.sh --no-grid-map
+
+# 只打印将录制的话题和 QoS
+tools/record_raw_bag.sh --list
+```
+
+脚本会自动生成带 best_effort/transient_local 的 QoS 覆盖，录完打印
+`ros2 bag info`。停止用 Ctrl-C。
+
 ## 真机录制与离线回放
 
 ```bash
