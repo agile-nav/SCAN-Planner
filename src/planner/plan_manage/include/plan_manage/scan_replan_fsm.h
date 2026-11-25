@@ -339,6 +339,8 @@ namespace scan_planner
     int consecutive_plan_fails_{0};
     // 已经因"连续失败超限"放弃任务：状态上报 failed，直到收到新目标
     bool status_gave_up_{false};
+    // 正常 CLOSE_TO_GOAL 后等待到达判定：成立后才清目标并转 idle
+    bool close_to_goal_waiting_{false};
     // 门控状态名（可配置；下游若需兼容旧的 stopped，可把 disabled 配成 stopped）
     std::string status_name_disabled_{"disabled"};
     std::string status_name_paused_{"paused"};

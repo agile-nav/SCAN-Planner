@@ -96,6 +96,7 @@ namespace scan_planner
     status_is_stop_ = false;
     status_goal_valid_ = false;
     status_error_latched_ = false;
+    close_to_goal_waiting_ = false;
     status_last_state_.clear();
     // 记录当前时间，供“冻结”逻辑计算时间差
     last_freeze_update_time_ = node_->now();
@@ -666,6 +667,7 @@ namespace scan_planner
   //   否则会把那一轮刚算出的降级/截断结果清掉。
   void SCANReplanFSM::resetMissionGoalState()
   {
+    close_to_goal_waiting_ = false;
     mission_goal_truncated_ = false;
     have_truncated_reachable_pt_ = false;
     mission_goal_degraded_ = false;
@@ -1219,6 +1221,7 @@ namespace scan_planner
     need_hover_stop_ = false;
     // 新目标是新局面：清掉"连续失败放弃"的标记与计数，否则状态会一直报 failed
     status_gave_up_ = false;
+    close_to_goal_waiting_ = false;
     consecutive_plan_fails_ = 0;
     status_have_goal_ = true;
     status_is_stop_ = false;
@@ -2252,6 +2255,7 @@ namespace scan_planner
     status_have_goal_ = false;
     status_target_valid_ = false;
     status_is_stop_ = false;
+    close_to_goal_waiting_ = false;
     status_hold_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     status_problem_since_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     // 注意：这里**不改** status_gave_up_ 与 status_reasons_ 的取舍由调用方决定：
@@ -2397,6 +2401,20 @@ namespace scan_planner
     // 【V14】监控结果不能用来"冻结整个 FSM"：monitorReferenceTransform() 自己会在
     //   超宽限时切 EMERGENCY_STOP，而那个状态的 TF 恢复分支必须能继续跑到。
     (void)reference_ok;
+
+    // 正常 CLOSE_TO_GOAL 后不立即清目标：等待到达判定。
+    // updatePlannerStatus() 已先发布 goal_reached，这里再清目标转 idle。
+    if (close_to_goal_waiting_ && exec_state_ != EMERGENCY_STOP)
+    {
+      if (status_is_stop_)
+      {
+        RCLCPP_INFO(node_->get_logger(),
+                    "[fsm] event=close_to_goal_arrived rid=%llu",
+                    static_cast<unsigned long long>(replan_rid_));
+        abandonMission("CLOSE_TO_GOAL");
+      }
+      return;
+    }
 
     // 下面几行：每 100 次（约 1 秒）打印一次当前状态
     static int fsm_num = 0;
@@ -2910,19 +2928,18 @@ namespace scan_planner
       changeFSMExecState(GEN_NEW_TRAJ, "CLOSE_TO_GOAL_DEGENERATE");
       return;
     }
-    if (close_to_goal_case && mission_goal_degraded_)
+    if (close_to_goal_case)
     {
+      // 正常到点：先保留目标，等待 updatePlannerStatus() 的到达判定。
+      // 判定成立才发 goal_reached 并清目标；否则一直保持 running。
+      close_to_goal_waiting_ = true;
+      const char *wait_reason = mission_goal_degraded_ ? "goal_degraded" :
+                                (mission_goal_truncated_ ? "goal_truncated" : "goal_final");
       RCLCPP_INFO(node_->get_logger(),
-                  "[fsm] event=mission_done reason=goal_degraded rid=%llu dist=%.2fm",
-                  static_cast<unsigned long long>(replan_rid_),
+                  "[fsm] event=close_to_goal_wait_arrival rid=%llu reason=%s dist=%.2fm",
+                  static_cast<unsigned long long>(replan_rid_), wait_reason,
                   (mission_goal_pt_ - odom_pos_).norm());
-    }
-    else if (close_to_goal_case && mission_goal_truncated_)
-    {
-      RCLCPP_INFO(node_->get_logger(),
-                  "[fsm] event=mission_done reason=goal_truncated rid=%llu dist=%.2fm",
-                  static_cast<unsigned long long>(replan_rid_),
-                  (mission_goal_pt_ - odom_pos_).norm());
+      return;
     }
 
     abandonMission(reason);
