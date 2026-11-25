@@ -42,6 +42,12 @@ namespace
     if (!node->has_parameter(name)) node->declare_parameter<T>(name, default_value);
     return node->get_parameter(name).get_value<T>();
   }
+
+  // z 轴异常判定阈值(m)：局部目标或全局轨迹末端相对机体高度偏离超过它，
+  //   就用 WARN 打一条"event=local_target_z_jump / replan_z_jump"。
+  //   取值依据：正常平地行走 z 波动 < 0.2 m；四足可跨 0.30 m 台阶，
+  //   留一倍余量到 0.8 m。真正出现"轨迹升到 4 m"时远超此值，必然被捕获。
+  constexpr double kLocalTargetZJump = 0.8;
 } // namespace
 
 namespace scan_planner
@@ -3487,6 +3493,32 @@ namespace scan_planner
             tdir.normalize();
         }
       }
+      // 同一时刻的 z 轴快照（info 级低频）：连续多拍看走势即可判断
+      //   是"上游给的目标 z 就不对"还是"局部目标被抬高"。
+      {
+        const double dz_in = local_target_pt_(2) - start_pt_(2);
+        if (std::abs(dz_in) > kLocalTargetZJump)
+        {
+          RCLCPP_WARN(node_->get_logger(),
+                      "[fsm] event=replan_z_jump rid=%llu ok=%d start_z=%.2f target_z=%.2f "
+                      "dz=%.2f robot_z=%.2f goal_z=%.2f traj_end_flag=%d",
+                      static_cast<unsigned long long>(replan_rid_),
+                      static_cast<int>(plan_success), start_pt_(2), local_target_pt_(2),
+                      dz_in, odom_pos_(2), end_pt_(2),
+                      static_cast<int>(local_target_is_traj_end_));
+        }
+        else
+        {
+          RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                               "[fsm] event=replan_z rid=%llu ok=%d start_z=%.2f target_z=%.2f "
+                               "dz=%.2f robot_z=%.2f goal_z=%.2f traj_end_flag=%d",
+                               static_cast<unsigned long long>(replan_rid_),
+                               static_cast<int>(plan_success), start_pt_(2), local_target_pt_(2),
+                               dz_in, odom_pos_(2), end_pt_(2),
+                               static_cast<int>(local_target_is_traj_end_));
+        }
+      }
+
       RCLCPP_DEBUG_THROTTLE(node_->get_logger(), *node_->get_clock(), diag_throttle_ms_,
                            "[replan-geom] rid=%llu ok=%d robot=(%.2f,%.2f,yaw=%.0f) goal=(%.2f,%.2f) d_goal=%.2f "
                            "start=(%.2f,%.2f) target=(%.2f,%.2f) d_target=%.2f bearing=%.0fdeg "
@@ -3838,6 +3870,42 @@ namespace scan_planner
     // 记录"本轮局部目标是否就是轨迹末端"：末端目标靠近机器人是合法到达，
     // 不受最小距离约束（与 targetFarEnough 的 t>=duration 豁免保持同一口径）。
     local_target_is_traj_end_ = (target_t >= duration - 1e-3);
+
+    // ---- z 轴诊断（info 级可定位）----
+    //   现场出现过"轨迹控制点升到 4 m 高空、而机身水平"的情况，但原日志只记 x/y，
+    //   无法判断 z 是在哪一环引入的。这里留下三处 z：
+    //     robot_z   : 机体当前高度
+    //     target_z  : 局部目标高度（本轮要去的点）
+    //     traj_end_z: 全局轨迹真实末端高度
+    //   以及两个偏差。偏差过大时用 WARN 立刻暴露，正常时低频 INFO 看走势。
+    {
+      const double dz_target = local_target_pt_(2) - odom_pos_(2);
+      const double dz_traj_end = traj_end_pt(2) - odom_pos_(2);
+      if (std::abs(dz_target) > kLocalTargetZJump || std::abs(dz_traj_end) > kLocalTargetZJump)
+      {
+        RCLCPP_WARN(node_->get_logger(),
+                    "[fsm] event=local_target_z_jump rid=%llu mode=%d robot_z=%.2f "
+                    "target=(%.2f,%.2f,%.2f) dz_target=%.2f "
+                    "traj_end=(%.2f,%.2f,%.2f) dz_traj_end=%.2f goal_z=%.2f traj_end_flag=%d",
+                    static_cast<unsigned long long>(replan_rid_), navi_mode_,
+                    odom_pos_(2),
+                    local_target_pt_(0), local_target_pt_(1), local_target_pt_(2), dz_target,
+                    traj_end_pt(0), traj_end_pt(1), traj_end_pt(2), dz_traj_end,
+                    end_pt_(2), static_cast<int>(local_target_is_traj_end_));
+      }
+      else
+      {
+        RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                             "[fsm] event=local_target rid=%llu mode=%d "
+                             "robot=(%.2f,%.2f,%.2f) target=(%.2f,%.2f,%.2f) dz=%.2f "
+                             "traj_end=(%.2f,%.2f,%.2f) traj_end_flag=%d",
+                             static_cast<unsigned long long>(replan_rid_), navi_mode_,
+                             odom_pos_(0), odom_pos_(1), odom_pos_(2),
+                             local_target_pt_(0), local_target_pt_(1), local_target_pt_(2), dz_target,
+                             traj_end_pt(0), traj_end_pt(1), traj_end_pt(2),
+                             static_cast<int>(local_target_is_traj_end_));
+      }
+    }
 
     // 如果局部目标已经非常接近最终终点（进入刹车距离之内）
     const double braking_distance = max_acc > 1e-6
