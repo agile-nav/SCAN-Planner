@@ -96,6 +96,19 @@ scan_planner_node:
     fsm.escape_duration: 3.0
     # 收尾时是否发一条“停在原地”轨迹，让控制器立即刹停（P1）
     fsm.stop_traj_on_finish: true
+    # ---- 异常终止后自动请求全局重规划 ----
+    # 非正常结束任务（卡死放弃 / 连续失败 / 急停退出）时，向 /goal_3d 重发一次
+    # 目标点，让全局规划器用其实时里程计作起点、重新规划一条到目标的路径。
+    # 正常完成（到达 / 航点走完 / 目标降级或截断）不会请求。
+    fsm.global_replan_enable: true
+    # 同一目标最多请求几次；用尽后停手，等人工介入。
+    # 全局重规划只改路径形状、不改地图，若根因是实时障碍挡死则重试无效，
+    # 这个上限就是兜住"卡住→请求→同路线→再卡住"的循环。
+    fsm.global_replan_max_requests: 3
+    # 两次请求之间的最小间隔(秒)，防止同一时刻连续触发
+    fsm.global_replan_min_interval: 1.0
+    # 发给 /goal_3d 的坐标系；global_planner 会自行用 TF 转换到它的 map_frame
+    fsm.global_goal_frame: world
     # 轨迹时钟最多超前实测投影进度多少秒（<=0 关闭，P4）
     fsm.traj_clock_max_lead: 0.3
     # 重规划重试节流：连续失败后按 min×2^n 退避，封顶 max（秒）；enable=false 每拍都试

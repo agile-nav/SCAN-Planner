@@ -163,6 +163,21 @@ namespace scan_planner
     // 是否把「必须人工干预」类失败锁存为 error。默认关闭：锁存后只有重启节点才能清除，
     // 对可自恢复的现场过于激进；需要上层告警时再打开。
     bool status_latch_hard_error_{false};
+    // ---- 异常终止后自动请求全局重规划 ----
+    // 非正常结束任务（卡死放弃/连续失败/急停退出）后，向全局规划器
+    // 重发一次目标点，让它从当前位置重新规划一条到目标的路径。
+    // 全局规划器（/goal_3d -> /global_path）会用自己订阅的实时里程计作起点，
+    // 因此这里只需要给出目标点。
+    bool global_replan_enable_{true};
+    // 同一目标最多请求几次；用尽后不再请求，等人工介入
+    int global_replan_max_requests_{3};
+    // 两次请求之间的最小间隔(秒)
+    double global_replan_min_interval_{1.0};
+    // 发给 /goal_3d 的坐标系；global_planner 会自行转换到它的 map_frame
+    std::string global_goal_frame_{"world"};
+    // 当前目标已请求次数（新目标 / 真实前进时清零）
+    int global_replan_requests_{0};
+    rclcpp::Time last_global_replan_time_{0, 0, RCL_ROS_TIME};
     // 收尾时是否发一条“停在原地”轨迹让控制器刹停（P1）
     bool stop_traj_on_finish_{true};
     // 到达且停稳持续多久才判为 goal_reached(秒)
@@ -354,6 +369,8 @@ namespace scan_planner
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr motion_enabled_sub_;
     // 任务控制：/mission/control（pause 停 / resume 继续）
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mission_control_sub_;
+    // 异常终止后向全局规划器重发目标点（/goal_3d）
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goal_request_pub_;
     rclcpp::Publisher<scan_planner_msgs::msg::Bspline>::SharedPtr bspline_pub_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr local_path_pub_;
     rclcpp::Publisher<scan_planner_msgs::msg::DataDisp>::SharedPtr data_disp_pub_;
@@ -381,6 +398,9 @@ namespace scan_planner
     void resetPlanRetry();
     // 放弃当前任务（give-up / 急停退出）：清目标并复位状态话题
     void abandonMission(const char *reason);
+    // 异常终止后请求全局规划器从当前位置重规划到原目标。
+    // 返回 true 表示已发出请求。受开关/次数上限/最小间隔约束。
+    bool requestGlobalReplan(const char *reason);
     // 全局轨迹是否可用（navi_mode=3 下 resume 前必须为真）
     bool hasUsableGlobalTraj() const;
     // 把实测位置投影到当前局部轨迹，返回对应轨迹时刻（P0：仅诊断用）

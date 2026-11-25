@@ -173,6 +173,16 @@ namespace scan_planner
     escape_duration_ = load_parameter<double>(node_, "fsm.escape_duration", 3.0);
     // 收尾时是否发一条“停在原地”轨迹，让控制器立即刹停（P1）
     stop_traj_on_finish_ = load_parameter<bool>(node_, "fsm.stop_traj_on_finish", true);
+    // 异常终止后自动请求全局重规划
+    global_replan_enable_ = load_parameter<bool>(node_, "fsm.global_replan_enable", true);
+    global_replan_max_requests_ =
+        load_parameter<int>(node_, "fsm.global_replan_max_requests", 3);
+    global_replan_min_interval_ =
+        load_parameter<double>(node_, "fsm.global_replan_min_interval", 1.0);
+    global_goal_frame_ = load_parameter<std::string>(node_, "fsm.global_goal_frame", "world");
+    if (global_replan_max_requests_ < 0) global_replan_max_requests_ = 0;
+    if (global_replan_min_interval_ < 0.0) global_replan_min_interval_ = 0.0;
+    if (global_goal_frame_.empty()) global_goal_frame_ = "world";
     // 轨迹时钟最多超前实测投影进度多少秒（<=0 关闭，P4）
     traj_clock_max_lead_ = load_parameter<double>(node_, "fsm.traj_clock_max_lead", 0.3);
     // 重规划重试节流：连续失败后按 min×2^n 退避，封顶 max（enable=false 关闭）
@@ -255,6 +265,10 @@ namespace scan_planner
 
     // ---------- 第7步：创建发布器 ----------
     bspline_pub_ = node_->create_publisher<scan_planner_msgs::msg::Bspline>("planning/bspline", 10);
+    // 异常终止后向全局规划器重发目标点。队列深度 1：只关心最新目标，
+    //   旧的被覆盖即可，避免网络抖动时堆积多条导致上游连续重规划。
+    goal_request_pub_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+        "/goal_3d", rclcpp::QoS(1).reliable());
     // 把当前局部轨迹也以 Path 形式发出来（navi_mode=3 用来观察参考路径跟随效果）
     local_path_pub_ = node_->create_publisher<nav_msgs::msg::Path>("local_path", 10);
     // 发布规划出的轨迹（控制器订阅它来跟踪）
@@ -1212,6 +1226,9 @@ namespace scan_planner
     stuck_retry_count_ = 0;
     escape_active_ = false;
     escape_strategy_ = 0;
+    // 新目标是新局面：全局重规划请求额度重新给满
+    global_replan_requests_ = 0;
+    last_global_replan_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     if (!status_error_latched_)
       status_reasons_.clear();  // 锁存 error 后保留原因，供上报
     // 外部停止期间不发 running（状态话题保持 stopped）
@@ -1312,6 +1329,8 @@ namespace scan_planner
       //   轨迹投影推进（如后撤挪动一点）不算——否则会无限后撤。
       escape_strategy_ = 0;
       escape_total_ = 0;
+      // 真的往前走了 → 说明这轮全局重规划起作用了，额度恢复
+      global_replan_requests_ = 0;
       // 连续失败计数也在这里清零：这才是"任务确实在推进"的证据。
       //   （规划成功不算，见 notePlanResult 的说明）
       consecutive_plan_fails_ = 0;
@@ -2257,8 +2276,72 @@ namespace scan_planner
       RCLCPP_INFO(node_->get_logger(), "[fsm] event=mission_done reason=%s rid=%llu",
                   reason, static_cast<unsigned long long>(replan_rid_));
     else
+    {
       RCLCPP_WARN(node_->get_logger(), "[fsm] event=mission_abandoned reason=%s rid=%llu",
                   reason, static_cast<unsigned long long>(replan_rid_));
+      // 非正常结束（卡死放弃 / 连续失败 / 急停退出）：请全局规划器从
+      //   机器人当前位置重规划一条到原目标的路径，避免无限停在 WAIT_TARGET。
+      //   正常完成不请求；RESUME/RESUME_FAILED 走的是另一条路径，不会到这里。
+      requestGlobalReplan(reason);
+    }
+  }
+
+  // 异常终止后请求全局规划器重规划。
+  //   全局规划器（订阅 /goal_3d、发布 /global_path）用自己的实时里程计作起点，
+  //   所以这里只给目标点；坐标系交给它用 TF 转成 map。
+  bool SCANReplanFSM::requestGlobalReplan(const char *reason)
+  {
+    if (!global_replan_enable_ || !goal_request_pub_)
+      return false;
+    // 没有可信目标就不发（例如目标从未成功换算到 world 系）
+    if (!mission_goal_pt_.allFinite() || mission_goal_pt_.squaredNorm() < 1e-6)
+      return false;
+    // 目标已被截断（整条全局路径都被占、只能走到最后一个可达点）→ 不请求。
+    //   截断的语义就是"沿这条全局路径到不了终点"，再让全局规划器算一遍
+    //   结果不会变（地图没变），只会白白消耗请求额度。
+    //   注意与降级区分：降级时 mission_goal_pt_ 已改写成**可达**的落点，
+    //   此时请求是合理的；截断时它仍是原始不可达目标，请求必然失败。
+    if (mission_goal_truncated_)
+    {
+      RCLCPP_INFO(node_->get_logger(),
+                  "[fsm] event=global_replan_skip reason=%s cause=goal_truncated rid=%llu",
+                  reason, static_cast<unsigned long long>(replan_rid_));
+      return false;
+    }
+    // 同一目标的请求次数上限：用尽后停手，等人工介入
+    if (global_replan_requests_ >= global_replan_max_requests_)
+    {
+      RCLCPP_WARN(node_->get_logger(),
+                  "[fsm] event=global_replan_exhausted reason=%s count=%d/%d",
+                  reason, global_replan_requests_, global_replan_max_requests_);
+      return false;
+    }
+    // 最小间隔：防止异常路径在同一时刻连续触发多次
+    const rclcpp::Time now = node_->now();
+    if (last_global_replan_time_.nanoseconds() != 0 &&
+        (now - last_global_replan_time_).seconds() < global_replan_min_interval_)
+      return false;
+
+    ++global_replan_requests_;
+    last_global_replan_time_ = now;
+
+    geometry_msgs::msg::PoseStamped goal;
+    goal.header.stamp = now;
+    goal.header.frame_id = global_goal_frame_;
+    goal.pose.position.x = mission_goal_pt_.x();
+    goal.pose.position.y = mission_goal_pt_.y();
+    goal.pose.position.z = mission_goal_pt_.z();
+    goal.pose.orientation.w = 1.0;
+    goal_request_pub_->publish(goal);
+
+    RCLCPP_WARN(node_->get_logger(),
+                "[fsm] event=global_replan_request reason=%s count=%d/%d "
+                "goal=(%.2f,%.2f,%.2f) frame=%s rid=%llu",
+                reason, global_replan_requests_, global_replan_max_requests_,
+                mission_goal_pt_.x(), mission_goal_pt_.y(), mission_goal_pt_.z(),
+                global_goal_frame_.c_str(),
+                static_cast<unsigned long long>(replan_rid_));
+    return true;
   }
 
   // 全局轨迹是否可用于规划：navi_mode=3 的 resume 必须等参考轨迹真正建好，
