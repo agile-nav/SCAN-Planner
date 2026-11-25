@@ -2335,20 +2335,30 @@ namespace scan_planner
     ++global_replan_requests_;
     last_global_replan_time_ = now;
 
+    // z 用机器人当前高度（里程计给出的机体中心高度），不用 mission_goal_pt_ 的 z：
+    //   mission_goal_pt_ 来自上游 /global_path 的末点，而那条路径的 z 与真实地面
+    //   存在偏移（实测偏差可达 1.2 m）。全局规划器按 snap_vertical_tolerance(1.0 m)
+    //   把目标吸附到地形节点，z 偏差过大会直接报 goal_not_traversable 并回空路径。
+    //   对地面机器人，目标点的 (x,y) 才是有意义的，z 取当前位置即可。
+    //   注意：这里**不能**再加 body_height —— odom 的 z 已是机体中心高度，
+    //   而 body_height 的语义是"把上游给的地面高度抬到机体中心"，两者叠加会重复抬高。
+    const double goal_z = odom_pos_.z();
     geometry_msgs::msg::PoseStamped goal;
     goal.header.stamp = now;
     goal.header.frame_id = global_goal_frame_;
     goal.pose.position.x = mission_goal_pt_.x();
     goal.pose.position.y = mission_goal_pt_.y();
-    goal.pose.position.z = mission_goal_pt_.z();
+    goal.pose.position.z = goal_z;
     goal.pose.orientation.w = 1.0;
     goal_request_pub_->publish(goal);
 
     RCLCPP_WARN(node_->get_logger(),
                 "[fsm] event=global_replan_request reason=%s count=%d/%d "
-                "goal=(%.2f,%.2f,%.2f) frame=%s rid=%llu",
+                "goal=(%.2f,%.2f,%.2f) z_src=robot_z(%.2f) "
+                "mission_z=%.2f frame=%s rid=%llu",
                 reason, global_replan_requests_, global_replan_max_requests_,
-                mission_goal_pt_.x(), mission_goal_pt_.y(), mission_goal_pt_.z(),
+                mission_goal_pt_.x(), mission_goal_pt_.y(), goal_z,
+                odom_pos_.z(), mission_goal_pt_.z(),
                 global_goal_frame_.c_str(),
                 static_cast<unsigned long long>(replan_rid_));
     return true;
