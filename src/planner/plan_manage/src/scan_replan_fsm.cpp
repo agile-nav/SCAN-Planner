@@ -2244,8 +2244,15 @@ namespace scan_planner
     }
 
     changeFSMExecState(WAIT_TARGET, reason);
+    // 哪些 reason 属于"任务正常收尾"（决定打 INFO 还是 WARN）。
+    //   CLOSE_TO_GOAL 也要算正常：能走到这里的只有"目标已降级/已截断"这两种
+    //   既定结局（completeCurrentSegment 已先打过 event=mission_done）；
+    //   局部目标退化的那条路径在那边就 return 了，不会到这里。
+    //   原来只列了两个 reason，导致降级/截断任务在 mission_done 之后紧跟一条
+    //   mission_abandoned 的 WARN —— 自相矛盾，且会污染日志统计与现场排查。
     const bool normal_done = std::string(reason) == "GOAL_REACHED" ||
-                             std::string(reason) == "WAYPOINTS_DONE";
+                             std::string(reason) == "WAYPOINTS_DONE" ||
+                             std::string(reason) == "CLOSE_TO_GOAL";
     if (normal_done)
       RCLCPP_INFO(node_->get_logger(), "[fsm] event=mission_done reason=%s rid=%llu",
                   reason, static_cast<unsigned long long>(replan_rid_));
