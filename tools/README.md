@@ -145,6 +145,30 @@ obstacle_bbox / obstacle_bboxes / min_clearance / min_yaw_change / map_size_*`�
   `narrow_passage`/`turning`/`multi_obstacle` 覆盖长距离、绕障、窄通道和转弯。
 - 所有场景仍是**运动学仿真**：不验证轮地接触、打滑、腿支撑等动力学行为。
 
+## astar_bench —— A* 行为基准（不是测试）
+
+在真实障碍地图上反复调用 `AstarSearch`，统计 `expanded` 分布与失败率，
+用于**改动前后对比**。它不做任何断言，也不参与 `colcon test`。
+
+```bash
+# 默认：corridor_obstacle 地图，沿参考路径分段搜索 20 次
+tools/astar_bench/astar_bench.sh
+
+# 横穿带缺口的墙（A* 必须真正扩展大量节点）
+tools/astar_bench/astar_bench.sh tools/scenarios/corridor_obstacle.pcd crossing 40
+
+# 换地图
+tools/astar_bench/astar_bench.sh tools/scenarios/narrow_passage.pcd road 20
+```
+
+首次运行会独立 cmake 构建到 `build/astar_bench/`（不占用 colcon 的包名额、
+也不计入测试数量）。输出末尾给出 `expanded` 的 n/中位/均值/p90/最大。
+
+**为什么不做断言**：`expanded` 随地图、起终点和堆的弹出顺序浮动，
+写死阈值会导致偶发失败，最后被人注释掉。需要守护时人工比对数字。
+
+参考值（corridor_obstacle.pcd, crossing, n=40）：中位 100、p90 297、最大 362。
+
 ## 通用模型 / Gazebo launch
 
 这两个入口在 `scan_planner` 包里（不在 `tools/`），但常和自检一起用：
