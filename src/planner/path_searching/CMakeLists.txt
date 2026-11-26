@@ -28,6 +28,16 @@ target_include_directories(path_searching PUBLIC
 ament_target_dependencies(path_searching plan_env rclcpp)
 target_link_libraries(path_searching Eigen3::Eigen)
 
+# 单测：验证 GridNode 的 rounds/state/gScore 三处状态使用顺序正确
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_astar_node_state test/test_astar_node_state.cpp)
+  if(TARGET test_astar_node_state)
+    ament_target_dependencies(test_astar_node_state plan_env rclcpp)
+    target_link_libraries(test_astar_node_state path_searching Eigen3::Eigen)
+  endif()
+endif()
+
 # 安装库和头文件，并导出给别的包使用。
 install(TARGETS path_searching EXPORT export_path_searching
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)

@@ -521,17 +521,23 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                     continue; //in closed set.
                 }
 
-                // 标记为“本轮访问过”
-                neighborPtr->rounds = rounds_;
-
                 // 从当前格子走向邻居的方向，作为机器人的朝向
                 const double neighbor_yaw = std::atan2(static_cast<double>(dy), static_cast<double>(dx));
-                // 邻居是障碍 → 走不通，跳过
+                // 邻居是障碍 → 走不通，跳过。
+                //   【顺序很重要】障碍判定依赖朝向（getInflateOccupancy 只探
+                //   pos ± offset·axis 两点，axis 随 yaw 旋转），因此同一格从
+                //   不同方向接近，结论可能不同。**不能**在判定之前置 rounds：
+                //   否则本方向被挡后，换个方向再来时 flag_explored 已为真，
+                //   会落到"已发现"分支（只更新代价、不 push），该格永久丢失。
                 if (checkOccupancy(Index2Coord(neighborPtr->index), neighbor_yaw))
                 {
                     ++blocked_cnt;   // 【诊断】这个邻居被障碍挡掉了
                     continue;
                 }
+
+                // 通过障碍检查后才标记“本轮访问过”，保证 rounds==rounds_ 蕴含
+                //   “本格本轮确实通过过障碍检查并进入过分支”。
+                neighborPtr->rounds = rounds_;
 
                 // 算这一步的代价：三维欧氏距离（直走 1、斜走 √2 或 √3）
                 const int dz = neighborIdx(2) - current->index(2);
