@@ -25,9 +25,17 @@
 #include <plan_env/grid_map.h>
 #include <queue>
 
-// 注意：这里本意是“无穷大”，但 1 >> 20 在 C++ 里等于 0（这是个遗留小 bug）。
-// 实际上每个节点的 gScore/fScore 在第一次被发现时就会被覆盖，所以影响不大。
-constexpr double inf = 1 >> 20;
+// 【哨兵值】grid 节点 gScore/fScore 的“未赋值”初值。
+//   原写法 `1 >> 20` 是整数右移，结果恒为 0（不是 2^20），令默认代价等于
+//   最小值——任何依赖“代价 >= inf 表示未访问”的判断都会失效。
+//   这里改成 1e9：远大于真实代价（搜索池满打满算 160×160×100 格，
+//   单步 ≤ √3，总代价 < 3e4），语义上等价于“无穷”，且不会像
+//   std::numeric_limits<double>::infinity() 那样在 inf-inf 时产生 NaN。
+//
+//   注意：**不要**用 gScore == inf 判断“本轮未访问”。GridNode 在
+//   initGridMap 时一次性创建、全程复用，本初值只在 new 时生效一次；
+//   “本轮是否访问过”由 rounds 机制负责（见 dyn_a_star.cpp AstarSearch）。
+constexpr double inf = 1e9;
 struct GridNode;
 typedef GridNode *GridNodePtr;
 
