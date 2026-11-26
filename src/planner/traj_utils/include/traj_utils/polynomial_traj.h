@@ -219,12 +219,6 @@ public:
     return length;
   }
 
-  // 平均速度（注意：这个函数少了 return，返回值不可用，属于遗留小 bug）
-  double getMeanVel()
-  {
-    double mean_vel = length / time_sum;
-  }
-
   // 加速度代价：衡量轨迹的平滑程度
   double getAccCost()
   {
