@@ -1444,8 +1444,14 @@ namespace scan_planner
         double tm, tmp;
         traj.getTimeSpan(tm, tmp);
         double t_step = (tmp - tm) / ((traj.evaluateDeBoorT(tmp) - traj.evaluateDeBoorT(tm)).norm() / grid_map_->getResolution());
-        // 只检查前 2/3（后段反正会重规划）
-        for (double t = tm; t < tmp * 2 / 3; t += t_step) // Only check the closest 2/3 partition of the whole trajectory.
+        // 只检查前 2/3（后段反正会重规划）。
+        //   注意：区间是 [tm, tmp]，起点不一定是 0。写成 `tmp * 2 / 3` 会隐含
+        //   "tm == 0" 的假设——当前 setUniformBspline 的节点向量从 -p*ts 开始，
+        //   所以 tm 恒为 0，两种写法等价；但若轨迹被平移到非零起点、或对子区间
+        //   做检查，就会漏检（tm 较大时循环一次都不跑 = 完全不查碰撞）。
+        //   这里显式按"区间的 2/3"计算，不依赖 tm 的取值。
+        const double t_end = tm + (tmp - tm) * 2.0 / 3.0;
+        for (double t = tm; t < t_end; t += t_step) // Only check the closest 2/3 partition of the whole trajectory.
         {
           Eigen::Vector3d pos = traj.evaluateDeBoorT(t);
           Eigen::Vector3d pos_next = traj.evaluateDeBoorT(std::min(t + t_step, tmp));
@@ -1609,8 +1615,9 @@ namespace scan_planner
       double tm, tmp;
       traj.getTimeSpan(tm, tmp);
       double t_step = (tmp - tm) / ((traj.evaluateDeBoorT(tmp) - traj.evaluateDeBoorT(tm)).norm() / grid_map_->getResolution()); // Step size is defined as the maximum size that can passes through every grid.
-      // 同样只检查前 2/3 有没有碰撞
-      for (double t = tm; t < tmp * 2 / 3; t += t_step)
+      // 同样只检查前 2/3 有没有碰撞（同上：按区间算，不假设 tm == 0）
+      const double t_end = tm + (tmp - tm) * 2.0 / 3.0;
+      for (double t = tm; t < t_end; t += t_step)
       {
         Eigen::Vector3d pos = traj.evaluateDeBoorT(t);
         Eigen::Vector3d pos_next = traj.evaluateDeBoorT(std::min(t + t_step, tmp));
