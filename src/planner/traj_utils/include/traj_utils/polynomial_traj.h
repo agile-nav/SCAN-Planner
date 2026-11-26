@@ -31,13 +31,16 @@ private:
   vector<vector<double>> cys; // coefficient of y of each segment
   vector<vector<double>> czs; // coefficient of z of each segment
 
-  // 总时长与段数
-  double time_sum;
-  int num_seg;
+  // 总时长与段数。
+  //   time_sum/num_seg/length 都是基本类型，必须显式初始化：addSegment() 不更新
+  //   time_sum（只有 init() 累加），所以"构造后、init() 前"读 getTimeSum()
+  //   会拿到不确定值。给默认值后行为与 reset()/init() 的初始状态一致。
+  double time_sum{0.0};
+  int num_seg{0};
 
   /* evaluation */
   vector<Eigen::Vector3d> traj_vec3d;
-  double length;
+  double length{0.0};
 
 public:
   PolynomialTraj(/* args */)
@@ -208,6 +211,9 @@ public:
   double getLength()
   {
     length = 0.0;
+    // traj_vec3d 只由 getTraj() 填充。若没调过就直接求长度，下面访问 [0] 会越界。
+    if (traj_vec3d.empty())
+      return 0.0;
 
     Eigen::Vector3d p_l = traj_vec3d[0], p_n;
     for (int i = 1; i < traj_vec3d.size(); ++i)
@@ -293,8 +299,12 @@ public:
       while (eval_t < ts)
       {
         Eigen::VectorXd tv(order - 1);
+        // 用当前采样时刻 eval_t，不是段时长 ts。
+        //   原写法 pow(ts,i) 让每个采样点都等于"段末时刻"的速度，
+        //   整段统计退化成常量（实测 x(t)=t^2 的 1s 轨迹返回 mean=max=2.0，
+        //   正确应为 mean≈1.0、max≈1.98）。与 evaluateVel() 的写法保持一致。
         for (int i = 0; i < order - 1; ++i)
-          tv(i) = pow(ts, i);
+          tv(i) = pow(eval_t, i);
         Eigen::Vector3d vel;
         vel(0) = tv.dot(vx), vel(1) = tv.dot(vy), vel(2) = tv.dot(vz);
         double vn = vel.norm();
@@ -333,8 +343,9 @@ public:
       while (eval_t < ts)
       {
         Eigen::VectorXd tv(order - 2);
+        // 同上：用当前采样时刻 eval_t，不是段时长 ts。
         for (int i = 0; i < order - 2; ++i)
-          tv(i) = pow(ts, i);
+          tv(i) = pow(eval_t, i);
         Eigen::Vector3d acc;
         acc(0) = tv.dot(ax), acc(1) = tv.dot(ay), acc(2) = tv.dot(az);
         double an = acc.norm();
