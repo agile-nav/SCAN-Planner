@@ -1572,9 +1572,15 @@ namespace scan_planner
     double origin_lambda4 = lambda4_;
     bool flag_safe = true;
     int iter_count = 0;
-    // 循环：优化 → 检查安全性 → 不安全就把贴合权重加倍
+    // 首轮 + 最多 1 次重试。原实现写成 `iter_count <= 0`，而 iter_count 在
+    //   循环体末尾已自增到 1，条件恒为假 —— 重试从未发生，lambda4_ 的加倍
+    //   也随即被还原，等于死代码。改为按"轮数上限"判断。
+    constexpr int kMaxRefineRounds = 2;
+    // 循环：优化 → 检查安全性 → 不安全就把贴合权重加倍再试一次
     do
     {
+      // 每轮重置：上一轮的不安全结论不能代表本轮（加倍权重后的新解可能已安全）
+      flag_safe = true;
       lbfgs::lbfgs_parameter_t lbfgs_params;
       lbfgs::lbfgs_load_default_parameters(&lbfgs_params);
       lbfgs_params.mem_size = 16;
@@ -1621,18 +1627,29 @@ namespace scan_planner
 
           // 标记不安全（下面会把贴合权重加倍，再试一轮）
           flag_safe = false;
-          last_failure_ = ReplanFailure::REFINE_UNSAFE;
           break;
         }
       }
 
-      if (!flag_safe)
-        // 贴合权重翻倍
-        lambda4_ *= 2;
-
       iter_count++;
-    // 不安全就再试一次（注意 iter_count 从 0 开始，所以实际只跑一轮）
-    } while (!flag_safe && iter_count <= 0);
+      if (!flag_safe)
+      {
+        // 贴合权重翻倍：逼优化器更贴回参考轨迹，避免为满足可行性而甩进障碍
+        lambda4_ *= 2;
+        RCLCPP_DEBUG(logger_,
+                     "[opt] event=refine_unsafe_retry rid=%llu round=%d/%d lambda4=%.3f",
+                     static_cast<unsigned long long>(diag_rid_), iter_count,
+                     kMaxRefineRounds, lambda4_);
+      }
+    // 不安全且还有重试额度 → 再来一轮（本轮用加倍后的 lambda4）
+    } while (!flag_safe && iter_count < kMaxRefineRounds);
+
+    // 记录实际走过的轮数：1=首轮即安全，2=首轮不安全、用加倍权重重试过
+    last_refine_rounds_ = iter_count;
+
+    // 只有真的没救回来才算失败原因；重试成功时不能留下 REFINE_UNSAFE
+    if (!flag_safe)
+      last_failure_ = ReplanFailure::REFINE_UNSAFE;
 
     // 还原贴合权重，避免影响下一次调用
     lambda4_ = origin_lambda4;

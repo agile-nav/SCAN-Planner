@@ -169,6 +169,9 @@ namespace scan_planner
 
     // 最近一次失败的原因（供上层读取）
     ReplanFailure last_failure_{ReplanFailure::NONE};
+    // 最近一次 refine_optimize 实际执行的优化轮数（1=首轮即安全，2=用了重试）。
+    //   用于验证"加重贴合权重再试一次"这条路径确实被执行到。
+    int last_refine_rounds_{0};
     uint64_t diag_rid_{0};
     bool diag_verbose_{false};
     rclcpp::Logger logger_{rclcpp::get_logger("bspline_opt")};
@@ -214,6 +217,7 @@ namespace scan_planner
     void setDiagContext(uint64_t rid, bool verbose) { diag_rid_ = rid; diag_verbose_ = verbose; }
     void setLogger(const rclcpp::Logger &logger) { logger_ = logger; }
     void clearLastFailure() { last_failure_ = ReplanFailure::NONE; }
+    int lastRefineRounds() const { return last_refine_rounds_; }
   private:
 
     /* for benchmark evaluation only */

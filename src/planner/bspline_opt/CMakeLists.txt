@@ -45,6 +45,14 @@ if(BUILD_TESTING)
   if(TARGET test_uniform_bspline)
     target_link_libraries(test_uniform_bspline bspline_opt Eigen3::Eigen)
   endif()
+
+  # refine_optimize 的"不安全就加权重试"逻辑：验证重试真的发生
+  ament_add_gtest(test_refine_retry test/test_refine_retry.cpp)
+  if(TARGET test_refine_retry)
+    # plan_env 是静态库，需一并带上它的依赖（PCL/OpenCV/tf2 等）
+    ament_target_dependencies(test_refine_retry plan_env rclcpp)
+    target_link_libraries(test_refine_retry bspline_opt Eigen3::Eigen)
+  endif()
 endif()
 
 ament_package()
