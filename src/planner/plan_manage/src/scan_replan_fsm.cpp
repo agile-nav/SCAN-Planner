@@ -297,7 +297,7 @@ namespace scan_planner
         publishBodyPoseVisualization();
       }
     });
-    // 运行状态话题：只发 running / goal_reached（idle 不发），用 transient_local 让后订阅者也能拿到当前状态
+    // 运行状态话题：上报任务执行状态（idle/running/goal_reached 等），用 transient_local 让后订阅者也能拿到当前状态
     status_pub_ = node_->create_publisher<std_msgs::msg::String>(
         "/local_planner/status", rclcpp::QoS(1).reliable().transient_local());
     // 诊断话题：计数器/失败分布/规划耗时，供 rqt 或仪表盘直接消费
@@ -1474,8 +1474,8 @@ namespace scan_planner
     publishLocalPath(info->position_traj_);
   }
 
-  // 每个 tick 判定运行状态，按优先级发到 /local_planner/status：
-  //   disabled(未使能) > paused(任务暂停) > idle(无目标/已到达) > error(锁存) > 到达判定
+  // 每个 tick 判定任务状态，按优先级发到 /local_planner/status：
+  //   paused(任务暂停) > idle(无目标/已到达) > error(锁存) > 到达判定
   // 状态发生切换时【立即发布】；同一状态才按 1Hz 心跳。
   void SCANReplanFSM::updatePlannerStatus()
   {
@@ -1486,12 +1486,7 @@ namespace scan_planner
 
     std::string state;
 
-    if (!motion_enabled_)
-    {
-      // 外部未使能（遥控器未 START / 按 B / 发布者掉线）⇒ 安全回路未上使能
-      state = status_name_disabled_;
-    }
-    else if (externally_stopped_)
+    if (externally_stopped_)
     {
       // /mission/control="pause" ⇒ 任务暂停（轨迹已清）
       state = status_name_paused_;
@@ -1637,7 +1632,7 @@ namespace scan_planner
     // 状态切换 → 立即发布；同状态 → 1Hz 心跳（goal_reached 只发一次）
     // 【V17】比较对象必须是"门控后的实际状态"，与 status_last_state_ 的存储口径一致，
     //   否则 disabled/paused 期间每 10 ms 都会被判成一次切换并重发。
-    const std::string effective = gateStatusName(state);
+    const std::string effective = gateStatusNameForStatus(state);
     if (effective != status_last_state_)
     {
       publishPlannerStatus(state);
@@ -1648,17 +1643,23 @@ namespace scan_planner
     }
   }
 
-  // 把门控（未使能 / 任务暂停 / error 锁存）施加到状态名上。
+  // 把 error 锁存施加到状态名上；未使能不再覆盖任务状态。
   std::string SCANReplanFSM::gateStatusName(const std::string &state) const
   {
     std::string out = state;
     if (!motion_enabled_ && out != status_name_disabled_)
       out = status_name_disabled_;                 // 外部未使能
-    // 未使能优先于 error 锁存：没上使能时报 disabled 更有信息量（安全回路没通）。
-    //   注意 paused 不需要在这里单独排除：updatePlannerStatus 里 paused 是
-    //   externally_stopped_ 分支给出的，而 error 锁存只可能出现在"有目标在跑"
-    //   的分支里，两者不会同时成立。
     else if (status_error_latched_ && out != status_name_disabled_)
+      out = "error";
+    return out;
+  }
+
+  // status 话题专用门控：disabled 不再作为任务状态上报，只保留 error 锁存。
+  // diagnostics / 日志仍使用 gateStatusName()，保持原有 enabled/disabled 信息。
+  std::string SCANReplanFSM::gateStatusNameForStatus(const std::string &state) const
+  {
+    std::string out = state;
+    if (status_error_latched_)
       out = "error";
     return out;
   }
@@ -1668,7 +1669,7 @@ namespace scan_planner
   {
     if (state.empty())
       return;
-    const std::string out = gateStatusName(state);
+    const std::string out = gateStatusNameForStatus(state);
     std_msgs::msg::String msg;
     msg.data = buildStatusJson(out);
     status_pub_->publish(msg);

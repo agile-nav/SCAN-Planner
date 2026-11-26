@@ -464,6 +464,8 @@ namespace scan_planner
     //   发布与"是否算状态切换"两处必须用同一个函数，否则会出现
     //   "比较用原始值、存储用门控值"导致每拍都判定为切换并重复发布。
     std::string gateStatusName(const std::string &state) const;
+    // status 话题专用门控：不再用 disabled 覆盖任务状态，仅保留 error 锁存
+    std::string gateStatusNameForStatus(const std::string &state) const;
     // 把状态拼成 JSON（state / msgs）
     std::string buildStatusJson(const std::string &state);
     // 运行统计与诊断
