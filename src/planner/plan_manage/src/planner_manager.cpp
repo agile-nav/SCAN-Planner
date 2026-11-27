@@ -539,6 +539,13 @@ namespace scan_planner
     // STEP 6：可行性检查。把物理限制告诉轨迹，然后看它有没有超速/超加速度。
     pos.setPhysicalLimits(pp_.max_vel_, pp_.max_acc_, pp_.feasibility_tolerance_);
 
+    // 【verify-cde0efd / verify-cf41b32】记录本轮回合是否真的走进了 refine 路径。
+    //   这两条反事实日志只在 refineTrajAlgo 内部打印；若整轮没有进入 refine
+    //   （即轨迹本来就满足静态可行性），它们一条都不会出现。为了让"跑了但
+    //   未触发"与"代码没跑"可区分，这里在结束时补一条汇总：
+    //     refine_path_entered=0 → 本次规划未进入 refine，两个缺陷都不会被触发
+    //     refine_path_entered=1 → 已进入 refine，请看 [verify-cde0efd]/[verify-cf41b32]
+    bool refine_path_entered = false;
     // ratio：超限倍数（下面 checkFeasibility 会填出具体值）
     double ratio;
     bool flag_step_2_success = true;
@@ -565,6 +572,7 @@ namespace scan_planner
       Eigen::MatrixXd optimal_control_points;
       // 超限就“重新分配时间”：把整条轨迹的时间拉长 ratio 倍（走慢一点），
       // 再做一次小优化，让它既不超限、又尽量贴近原来那条轨迹。
+      refine_path_entered = true;
       flag_step_2_success = refineTrajAlgo(pos, start_end_derivatives, ratio, ts, optimal_control_points);
       // 细化成功 → 用细化后的轨迹替换原来的
       if (flag_step_2_success)
@@ -629,6 +637,15 @@ namespace scan_planner
     RCLCPP_DEBUG(node_->get_logger(),
                 "[diag] rid=%llu stage=opt event=total t_init=%.3f t_opt=%.3f t_refine=%.3f total=%.3f",
                 static_cast<unsigned long long>(diag_rid_), t_init, t_opt, t_refine, t_init + t_opt + t_refine);
+
+    // 【verify 汇总】本轮是否进入过 refine 路径。
+    //   refine_path_entered=0 说明轨迹本来就满足静态可行性，
+    //   cde0efd（lengthenTime）与 cf41b32（refine 重试）都不可能被触发；
+    //   =1 时才需去看对应的 [verify-*] 明细日志。
+    RCLCPP_DEBUG(node_->get_logger(),
+                 "[verify-summary] rid=%llu refine_path_entered=%d ratio=%.3f",
+                 static_cast<unsigned long long>(diag_rid_),
+                 static_cast<int>(refine_path_entered), ratio);
 
     // success. YoY
     // 规划成功，把连续失败计数清零

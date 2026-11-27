@@ -62,6 +62,22 @@ void AStar::initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size)
 
     // 保存地图指针，搜索时用它查“这里是不是障碍”
     grid_map_ = occ_map;
+
+    // 【verify-2039d24】影子标记数组按搜索池总格数一次性分配，之后零分配。
+    ensureBlockedStampCapacity(POOL_SIZE_(0) * POOL_SIZE_(1) * POOL_SIZE_(2));
+}
+
+// 【verify-2039d24】确保影子标记数组足够大。幂等，可重复调用。
+//   语义：blocked_stamp_[线性索引] 存"本格最近一次被障碍挡住时的轮次低 16 位"。
+//   与 rounds_ 的低 16 位相等 ⇒ 本格本轮被挡过。用 uint16 是为了让 256 万格
+//   只占 5 MB；轮次每 65536 次回绕一次，回绕后可能把"很旧的一次挡"误当成
+//   本轮，但那只影响计数、不影响搜索行为，且需 65536 轮才会发生一次。
+void AStar::ensureBlockedStampCapacity(int n)
+{
+    if (n <= 0) return;
+    if (blocked_stamp_capacity_ >= n) return;
+    blocked_stamp_.assign(static_cast<size_t>(n), 0);
+    blocked_stamp_capacity_ = n;
 }
 
 // 启发函数：估计“从当前格子还要走多远才到终点”。
@@ -523,6 +539,13 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
 
                 // 从当前格子走向邻居的方向，作为机器人的朝向
                 const double neighbor_yaw = std::atan2(static_cast<double>(dy), static_cast<double>(dx));
+                // 影子标记的线性索引：该 GridNode 在池中的唯一位置。
+                //   neighborIdx 已在上面做过边界检查，可直接参与乘法。
+                const int stamp_idx =
+                    ((neighborIdx(0) * POOL_SIZE_(1)) + neighborIdx(1)) * POOL_SIZE_(2) + neighborIdx(2);
+                const bool stamp_ok = stamp_idx >= 0 && stamp_idx < blocked_stamp_capacity_;
+                const uint16_t round16 = static_cast<uint16_t>(rounds_ & 0xFFFF);
+
                 // 邻居是障碍 → 走不通，跳过。
                 //   【顺序很重要】障碍判定依赖朝向（getInflateOccupancy 只探
                 //   pos ± offset·axis 两点，axis 随 yaw 旋转），因此同一格从
@@ -532,7 +555,35 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                 if (checkOccupancy(Index2Coord(neighborPtr->index), neighbor_yaw))
                 {
                     ++blocked_cnt;   // 【诊断】这个邻居被障碍挡掉了
+                    // 【verify-2039d24】记下"本格本轮被挡过"。不改任何搜索行为。
+                    if (stamp_ok) blocked_stamp_[stamp_idx] = round16;
                     continue;
+                }
+
+                // 【verify-2039d24】反事实观测：本格本轮先被挡、现在通过。
+                //   这正是旧实现（在障碍判定前就置 rounds）会永久丢弃的可达格：
+                //   旧版此时 flag_explored 已为真，会走"只更新代价、不 push"的
+                //   分支，于是该格永远进不了 openSet_。
+                //
+                //   【必须排除"同方向重复"】同一格从**同一**方向被挡、再从同一
+                //   方向通过是不可能的（yaw 相同 → getInflateOccupancy 结论相同），
+                //   所以出现即说明是不同方向。但同一格从多个方向反复探测会重复
+                //   计数，因此对"已计过的格子"只计一次（stamp 置为 round16^1 表示
+                //   "本轮已计"），保证 would_drop_total_ 等于"受影响的格子数"而非
+                //   "探测次数"。
+                if (stamp_ok && blocked_stamp_[stamp_idx] == round16)
+                {
+                    ++would_drop_total_;
+                    ++direction_dependent_;
+                    blocked_stamp_[stamp_idx] = static_cast<uint16_t>(round16 ^ 0x1);
+                    RCLCPP_WARN(logger_,
+                                "[verify-2039d24] event=would_drop rid=%llu seg=%d "
+                                "cell=(%d,%d,%d) from_dxdy=(%d,%d) yaw=%.0fdeg "
+                                "old_would_drop=1 total_cells=%llu",
+                                static_cast<unsigned long long>(diag_rid_), diag_seg_,
+                                neighborIdx(0), neighborIdx(1), neighborIdx(2), dx, dy,
+                                neighbor_yaw * 180.0 / M_PI,
+                                static_cast<unsigned long long>(would_drop_total_));
                 }
 
                 // 通过障碍检查后才标记“本轮访问过”，保证 rounds==rounds_ 蕴含

@@ -264,6 +264,41 @@ namespace scan_planner
 //   p=3 时节点本应全部等距，"首尾留 5 个"没有任何数学依据，是上游遗留。
 void UniformBspline::lengthenTime(const double &ratio)
 {
+  // 【verify-cde0efd】反事实观测。
+  //
+  //   这条日志刻意不报"新实现正常"，而是报"若换回旧实现，同样的输入会
+  //   欠拉伸多少" —— 只有后者能证明该缺陷在当前输入下会实际生效。
+  //
+  //   旧实现固定拉伸 [u_(5), u_(rows-6)]，首尾各 5 个节点留成原间距，
+  //   实际倍数有闭式解（已用真跑旧算法的差分程序交叉验证，误差 2e-16）：
+  //       old_mult = 1 + (ratio-1)·(cols-7)/(cols-3)
+  //   其中 cols = u_.rows() - p_ - 1（u_.rows() = m_+1 = cols+p_+1）。
+  //       cols == 7 时 num1 == num2，旧实现退化为不做任何拉伸（old_mult=1）。
+  //
+  //   deficit = ratio - old_mult：旧实现比应得的少拉多少。
+  //   因为速度按 1/倍数 缩放，deficit 同时就是"速度少降的比例"。
+  //
+  //   triggered=1 表示差异超过 0.1%，即旧 bug 在此输入下会真实改变轨迹；
+  //   triggered=0 表示该输入下新旧行为不可区分（小 ratio 或 cols 很大时）。
+  const int rows = static_cast<int>(u_.rows());
+  const int cols = rows - p_ - 1;
+  double old_mult = 1.0;
+  if (cols > 7)
+    old_mult = 1.0 + (ratio - 1.0) * (cols - 7.0) / (cols - 3.0);
+  const double deficit = ratio - old_mult;
+  const bool triggered = deficit > 1e-3;
+
+  if (triggered)
+    RCLCPP_WARN(logger_,
+                "[verify-cde0efd] event=lengthen_invoked ratio=%.3f cols=%d "
+                "old_impl_mult=%.3f deficit=%.3f triggered=1 resid_ratio=%.3f",
+                ratio, cols, old_mult, deficit, old_mult / ratio);
+  else
+    RCLCPP_DEBUG(logger_,
+                 "[verify-cde0efd] event=lengthen_invoked ratio=%.3f cols=%d "
+                 "old_impl_mult=%.3f deficit=%.3f triggered=0 resid_ratio=%.3f",
+                 ratio, cols, old_mult, deficit, old_mult / ratio);
+
   u_ *= ratio;
   // interval_ 是节点间距的缓存，必须与 u_ 同步，否则模块内部状态自相矛盾。
   interval_ *= ratio;

@@ -1654,6 +1654,28 @@ namespace scan_planner
     // 记录实际走过的轮数：1=首轮即安全，2=首轮不安全、用加倍权重重试过
     last_refine_rounds_ = iter_count;
 
+    // 【verify-cf41b32】反事实观测。
+    //   旧实现的循环条件是 `while(!flag_safe && iter_count <= 0)`，而 iter_count
+    //   在判断前已自增到 1，条件恒假 —— 重试从未发生，轮数恒为 1。
+    //   所以这里把"旧实现会走几轮"作为常量 1 一并打出：
+    //     retries_now > 0  → 新实现确实重试了；旧实现在此输入下会直接放弃
+    //     retries_now == 0 → 该输入首轮即安全，新旧行为不可区分
+    //   triggered 与 retries_now 同义，单独给出便于 grep。
+    const int retries_now = std::max(0, last_refine_rounds_ - 1);
+    const int old_impl_rounds = 1;
+    if (retries_now > 0)
+      RCLCPP_WARN(logger_,
+                  "[verify-cf41b32] event=refine_done rounds=%d old_impl_rounds=%d "
+                  "retries_now=%d safe_final=%d triggered=1",
+                  last_refine_rounds_, old_impl_rounds, retries_now,
+                  static_cast<int>(flag_safe));
+    else
+      RCLCPP_DEBUG(logger_,
+                   "[verify-cf41b32] event=refine_done rounds=%d old_impl_rounds=%d "
+                   "retries_now=%d safe_final=%d triggered=0",
+                   last_refine_rounds_, old_impl_rounds, retries_now,
+                   static_cast<int>(flag_safe));
+
     // 只有真的没救回来才算失败原因；重试成功时不能留下 REFINE_UNSAFE
     if (!flag_safe)
       last_failure_ = ReplanFailure::REFINE_UNSAFE;

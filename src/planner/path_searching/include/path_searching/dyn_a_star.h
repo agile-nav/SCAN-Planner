@@ -20,6 +20,8 @@
 #define _DYN_A_STAR_H_
 
 #include <iostream>
+#include <cstdint>
+#include <vector>
 #include <rclcpp/rclcpp.hpp>
 #include <Eigen/Eigen>
 #include <plan_env/grid_map.h>
@@ -127,6 +129,21 @@ private:
 	std::priority_queue<GridNodePtr, std::vector<GridNodePtr>, NodeComparator> openSet_;
 
 	int rounds_{0};
+
+	// 【verify-2039d24】反事实观测用的"影子标记"。
+	//   记录"本格本轮曾从某个方向被障碍挡住"，与 rounds（表示"本轮已通过
+	//   障碍检查"）是两个独立语义。若某格先被挡、后又被通过，那就是旧实现
+	//   会永久丢弃的可达格 —— 这里据实计数，不改任何搜索行为。
+	//   用扁平 uint16 数组而不是 unordered_set：搜索池 256 万格，blocked
+	//   可达数千次/轮，哈希分配开销不可接受；数组按"指针线性索引 + 轮次低
+	//   16 位"判重，O(1) 且无内存分配（每 65536 轮才需回绕风险，实际进程
+	//   寿命内不可能达到）。
+	std::vector<uint16_t> blocked_stamp_;
+	int32_t blocked_stamp_capacity_{0};
+	uint64_t would_drop_total_{0};   // 本进程累计"旧实现会丢弃"的格子次数
+	uint64_t direction_dependent_{0}; // 同格不同方向结论不同（真正触发前提）的次数
+
+	void ensureBlockedStampCapacity(int n);
 
 public:
 	typedef std::shared_ptr<AStar> Ptr;
