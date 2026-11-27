@@ -66,7 +66,7 @@ TOPICS=(/tf /tf_static /lio/robo/odom)
 if [[ "$WITH_LOC" -eq 1 ]]; then TOPICS+=(/loc/robo/odom); fi
 TOPICS+=(/lio/imu/odom /lio/cloud_world)
 if [[ "$WITH_CAMERA" -eq 1 ]]; then TOPICS+=(/camera/color/image_raw); fi
-TOPICS+=(/cmd_vel /global_path /planning/bspline /local_path)
+TOPICS+=(/cmd_vel /global_path /planning/bspline /local_path /local_planner/diagnostics)
 if [[ "$WITH_GRID_MAP" -eq 1 ]]; then
   TOPICS+=(/grid_map/occupancy /grid_map/occupancy_inflate)
 fi
@@ -168,6 +168,12 @@ cat > "$QOS_FILE" <<'EOF'
 /grid_map/occupancy_inflate:
   reliability: best_effort
   durability: volatile
+  history: keep_last
+  depth: 10
+
+/local_planner/diagnostics:
+  reliability: reliable
+  durability: transient_local
   history: keep_last
   depth: 10
 EOF
