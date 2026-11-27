@@ -917,6 +917,40 @@ namespace scan_planner
     const double vel_limit = pp_.max_vel_ + pp_.vel_tolerance_;
     // 加速度上限（物理限制 + 允许的容差）
     const double acc_limit = pp_.max_acc_ + pp_.acc_tolerance_;
+    // 【长期观测点】整条轨迹的峰值速度/加速度（event=peak）。
+    //
+    //   为什么长期保留：规划器不知道控制器/底盘的真实能力（closed_loop_controller.max_vx
+    //   是独立参数，planning 侧从不读取）。本闸门（vel_limit）一旦比控制器上限宽，
+    //   轨迹就会持续要求机器人做不到的速度 → 跟踪落后 → 轨迹时钟夹紧/重规划/看门狗。
+    //   这条日志是唯一能把"轨迹要多快"和"底盘能多快"放在一起看的量具：
+    //     现场排查时先看 over_nom —— 为 1 说明该轨迹峰值已超名义物理限制；
+    //     真机标定时对比 peak_vel 与底盘实测可达速度，用来定 feasibility_tolerance。
+    //
+    //   实测基线（A2 档案 0.70/1.00，闸门 1.70/2.00；4 场景 40 条轨迹）：
+    //     v_ratio 中位 1.03、最大 1.34；a_ratio 中位 0.69、最大 1.13；
+    //     65% 的轨迹超出名义速度，但 0/40 触及闸门。即：本闸门当前是"哑弹"，
+    //     真正持续发生的是"超出名义值 3~5%"，由控制器的 max_vx 钳位吸收。
+    //
+    //   本块只记录峰值，判定与返回值仍由下面原有循环负责（不改任何行为）。
+    {
+      double peak_vel = 0.0, peak_acc = 0.0;
+      for (double t = 0.0; t < duration + 1e-6; t += sample_dt)
+      {
+        const double tc = std::min(t, duration);
+        peak_vel = std::max(peak_vel, vel_traj.evaluateDeBoorT(tc).norm());
+        peak_acc = std::max(peak_acc, acc_traj.evaluateDeBoorT(tc).norm());
+      }
+      const double v_ratio = pp_.max_vel_ > 1e-9 ? peak_vel / pp_.max_vel_ : 0.0;
+      const double a_ratio = pp_.max_acc_ > 1e-9 ? peak_acc / pp_.max_acc_ : 0.0;
+      RCLCPP_INFO(node_->get_logger(),
+                  "[diag] rid=%llu stage=feas event=peak peak_vel=%.3f peak_acc=%.3f "
+                  "v_nom=%.2f a_nom=%.2f v_lim=%.2f a_lim=%.2f "
+                  "v_ratio=%.2f a_ratio=%.2f over_nom=%d over_lim=%d",
+                  static_cast<unsigned long long>(diag_rid_), peak_vel, peak_acc,
+                  pp_.max_vel_, pp_.max_acc_, vel_limit, acc_limit, v_ratio, a_ratio,
+                  static_cast<int>(peak_vel > pp_.max_vel_ || peak_acc > pp_.max_acc_),
+                  static_cast<int>(peak_vel > vel_limit || peak_acc > acc_limit));
+    }
 
     // 从 0 到总时长，按固定间隔逐个时刻检查
     for (double t = 0.0; t < duration + 1e-6; t += sample_dt)
