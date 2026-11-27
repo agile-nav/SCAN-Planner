@@ -138,35 +138,6 @@ void markFreeRegion(GridMap &map, double x0, double x1, double y0, double y1, do
 //
 //   障碍只放"单点"，且半径足够小（cy_radius 0.05），使膨胀不扩散到 X 自身。
 // ---------------------------------------------------------------------------
-struct DirectionalScene
-{
-  std::shared_ptr<rclcpp::Node> node;
-  GridMap::Ptr map;
-  std::shared_ptr<AStar> astar;
-  Eigen::Vector3d cell_x;       // 目标格子中心（世界坐标）
-};
-
-DirectionalScene makeScene(const std::string &name)
-{
-  // 圆柱半径取 0.05m（约 1 格），偏移取 0.18m（与 A2 一致）。
-  //   这样"障碍点"只会膨胀到自身附近，不会污染 X 格本身。
-  auto node = makeMapNode(name, 0.05, 0.18);
-
-  auto map = std::make_shared<GridMap>();
-  map->initMap(node.get());
-
-  DirectionalScene sc;
-  sc.node = node;
-  sc.map = map;
-  sc.astar = std::make_shared<AStar>();
-  sc.astar->initGridMap(map, Eigen::Vector3i(160, 160, 100));
-  sc.astar->setLogger(node->get_logger());
-
-  // 地图原点在 (0,0,0)？resetBuffer 后中心由 center_ 决定；
-  //   这里统一用"以世界原点为平面中心"的坐标，z 取 0.30（机体高度附近）。
-  return sc;
-}
-
 }  // namespace
 
 // ===========================================================================
