@@ -362,6 +362,8 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     const auto time_1 = std::chrono::steady_clock::now();
     // 轮次 +1：用来区分本次和上次搜索，避免每次都清空所有节点
     ++rounds_;
+    // 【verify-2039d24】本次搜索的反事实计数清零；结束时打一条汇总
+    would_drop_this_search_ = 0;
 
     // 【必须】清空待扩展队列。
     //   上一次搜索若以 SUCCESS 提前返回、或因超时返回 SEARCH_ERR，openSet_ 里
@@ -464,6 +466,19 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                   start_pt(0), start_pt(1), start_pt(2), last_start_adjust_,
                   end_pt(0), end_pt(1), end_pt(2), last_end_adjust_);
     };
+    // 【verify-2039d24】æç´¢ç»ææ±æ»ï¼åªå¨æ¬æ¬¡æç´¢ççå½ä¸­è¿å¯è¾¾æ ¼æ¶ææã
+    //   éæ ¼æç»æ¹ä¸ºä» diag_verbose è¾åºï¼å®æµåæ¬¡çå®åºæ¯åæ¬¡è¿è¡å¯å½ä¸­ç¾ä¸æ ¼ï¼
+    //   éæ¡ WARN ä¼è®©æ¥å¿è¨èå°ç¾ MB éçº§ã
+    auto reportWouldDrop = [&]() {
+      if (would_drop_this_search_ == 0)
+        return;
+      RCLCPP_WARN(logger_,
+                  "[verify-2039d24] event=would_drop_summary rid=%llu seg=%d "
+                  "cells=%llu expanded=%d blocked=%d old_would_drop=1",
+                  static_cast<unsigned long long>(diag_rid_), diag_seg_,
+                  static_cast<unsigned long long>(would_drop_this_search_),
+                  num_iter, blocked_cnt);
+    };
     // 主循环：只要还有待扩展的格子就继续
     while (!openSet_.empty())
     {
@@ -489,6 +504,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
             if (!retrievePath(current, path))
             {
                 gridPath_.clear();
+                reportWouldDrop();
                 return ASTAR_RET::SEARCH_ERR;
             }
             gridPath_.swap(path);
@@ -499,6 +515,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                           std::chrono::duration<double>(std::chrono::steady_clock::now() - time_1).count(),
                           POOL_SIZE_(0) * step_size_ * 0.5, gridPath_.size());
             // 返回成功
+            reportWouldDrop();
             return ASTAR_RET::SUCCESS;
         }
         // 否则标记为“已扩展”，以后不再重复考虑
@@ -575,15 +592,18 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                 {
                     ++would_drop_total_;
                     ++direction_dependent_;
+                    ++would_drop_this_search_;
                     blocked_stamp_[stamp_idx] = static_cast<uint16_t>(round16 ^ 0x1);
-                    RCLCPP_WARN(logger_,
-                                "[verify-2039d24] event=would_drop rid=%llu seg=%d "
-                                "cell=(%d,%d,%d) from_dxdy=(%d,%d) yaw=%.0fdeg "
-                                "old_would_drop=1 total_cells=%llu",
-                                static_cast<unsigned long long>(diag_rid_), diag_seg_,
-                                neighborIdx(0), neighborIdx(1), neighborIdx(2), dx, dy,
-                                neighbor_yaw * 180.0 / M_PI,
-                                static_cast<unsigned long long>(would_drop_total_));
+                    // 逐格明细只在 diag_verbose 下打印：真实场景单次搜索可命中
+                    //   上万格，逐条 WARN 会让日志膨胀到百 MB 量级（实测单次
+                    //   运行 115 万条）。默认只保留搜索结束时的汇总计数。
+                    if (diag_verbose_)
+                        RCLCPP_INFO(logger_,
+                                    "[verify-2039d24] event=would_drop rid=%llu seg=%d "
+                                    "cell=(%d,%d,%d) from_dxdy=(%d,%d) yaw=%.0fdeg",
+                                    static_cast<unsigned long long>(diag_rid_), diag_seg_,
+                                    neighborIdx(0), neighborIdx(1), neighborIdx(2), dx, dy,
+                                    neighbor_yaw * 180.0 / M_PI);
                 }
 
                 // 通过障碍检查后才标记“本轮访问过”，保证 rounds==rounds_ 蕴含
@@ -621,6 +641,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
         if (std::chrono::duration<double>(time_2 - time_1).count() > 0.2)
         {
             reportAstarFailure("SEARCH_ERR(timeout 0.2s)");
+            reportWouldDrop();
             return ASTAR_RET::SEARCH_ERR;
         }
     }
@@ -745,6 +766,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     }
 
     reportAstarFailure("SEARCH_ERR(no path inside pool)");
+    reportWouldDrop();
     // 返回“搜索失败”
     return ASTAR_RET::SEARCH_ERR;
 }

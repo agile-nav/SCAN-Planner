@@ -141,6 +141,7 @@ private:
 	std::vector<uint16_t> blocked_stamp_;
 	int32_t blocked_stamp_capacity_{0};
 	uint64_t would_drop_total_{0};   // 本进程累计"旧实现会丢弃"的格子次数
+	uint64_t would_drop_this_search_{0}; // 本次 AstarSearch 内的计数，结束时报一条汇总
 	uint64_t direction_dependent_{0}; // 同格不同方向结论不同（真正触发前提）的次数
 
 	void ensureBlockedStampCapacity(int n);
