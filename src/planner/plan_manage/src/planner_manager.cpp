@@ -21,7 +21,9 @@
 #include <plan_manage/planner_manager.h>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <limits>
+#include <stdexcept>
 #include <thread>
 #include <plan_manage/goal_degrade_utils.h>
 
@@ -104,6 +106,29 @@ namespace scan_planner
     pp_.planning_horizon_ = get_double("manager.planning_horizon", 5.0);
     pp_.max_time_stretch_ = get_double("optimization.max_time_stretch", 2.0);
     pp_.max_head_mismatch_ = get_double("optimization.max_head_mismatch", 0.30);
+
+    // 【启动期校验】物理限制漏配会让后续所有除法/容差计算失去意义：
+    //   · checkFeasibility 里 ratio = max(max_vel/limit_vel_, sqrt(|max_acc|/limit_acc_))，
+    //     limit 为 0 时得到 inf，为负时得到负数或 NaN（NaN 比较恒 false，
+    //     连 max_time_stretch 的拒绝分支都不会触发）；
+    //   · lengthenTime 会把 NaN 传播进节点向量，整条轨迹不可用。
+    //   这些参数在 yaml 里必须显式给出（代码默认 -1.0 是"必须由配置提供"的哨兵值），
+    //   与其在下游容忍 NaN，不如在入口直接拒绝启动。
+    if (!std::isfinite(pp_.max_vel_) || pp_.max_vel_ <= 0.0)
+      throw std::runtime_error("manager.max_vel must be a positive finite number (m/s)");
+    if (!std::isfinite(pp_.max_acc_) || pp_.max_acc_ <= 0.0)
+      throw std::runtime_error("manager.max_acc must be a positive finite number (m/s^2)");
+    if (!std::isfinite(pp_.ctrl_pt_dist) || pp_.ctrl_pt_dist <= 0.0)
+      throw std::runtime_error("manager.control_points_distance must be a positive finite number (m)");
+    if (!std::isfinite(pp_.feasibility_tolerance_) || pp_.feasibility_tolerance_ < 0.0)
+      throw std::runtime_error("manager.feasibility_tolerance must be a non-negative finite number");
+    // 两个容差是"加法"语义（limit + tolerance），必须非负有限：
+    //   为负会让 checkDynamicFeasibility 的门槛低于名义限制，
+    //   为 NaN 则所有比较恒为 false，等于完全跳过动态可行性检查。
+    if (!std::isfinite(pp_.vel_tolerance_) || pp_.vel_tolerance_ < 0.0)
+      throw std::runtime_error("optimization.vel_tolerance must be a non-negative finite number (m/s)");
+    if (!std::isfinite(pp_.acc_tolerance_) || pp_.acc_tolerance_ < 0.0)
+      throw std::runtime_error("optimization.acc_tolerance must be a non-negative finite number (m/s^2)");
 
     // 轨迹编号从 0 开始
     local_data_.traj_id_ = 0;
