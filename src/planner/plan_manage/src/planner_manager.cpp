@@ -642,7 +642,7 @@ namespace scan_planner
     //   refine_path_entered=0 说明轨迹本来就满足静态可行性，
     //   cde0efd（lengthenTime）与 cf41b32（refine 重试）都不可能被触发；
     //   =1 时才需去看对应的 [verify-*] 明细日志。
-    RCLCPP_DEBUG(node_->get_logger(),
+    RCLCPP_WARN(node_->get_logger(),
                  "[verify-summary] rid=%llu refine_path_entered=%d ratio=%.3f",
                  static_cast<unsigned long long>(diag_rid_),
                  static_cast<int>(refine_path_entered), ratio);

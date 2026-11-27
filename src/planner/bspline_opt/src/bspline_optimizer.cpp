@@ -1670,7 +1670,7 @@ namespace scan_planner
                   last_refine_rounds_, old_impl_rounds, retries_now,
                   static_cast<int>(flag_safe));
     else
-      RCLCPP_DEBUG(logger_,
+      RCLCPP_WARN(logger_,
                    "[verify-cf41b32] event=refine_done rounds=%d old_impl_rounds=%d "
                    "retries_now=%d safe_final=%d triggered=0",
                    last_refine_rounds_, old_impl_rounds, retries_now,

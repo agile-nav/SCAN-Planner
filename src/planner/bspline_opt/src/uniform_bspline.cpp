@@ -294,7 +294,7 @@ void UniformBspline::lengthenTime(const double &ratio)
                 "old_impl_mult=%.3f deficit=%.3f triggered=1 resid_ratio=%.3f",
                 ratio, cols, old_mult, deficit, old_mult / ratio);
   else
-    RCLCPP_DEBUG(logger_,
+    RCLCPP_WARN(logger_,
                  "[verify-cde0efd] event=lengthen_invoked ratio=%.3f cols=%d "
                  "old_impl_mult=%.3f deficit=%.3f triggered=0 resid_ratio=%.3f",
                  ratio, cols, old_mult, deficit, old_mult / ratio);
