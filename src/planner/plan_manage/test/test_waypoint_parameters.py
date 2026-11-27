@@ -9,6 +9,7 @@
 """Verify that the flat ROS 2 waypoint array is accepted at startup."""
 
 import os
+import unittest
 
 import launch
 import launch_ros.actions
@@ -36,7 +37,7 @@ def generate_test_description():
     )
 
 
-class TestWaypointParameters:
+class TestWaypointParameters(unittest.TestCase):
 # 断言：planner 进程在 15 秒内成功启动。
     def test_process_starts(self, proc_info, planner):
         proc_info.assertWaitForStartup(process=planner, timeout=15)
