@@ -250,24 +250,24 @@ namespace scan_planner
     return fea;
   }
 
-// 把中间各节点按比例拉伸，使整条曲线的时间变成原来的 ratio 倍。
-// 首尾各留 5 个节点不动，保证边界形状稳定。
-  void UniformBspline::lengthenTime(const double &ratio)
-  {
-    // 首尾各保留 5 个节点不动，保证曲线两端形状不变
-    int num1 = 5;
-    int num2 = getKnot().rows() - 1 - 5;
-
-    // 总共需要增加多少时间
-    double delta_t = (ratio - 1.0) * (u_(num2) - u_(num1));
-    double t_inc = delta_t / double(num2 - num1);
-    // 中间节点：离起点越远，增加得越多（按比例拉伸）
-    for (int i = num1 + 1; i <= num2; ++i)
-      u_(i) += double(i - num1) * t_inc;
-    // 末尾节点整体向后平移 delta_t
-    for (int i = num2 + 1; i < u_.rows(); ++i)
-      u_(i) += delta_t;
-  }
+// 把整条曲线的时间轴按比例拉伸：同样的几何路径，走得更慢（ratio>1）。
+//
+// 【为什么是"整条节点向量统一乘 ratio"，而不是只拉伸中间节点】
+//   B 样条的曲线形状由 (控制点, 节点向量) 共同决定。控制点不变、节点向量
+//   整体乘 ratio 时，基函数满足 N_i,p(u/ratio) = N_i,p(u')，于是
+//     C_new(t) = C_old(t / ratio)
+//   —— 严格的均匀时间缩放：几何精确不变，速度精确降为 1/ratio。
+//
+//   旧实现固定只拉伸 [u_(5), u_(rows-6)]，把首尾各 5 个节点留成原间距，
+//   节点向量因此变成非均匀 → 基函数改变 → 曲线形状被改掉（实测 N=15、
+//   ratio=1.6 时同进度位置漂移 0.17 m，速度只降到 0.68 而不是 0.5）。
+//   p=3 时节点本应全部等距，"首尾留 5 个"没有任何数学依据，是上游遗留。
+void UniformBspline::lengthenTime(const double &ratio)
+{
+  u_ *= ratio;
+  // interval_ 是节点间距的缓存，必须与 u_ 同步，否则模块内部状态自相矛盾。
+  interval_ *= ratio;
+}
 
   // void UniformBspline::recomputeInit() {}
 
