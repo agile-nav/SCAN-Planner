@@ -68,14 +68,21 @@ DEGRADE_ARRIVE_TOL = 0.35
 
 
 def _read_degraded_point(log_path):
-    """从运行日志里读最近一次降级点（world 系 xy）。读不到返回 None。"""
+    """从运行日志里读最近一次降级点（world 系 xy）。读不到返回 None。
+
+    当前日志格式（scan_replan_fsm.cpp）：
+        [fsm] event=goal_degraded rid=N from=(x,y,z) to=(x,y,z) shift=Xm
+    取 `to=(...)` 的前两个分量。兼容旧的英文描述格式。
+    """
     if not log_path or not os.path.isfile(log_path):
         return None
     last = None
+    re_new = re.compile(r"event=goal_degraded\b.*\bto=\(([-\d.]+),\s*([-\d.]+)")
+    re_old = re.compile(r"degraded to nearest reachable \[([-\d.]+), ([-\d.]+)")
     try:
         with open(log_path, "r", errors="ignore") as fh:
             for line in fh:
-                m = re.search(r"degraded to nearest reachable \[([-\d.]+), ([-\d.]+)", line)
+                m = re_new.search(line) or re_old.search(line)
                 if m:
                     last = (float(m.group(1)), float(m.group(2)))
     except OSError:
@@ -345,8 +352,11 @@ def main():
             try:
                 with open(SCAN_LOG, "r", errors="ignore") as fh:
                     text = fh.read()
-                degrade_cnt = text.count("degraded to nearest reachable")
-                not_connected_cnt = text.count("not connected to robot")
+                # 日志事件名以源码为准（曾因日志改名而失配，见 89062ce）：
+                #   降级成功  [fsm] event=goal_degraded
+                #   A* 不通   [degrade] event=not_connected
+                degrade_cnt = text.count("event=goal_degraded")
+                not_connected_cnt = text.count("event=not_connected")
             except OSError:
                 pass
         if degrade_cnt is None:
