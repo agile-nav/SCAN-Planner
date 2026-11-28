@@ -29,36 +29,24 @@ enum class ReplanFailure
   EMERGENCY_TF_JUMP_FAIL,         // TF 跳变后重规划失败急停
   EMERGENCY_TF_MISSING_COLLISION, // TF 缺失期间又检测到碰撞急停
   MAX_REPLAN_FAIL,                // 连续失败达上限
+  STUCK_GIVEUP,                   // 卡死：重试与后撤都用尽，放弃本段
+  EMERGENCY_EXIT,                 // 急停后无法自动恢复，退出并放弃任务
   MEMORY_ERROR,                   // 重规划期间内存分配失败（std::bad_alloc）
   UNKNOWN
 };
 
-// 不影响机器狗正常运动的“非错误”原因：不计入 error 状态、也不算重规划失败次数。
+// 不影响机器狗正常运动的“非错误”原因：不算重规划失败次数。
 //   CLOSE_TO_GOAL —— 起点到局部目标 <0.2 m，是“到点”而不是故障。
 inline bool replanFailureIsBenign(ReplanFailure f)
 {
   return f == ReplanFailure::CLOSE_TO_GOAL;
 }
 
-// “必须人工干预”的硬错误（→ 可选锁存为 error）：被堵死 / 目标不可达 / 碰撞急停 / 连续失败超限。
-// A* 无路（astar_no_path）不在此列：它常由局部地图/搜索池的瞬时情况引起，按可自恢复处理。
-// 其余（优化、拟合、PARAMETERIZE、TF/定位类、动态超限等可自恢复的）归 failed。
-//
-// 【当前策略】默认不把这些原因锁存成 error（fsm.status_latch_hard_error=false 时
-// 一律只报 failed，故障消失即可自恢复）；上层需要"必须人工介入"告警时把参数打开。
-inline bool replanFailureNeedsIntervention(ReplanFailure f)
-{
-  switch (f)
-  {
-  case ReplanFailure::TARGET_OCCUPIED:  // 目标不可达
-  case ReplanFailure::MAX_REPLAN_FAIL:  // 连续失败超限
-  case ReplanFailure::EMERGENCY_SAFETY: // 碰撞急停
-  case ReplanFailure::MEMORY_ERROR:     // 规划器内存分配失败，进程状态不可信
-    return true;
-  default:
-    return false;
-  }
-}
+// 注意：失败原因不再用于推导状态话题。状态只由事件决定：
+//   · failed —— 任务终结且未成功（重试/后撤/连续失败全部用尽）
+//   · error  —— 进程内终态，只在“连最小分配都失败”这类确定性证据下置位
+// 能自恢复的故障一律只体现为 running + problem:true，
+// 具体原因由 /local_planner/diagnostics 的 failures{} / last_reason 提供。
 inline const char *replanFailureToString(ReplanFailure f)
 {
   switch (f)
@@ -99,6 +87,10 @@ inline const char *replanFailureToString(ReplanFailure f)
     return "emergency_tf_missing_collision";
   case ReplanFailure::MAX_REPLAN_FAIL:
     return "max_replan_fail";
+  case ReplanFailure::STUCK_GIVEUP:
+    return "stuck_giveup";
+  case ReplanFailure::EMERGENCY_EXIT:
+    return "emergency_exit";
   case ReplanFailure::MEMORY_ERROR:
     return "memory_error";
   case ReplanFailure::UNKNOWN:

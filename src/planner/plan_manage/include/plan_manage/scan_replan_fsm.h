@@ -160,9 +160,6 @@ namespace scan_planner
     //
     //   连续规划失败上限（0=不限制）：达到后停止重试、放弃任务并上报 failed。
     int max_consecutive_plan_fail_{30};
-    // 是否把「必须人工干预」类失败锁存为 error。默认关闭：锁存后只有重启节点才能清除，
-    // 对可自恢复的现场过于激进；需要上层告警时再打开。
-    bool status_latch_hard_error_{false};
     // ---- 异常终止后自动请求全局重规划 ----
     // 非正常结束任务（卡死放弃/连续失败/急停退出）后，向全局规划器
     // 重发一次目标点，让它从当前位置重新规划一条到目标的路径。
@@ -186,8 +183,6 @@ namespace scan_planner
     double status_heartbeat_hz_{1.0};
     // 判定"目标变了"的位置阈值(米)：新目标点与上一次相差超过它才算新目标
     double status_goal_change_eps_{0.05};
-    // 持续规划失败/急停多久判为 error(秒)
-    double status_error_time_{1.0};
 
     // ---------- 运行时数据（程序自己维护的状态） ----------
     /* planning data */
@@ -330,17 +325,26 @@ namespace scan_planner
     std::string status_last_state_;
     // 本次 error 期间出现过的所有失败原因（去重、按首次出现顺序）
     std::vector<ReplanFailure> status_reasons_;
-    // 硬错误(error)是否已锁存：一旦进入 error 就锁存，只有重启节点才清除
-    bool status_error_latched_{false};
+    // 【进程内终态】状态不可信、必须重启节点才能恢复。
+    //   只在"确定性证据"成立时置位：连最小分配（停车轨迹）都失败。
+    //   置位后恒报 error，不再自动清除；节点重启后内存重建 ⇒ 自然回 idle。
+    bool status_fatal_{false};
+    // 置位时刻（供 diagnostics 输出持续时长）
+    rclcpp::Time status_fatal_since_{0, 0, RCL_ROS_TIME};
+    // 【单发事件】本任务已判定"失败终结"（彻底无解，不会再规划曲线）。
+    //   由 abandonMission() 统一按 !normal_done 推断，判定后**立即发布**一帧
+    //   failed（不等下一拍，避免同一拍内被新目标的 armPlannerStatus 复位而漏报），
+    //   下一拍 status_have_goal_ 已为 false ⇒ 自然回落 idle。
+    bool status_task_failed_{false};
     // 重试节流：上次真正尝试规划的时刻、连续失败次数（成功即清零）
     rclcpp::Time last_plan_attempt_{0, 0, RCL_ROS_TIME};
     int plan_retry_fails_{0};
     // 连续规划失败次数（跨脱困保留；只有成功/真实进展/新目标才清零）
     int consecutive_plan_fails_{0};
-    // 已经因"连续失败超限"放弃任务：状态上报 failed，直到收到新目标
-    bool status_gave_up_{false};
     // 正常 CLOSE_TO_GOAL 后等待到达判定：成立后才清目标并转 idle
     bool close_to_goal_waiting_{false};
+    // 进入"等到达判定"的时刻：用于超时兜底，防止该分支永久提前 return 导致 FSM 停摆
+    rclcpp::Time close_to_goal_wait_since_{0, 0, RCL_ROS_TIME};
     // 门控状态名（可配置；下游若需兼容旧的 stopped，可把 disabled 配成 stopped）
     std::string status_name_disabled_{"disabled"};
     std::string status_name_paused_{"paused"};
@@ -354,6 +358,22 @@ namespace scan_planner
     bool externally_stopped_{false};
     // 最近一条可用的全局路径（/global_path）；resume 时用它重建
     nav_msgs::msg::Path::ConstSharedPtr last_global_path_;
+
+    // ---------- pause 期间的锁存（resume 时用来"继续原任务"） ----------
+    // 锁存"本次任务实际要去的点"（world 系）。
+    //   取值与到达判定同一口径：目标被截断时用 truncated_reachable_pt_，
+    //   否则用 mission_goal_pt_（降级后它已被改写成落点）。
+    //   resume 时若没有外部路径可用，就按它重新生成全局参考轨迹。
+    Eigen::Vector3d resume_goal_pt_{Eigen::Vector3d::Zero()};
+    bool have_resume_goal_{false};
+    // 参考路径的 world 系快照（仅 mode3）。用于 resume 时参考 TF 已不可用的兜底：
+    //   直接用它拟合全局轨迹，不再依赖 TF。参考系跳变时作废。
+    //   若路径曾被截断，这里只保存到可达点的前缀（与 resume 目标同口径）。
+    std::vector<Eigen::Vector3d> resume_waypoints_;
+    // global_data_ 里存的轨迹是否是 world 系（由 resume_waypoints_ 拟合而来）。
+    //   true 时 getLocalTarget / monitorReferenceTransform 跳过参考系变换，
+    //   避免对已经是 world 系的轨迹再做一次 toWorld（双重变换）。
+    bool global_frame_is_world_{false};
 
     bool flag_escape_emergency_;
 
@@ -431,6 +451,9 @@ namespace scan_planner
     bool getLocalTarget();
     // 查询“参考坐标系 → world”的变换；查不到（超时等）时返回 false
     bool lookupReferenceTransform(Eigen::Isometry3d &reference_to_world);
+    // 取“本次规划实际要用的”参考系变换：global_data_ 已是 world 系时返回单位阵。
+    //   ok=false 表示参考 TF 不可用（仅 mode3 且非 world 快照时会失败）。
+    Eigen::Isometry3d effectiveReferenceTransform(bool &ok);
     // 监控参考 TF 的新鲜度与跳变；返回 true 表示当前应停止推进
     bool monitorReferenceTransform();
     void finishProcess();
@@ -480,10 +503,16 @@ namespace scan_planner
     void setStatusReason(ReplanFailure r);
     // 任务控制回调：pause / resume
     void missionControlCallback(const std_msgs::msg::String::ConstSharedPtr &msg);
-    // 外部停止：清全局+局部轨迹，状态置 stopped
+    // 外部停止：清全局+局部轨迹，锁存本任务目标，状态置 stopped
     void applyExternalStop();
-    // 外部继续：用缓存路径重建，或等待新的 /global_path
+    // 外部继续：按四级降级重建（TF 可用 → Path；否则 world 快照 → 目标）
     void applyExternalResume();
+    // 用 world 系航点直接拟合全局轨迹（resume 第 2 级，不依赖参考 TF）
+    bool planGlobalFromWorldWaypoints(const std::vector<Eigen::Vector3d> &waypoints);
+    // 用 world 系目标重建全局轨迹（resume 第 3 级，mode1/2 主路径）
+    bool planGlobalFromWorldGoal(const Eigen::Vector3d &goal_pt);
+    // 进入进程内终态 error（只在确定性证据成立时调用）
+    void enterFatalError(const char *reason);
 
     // ---------- ROS 回调函数（收到消息/定时器到点时被自动调用） ----------
     /* ROS functions */
@@ -493,7 +522,8 @@ namespace scan_planner
     void checkCollisionCallback();
     void rvizGoalCallback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr &msg);
     void waypointCallback(const nav_msgs::msg::Path::ConstSharedPtr &msg);
-    void pathCallback(const nav_msgs::msg::Path::ConstSharedPtr &msg);
+    // is_resume=true 表示"同一个任务继续"（pause 后的重建），不重置任务级目标状态
+    void pathCallback(const nav_msgs::msg::Path::ConstSharedPtr &msg, bool is_resume = false);
     void odometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr &msg);
     void go2ExecutionFrozenCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg);
 
